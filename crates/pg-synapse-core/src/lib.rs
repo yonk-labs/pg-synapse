@@ -26,3 +26,8 @@ pub mod plugin;
 pub mod testing;
 pub mod tool;
 pub mod types;
+
+pub use error::{
+    CompressionError, EmbeddingError, ExecutorError, LlmError, MemoryError, ProviderError,
+    RuntimeError, ToolError,
+};
