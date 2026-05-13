@@ -24,4 +24,5 @@ futures      = { workspace = true }
 
 [dev-dependencies]
 tokio        = { workspace = true, features = ["test-util", "macros"] }
+tokio-test   = "0.4"
 serde_yaml   = "0.9"
