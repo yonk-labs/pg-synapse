@@ -30,6 +30,16 @@ impl ToolSchema {
     pub fn into_inner(self) -> RootSchema {
         self.0
     }
+
+    /// Parse a [`ToolSchema`] from an arbitrary JSON value.
+    ///
+    /// Used by MCP and HTTP tool adapters that receive their input schema as
+    /// raw JSON rather than a `RootSchema` literal. The value must deserialize
+    /// into a `schemars::schema::RootSchema`.
+    pub fn from_json_value(value: serde_json::Value) -> Result<Self, serde_json::Error> {
+        let root: RootSchema = serde_json::from_value(value)?;
+        Ok(Self(root))
+    }
 }
 
 /// What a tool returned to the executor.
@@ -119,5 +129,26 @@ mod tests {
     fn tool_schema_default_is_serializable() {
         let s = ToolSchema::default();
         let _ = serde_json::to_string(&s).unwrap();
+    }
+
+    #[test]
+    fn tool_schema_from_json_value_roundtrips() {
+        let raw = serde_json::json!({
+            "title": "Echo",
+            "type": "object",
+            "properties": {
+                "message": { "type": "string" }
+            }
+        });
+        let s = ToolSchema::from_json_value(raw).expect("parses");
+        let back = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(back["title"], "Echo");
+    }
+
+    #[test]
+    fn tool_schema_from_json_value_rejects_garbage() {
+        let raw = serde_json::json!(42);
+        let r = ToolSchema::from_json_value(raw);
+        assert!(r.is_err());
     }
 }

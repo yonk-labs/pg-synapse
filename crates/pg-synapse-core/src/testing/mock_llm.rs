@@ -13,6 +13,8 @@ use crate::types::{CompletionChunk, CompletionRequest, CompletionResponse, ToolC
 pub enum MockResponse {
     /// Return a text completion.
     Text(String),
+    /// Return a text completion with a specific `Usage`.
+    TextWithUsage(String, Usage),
     /// Return a tool-call completion.
     ToolCall {
         /// Provider-issued call ID.
@@ -21,6 +23,17 @@ pub enum MockResponse {
         name: String,
         /// JSON arguments.
         args: serde_json::Value,
+    },
+    /// Return a tool-call completion with a specific `Usage`.
+    ToolCallWithUsage {
+        /// Provider-issued call ID.
+        id: String,
+        /// Tool name.
+        name: String,
+        /// JSON arguments.
+        args: serde_json::Value,
+        /// Token + cost accounting attached to this turn.
+        usage: Usage,
     },
     /// Surface an error.
     Error(LlmError),
@@ -73,6 +86,15 @@ impl MockLlmProvider {
         self
     }
 
+    /// Enqueue a text response with a specific [`Usage`] attached.
+    pub fn push_text_with_usage(&self, text: impl Into<String>, usage: Usage) -> &Self {
+        self.queue
+            .lock()
+            .unwrap()
+            .push_back(MockResponse::TextWithUsage(text.into(), usage));
+        self
+    }
+
     /// Enqueue a tool-call response.
     pub fn push_tool_call(
         &self,
@@ -87,6 +109,26 @@ impl MockLlmProvider {
                 id: id.into(),
                 name: name.into(),
                 args,
+            });
+        self
+    }
+
+    /// Enqueue a tool-call response with a specific [`Usage`] attached.
+    pub fn push_tool_call_with_usage(
+        &self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        args: serde_json::Value,
+        usage: Usage,
+    ) -> &Self {
+        self.queue
+            .lock()
+            .unwrap()
+            .push_back(MockResponse::ToolCallWithUsage {
+                id: id.into(),
+                name: name.into(),
+                args,
+                usage,
             });
         self
     }
@@ -117,11 +159,28 @@ impl LlmProvider for MockLlmProvider {
                 finish_reason: "stop".into(),
                 usage: Usage::default(),
             }),
+            Some(MockResponse::TextWithUsage(text, usage)) => Ok(CompletionResponse {
+                content: Some(text),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+                usage,
+            }),
             Some(MockResponse::ToolCall { id, name, args }) => Ok(CompletionResponse {
                 content: None,
                 tool_calls: vec![ToolCall { id, name, args }],
                 finish_reason: "tool_calls".into(),
                 usage: Usage::default(),
+            }),
+            Some(MockResponse::ToolCallWithUsage {
+                id,
+                name,
+                args,
+                usage,
+            }) => Ok(CompletionResponse {
+                content: None,
+                tool_calls: vec![ToolCall { id, name, args }],
+                finish_reason: "tool_calls".into(),
+                usage,
             }),
             Some(MockResponse::Error(e)) => Err(e),
             None => Err(LlmError::Provider {

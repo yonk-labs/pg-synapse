@@ -6,6 +6,8 @@ use async_trait::async_trait;
 use crate::error::ExecutorError;
 use crate::types::{ExecutionContext, ExecutorOutcome};
 
+pub(crate) mod loop_harness;
+
 /// Run one agent turn-set to completion.
 ///
 /// Implementations must be `Send + Sync` (so they can be shared across
