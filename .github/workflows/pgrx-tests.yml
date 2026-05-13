@@ -1,0 +1,27 @@
+name: pgrx-tests
+on:
+  push:
+    paths: ['crates/pg-synapse-pgrx/**', 'crates/pg-synapse-core/**']
+  pull_request:
+    paths: ['crates/pg-synapse-pgrx/**', 'crates/pg-synapse-core/**']
+
+jobs:
+  pgrx:
+    strategy:
+      matrix:
+        pg: ["15", "16", "17"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install pg${{ matrix.pg }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+      - name: Install pgrx
+        run: cargo install --locked cargo-pgrx
+      - name: pgrx init
+        run: cargo pgrx init --pg${{ matrix.pg }} $(which pg_config)
+      - name: pgrx tests
+        run: cargo pgrx test --pg-version pg${{ matrix.pg }} -p pg-synapse-pgrx
