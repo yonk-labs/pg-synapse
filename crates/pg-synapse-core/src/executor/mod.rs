@@ -10,9 +10,11 @@ pub(crate) mod loop_harness;
 
 pub mod conversation;
 pub mod react;
+pub mod reflection;
 
 pub use conversation::ConversationExecutor;
 pub use react::ReActExecutor;
+pub use reflection::ReflectionExecutor;
 
 /// Run one agent turn-set to completion.
 ///
