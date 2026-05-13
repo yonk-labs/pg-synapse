@@ -68,6 +68,7 @@ impl<'a> LoopHarness<'a> {
     /// fed to `seed_messages`. Used by executors that need to inject behavior
     /// addenda (for example, ReAct's "Thought / Action / Observation"
     /// instructions).
+    #[allow(dead_code)] // wired up by ReActExecutor in Task 2.3
     pub(crate) fn new_with_prefix(ctx: &'a ExecutionContext, prefix: &str) -> Self {
         let mut h = Self::new(ctx);
         h.prepend_system = Some(prefix.to_string());
@@ -210,26 +211,31 @@ impl<'a> LoopHarness<'a> {
     }
 
     /// Borrow the recorded message log.
+    #[allow(dead_code)] // used by tests + future executors
     pub(crate) fn messages(&self) -> &[Message] {
         &self.messages
     }
 
     /// The current iteration counter value.
+    #[allow(dead_code)]
     pub(crate) fn iteration(&self) -> u32 {
         self.iteration
     }
 
     /// The accumulated USD cost across all LLM turns so far.
+    #[allow(dead_code)] // used by tests + future executors
     pub(crate) fn cost_so_far(&self) -> f64 {
         self.cost_so_far
     }
 
     /// The accumulated input tokens across all LLM turns so far.
+    #[allow(dead_code)] // used by tests + future executors
     pub(crate) fn tokens_in(&self) -> u32 {
         self.tokens_in
     }
 
     /// The accumulated output tokens across all LLM turns so far.
+    #[allow(dead_code)] // used by tests + future executors
     pub(crate) fn tokens_out(&self) -> u32 {
         self.tokens_out
     }
@@ -238,11 +244,13 @@ impl<'a> LoopHarness<'a> {
     ///
     /// Used by executors that drive multi-phase loops (for example
     /// reflection's critique and revise prompts).
+    #[allow(dead_code)] // wired up by ReflectionExecutor in Task 2.4
     pub(crate) fn push_user_message(&mut self, content: impl Into<String>) {
         self.push_message(Role::User, Some(content.into()), None);
     }
 
     /// Append a system-role message mid-run.
+    #[allow(dead_code)] // wired up by ReflectionExecutor in Task 2.4
     pub(crate) fn push_system_message(&mut self, content: impl Into<String>) {
         self.push_message(Role::System, Some(content.into()), None);
     }
