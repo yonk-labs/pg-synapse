@@ -9,8 +9,10 @@ use crate::types::{ExecutionContext, ExecutorOutcome};
 pub(crate) mod loop_harness;
 
 pub mod conversation;
+pub mod react;
 
 pub use conversation::ConversationExecutor;
+pub use react::ReActExecutor;
 
 /// Run one agent turn-set to completion.
 ///
