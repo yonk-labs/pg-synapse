@@ -11,10 +11,12 @@ pub(crate) mod loop_harness;
 pub mod conversation;
 pub mod react;
 pub mod reflection;
+pub mod service;
 
 pub use conversation::ConversationExecutor;
 pub use react::ReActExecutor;
 pub use reflection::ReflectionExecutor;
+pub use service::{BoxedExecutorService, ExecutorService, service_from_dyn};
 
 /// Run one agent turn-set to completion.
 ///
