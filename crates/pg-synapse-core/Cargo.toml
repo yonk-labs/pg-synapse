@@ -21,8 +21,10 @@ tracing      = { workspace = true }
 uuid         = { workspace = true }
 chrono       = { workspace = true }
 futures      = { workspace = true }
+reqwest      = { workspace = true }
 
 [dev-dependencies]
 tokio        = { workspace = true, features = ["test-util", "macros"] }
 tokio-test   = "0.4"
 serde_yaml   = "0.9"
+wiremock     = "0.6"

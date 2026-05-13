@@ -7,6 +7,9 @@ use std::sync::Arc;
 use crate::error::ToolError;
 use crate::types::{ToolCtx, ToolOutput, ToolSchema};
 
+pub mod mcp_client;
+pub use mcp_client::{McpClient, McpServerInfo, McpTool, McpToolDef};
+
 /// A function the agent can call. Implementations describe their input via
 /// [`Tool::schema`] (used to drive function-calling on the LLM side) and run
 /// asynchronously.
@@ -102,15 +105,26 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
-    /// Register an MCP server's exposed tools.
+    /// Register every tool an MCP server advertises.
     ///
-    /// **Not implemented in M1.** The MCP client wires up in M2; this stub
-    /// returns [`ToolError::Mcp`] so callers get a typed error today and a
-    /// real implementation later.
-    pub async fn add_mcp(&mut self, _server_url: &str) -> Result<&mut Self, ToolError> {
-        Err(ToolError::Mcp(
-            "add_mcp() not yet wired in M1; lands in M2".into(),
-        ))
+    /// Performs the MCP `initialize` handshake against `server_url`, calls
+    /// `tools/list`, and inserts one [`McpTool`] per advertised tool. All
+    /// inserted tools share a single underlying [`McpClient`] via `Arc`. If
+    /// a tool with the same name already exists in the registry it is
+    /// replaced.
+    ///
+    /// Returns `&mut self` for chaining.
+    pub async fn add_mcp(&mut self, server_url: &str) -> Result<&mut Self, ToolError> {
+        let client = Arc::new(McpClient::connect(server_url).await?);
+        let defs = client.list_tools().await?;
+        for def in defs {
+            let schema = ToolSchema::from_json_value(def.input_schema).map_err(|e| {
+                ToolError::Mcp(format!("invalid schema for tool '{}': {}", def.name, e))
+            })?;
+            let tool = McpTool::new(client.clone(), def.name.clone(), schema);
+            self.tools.insert(def.name, Arc::new(tool));
+        }
+        Ok(self)
     }
 }
 
@@ -162,12 +176,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_mcp_returns_typed_error_in_m1() {
+    async fn add_mcp_with_unreachable_url_returns_typed_mcp_error() {
+        // Loopback non-listening port: 1 (privileged + never listening).
+        // We bind to 127.0.0.1:0 and immediately drop the listener to free
+        // the port, then point the client at the freed port so the connect
+        // refuses cleanly without depending on a fixed unused port.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let url = format!("http://127.0.0.1:{port}");
+
         let mut r = ToolRegistry::new();
-        let result = r.add_mcp("http://example.invalid").await;
+        let result = r.add_mcp(&url).await;
         match result {
             Err(ToolError::Mcp(_)) => {}
-            other => panic!("expected ToolError::Mcp, got {:?}", other.map(|_| "Ok")),
+            other => panic!(
+                "expected ToolError::Mcp from unreachable URL, got {:?}",
+                other.map(|_| "Ok")
+            ),
         }
     }
 }
