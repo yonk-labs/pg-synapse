@@ -116,6 +116,14 @@ The operator specified additional constraints after M0 was scaffolded. These are
 - These are downloaded on demand by the `download` feature of the relevant plugin (`pg-synapse-embeddings-ort`, or a llama-cpp-server invocation).
 - Local cache location: `~/.cache/pg-synapse/models/` (XDG cache home if available).
 
+### D10 addendum — vLLM endpoint reality check (live test 2026-05-13)
+
+- The operator's vLLM endpoint at `http://192.168.1.193:8000/v1` was probed via `GET /v1/models`.
+- It is currently serving model id `Intel/Qwen3-Coder-Next-int4-AutoRound` (Intel's 4-bit AutoRound quantization of Qwen3-Coder-Next).
+- For now, all sample agent profiles target this model id by default. Operators wanting Granite 4 can change the vLLM launch args; the plugin doesn't care about the underlying model.
+- The `PG_SYNAPSE_TEST_LLM_MODEL` env var (default in tests/live.rs) controls which model id the test suite uses.
+- Live test passed: `complete()` returned "pong" when asked for it, `list_models()` returned the qwen-coder id.
+
 ## D11 — SQL read/write tool capability
 
 - The operator's goal: agents can read and write Postgres tables via tool calls inside `pg_synapse.execute(...)`.
