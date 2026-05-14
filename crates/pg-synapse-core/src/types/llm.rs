@@ -38,6 +38,27 @@ pub struct ToolDefinition {
     pub schema: ToolSchema,
 }
 
+impl ToolDefinition {
+    /// Render this tool as an OpenAI Chat Completions "function" object.
+    ///
+    /// Returns a JSON value shaped as
+    /// `{"name": ..., "description": ..., "parameters": <json-schema>}`,
+    /// suitable for embedding under `tools[i].function` in an OpenAI request.
+    ///
+    /// Provider plugins targeting OpenAI-compatible endpoints (vLLM,
+    /// llama-cpp-server, LM Studio, the OpenAI Ollama shim) call this to
+    /// avoid duplicating the conversion logic.
+    pub fn to_openai_function(&self) -> serde_json::Value {
+        let parameters = serde_json::to_value(self.schema.as_root_schema())
+            .unwrap_or_else(|_| serde_json::json!({"type": "object"}));
+        serde_json::json!({
+            "name": self.name,
+            "description": self.description,
+            "parameters": parameters,
+        })
+    }
+}
+
 /// Synchronous completion response.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CompletionResponse {
@@ -166,6 +187,27 @@ mod tests {
         };
         assert_eq!((a + b).cost_usd, Some(0.5));
         assert_eq!((Usage::default() + Usage::default()).cost_usd, None);
+    }
+
+    #[test]
+    fn tool_definition_to_openai_function_shape() {
+        use super::super::tool::ToolSchema;
+        let schema = ToolSchema::from_json_value(serde_json::json!({
+            "title": "EchoInput",
+            "type": "object",
+            "properties": { "message": { "type": "string" } },
+            "required": ["message"]
+        }))
+        .unwrap();
+        let td = ToolDefinition {
+            name: "echo".into(),
+            description: "Echo a string back.".into(),
+            schema,
+        };
+        let v = td.to_openai_function();
+        assert_eq!(v["name"], "echo");
+        assert_eq!(v["description"], "Echo a string back.");
+        assert_eq!(v["parameters"]["title"], "EchoInput");
     }
 
     #[test]
