@@ -4,6 +4,7 @@ members = [
     "crates/pg-synapse-core",
     "crates/pg-synapse-macros",
     "plugins/pg-synapse-provider-openai",
+    "plugins/pg-synapse-tools-http",
 ]
 
 [workspace.package]

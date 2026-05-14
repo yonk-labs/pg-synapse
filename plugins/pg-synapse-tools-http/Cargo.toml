@@ -1,0 +1,25 @@
+[package]
+name        = "pg-synapse-tools-http"
+description = "pg_synapse tool plugin: http_get, http_post, http_head built on the #[derive(Tool)] macro"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[dependencies]
+pg-synapse-core   = { path = "../../crates/pg-synapse-core" }
+pg-synapse-macros = { path = "../../crates/pg-synapse-macros" }
+tokio        = { workspace = true }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+schemars     = { workspace = true }
+reqwest      = { workspace = true }
+tracing      = { workspace = true }
+
+[dev-dependencies]
+tokio    = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+wiremock = "0.6"
