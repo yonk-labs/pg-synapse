@@ -265,6 +265,52 @@ pub(crate) mod synapse {
         rebuild_kernel();
     }
 
+    /// UPSERT an embedding profile row. Invalidates the kernel cache so the
+    /// next `synapse.embed()` call sees the change.
+    #[pg_extern]
+    pub fn embedding_profile_set(
+        name: &str,
+        provider: &str,
+        model: &str,
+        dimension: i32,
+        base_url: Option<&str>,
+        params: JsonB,
+    ) {
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(name.to_string()),
+            DatumWithOid::from(provider.to_string()),
+            DatumWithOid::from(model.to_string()),
+            DatumWithOid::from(dimension),
+            match base_url {
+                Some(s) => DatumWithOid::from(s.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+            DatumWithOid::from(params),
+        ];
+        Spi::run_with_args(
+            "INSERT INTO synapse.embedding_profiles (name, provider, model, dimension, base_url, params) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (name) DO UPDATE SET provider=EXCLUDED.provider, model=EXCLUDED.model, dimension=EXCLUDED.dimension, base_url=EXCLUDED.base_url, params=EXCLUDED.params, updated_at=now()",
+            &args,
+        )
+        .unwrap();
+        rebuild_kernel();
+    }
+
+    /// Embed `text` using the named embedding profile (or the default profile
+    /// when `profile_name` is NULL). Returns the raw embedding as
+    /// `double precision[]`. Stores nothing.
+    #[pg_extern(parallel_safe)]
+    pub fn embed(text: &str, profile_name: Option<&str>) -> Vec<f64> {
+        let kernel = match kernel_handle() {
+            Ok(k) => k,
+            Err(e) => pgrx::error!("embed: {e}"),
+        };
+        let result = tokio().block_on(async { kernel.embed(text, profile_name).await });
+        match result {
+            Ok(v) => v.into_inner().into_iter().map(|f| f as f64).collect(),
+            Err(e) => pgrx::error!("embed error: {e}"),
+        }
+    }
+
     /// pg_synapse extension version.
     #[pg_extern]
     pub fn version() -> &'static str {

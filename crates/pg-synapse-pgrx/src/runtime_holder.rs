@@ -67,9 +67,14 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     let spi_exec: Arc<dyn pg_synapse_tools_sql::SqlExecutor> =
         Arc::new(crate::spi_executor::SpiSqlExecutor);
 
-    Runtime::builder()
+    let builder = Runtime::builder()
         .with_plugin(pg_synapse_provider_openai::OpenAiProviderFactory)
-        .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec))
+        .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec));
+
+    #[cfg(feature = "embed-ort")]
+    let builder = builder.with_plugin(pg_synapse_embeddings_ort::OrtEmbeddingFactory);
+
+    builder
         .load_profiles_from(source)
         .build()
         .await

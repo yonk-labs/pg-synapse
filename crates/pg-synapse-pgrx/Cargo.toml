@@ -13,12 +13,15 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg18"]
+default   = ["pg18", "embed-ort"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg18      = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg_test   = []
+# Bundle the ORT-backed embeddings plugin. Requires the host environment to
+# expose libonnxruntime (1.24.x) via ORT_DYLIB_PATH or the system loader path.
+embed-ort = ["dep:pg-synapse-embeddings-ort"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -26,6 +29,7 @@ pg-synapse-core            = { path = "../pg-synapse-core" }
 pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai" }
 pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql" }
 pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http" }
+pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }
