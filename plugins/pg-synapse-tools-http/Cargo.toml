@@ -12,13 +12,10 @@ authors.workspace      = true
 [dependencies]
 pg-synapse-core   = { path = "../../crates/pg-synapse-core" }
 pg-synapse-macros = { path = "../../crates/pg-synapse-macros" }
-tokio        = { workspace = true }
-async-trait  = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 schemars     = { workspace = true }
 reqwest      = { workspace = true }
-tracing      = { workspace = true }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
