@@ -5,9 +5,11 @@
 //! up real backends.
 
 pub mod mock_embedding;
+pub mod mock_factories;
 pub mod mock_llm;
 pub mod mock_tool;
 
 pub use mock_embedding::MockEmbeddingProvider;
+pub use mock_factories::{MockEmbeddingFactory, MockLlmFactory};
 pub use mock_llm::{MockLlmProvider, MockResponse};
 pub use mock_tool::MockTool;

@@ -239,9 +239,7 @@ mod tests {
     use crate::error::{EmbeddingError, LlmError, ProviderError, ToolError};
     use crate::testing::{MockEmbeddingProvider, MockLlmProvider, MockTool};
     use crate::tool::Tool;
-    use crate::types::{
-        EmbeddingProfileRow, LlmProfileRow, ToolCtx, ToolOutput, ToolSchema,
-    };
+    use crate::types::{EmbeddingProfileRow, LlmProfileRow, ToolCtx, ToolOutput, ToolSchema};
 
     struct DummyPlugin;
     impl Plugin for DummyPlugin {
@@ -298,9 +296,7 @@ mod tests {
             "0.0.1"
         }
         fn register(self, registry: &mut Registry) {
-            registry
-                .tools
-                .add(MockTool::new("noop", ToolOutput::Empty));
+            registry.tools.add(MockTool::new("noop", ToolOutput::Empty));
             registry
                 .executors
                 .add("conversation", Arc::new(ConversationExecutor));
