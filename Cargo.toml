@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/pg-synapse-core"]
+members = [
+    "crates/pg-synapse-core",
+    "plugins/pg-synapse-provider-openai",
+]
 
 [workspace.package]
 edition         = "2024"
