@@ -110,3 +110,9 @@ pub use memory::MemoryProvider;
 pub use plugin::{Plugin, Registry};
 pub use runtime::{ProfileSource, Runtime, RuntimeBuilder};
 pub use tool::{Tool, ToolRegistry};
+
+/// Re-export of `async_trait` so derive macros generated against this crate
+/// can name a stable path to the attribute without forcing tool authors to
+/// add `async-trait` to their own `Cargo.toml`.
+#[doc(hidden)]
+pub use async_trait;

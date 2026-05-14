@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/pg-synapse-core",
+    "crates/pg-synapse-macros",
     "plugins/pg-synapse-provider-openai",
 ]
 

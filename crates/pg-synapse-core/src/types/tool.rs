@@ -21,6 +21,16 @@ impl ToolSchema {
         Self(schema)
     }
 
+    /// Wrap a `RootSchema` produced by `schemars::schema_for!`.
+    ///
+    /// Provided so derive-macro output does not need to spell out the
+    /// `ToolSchema(...)` tuple syntax (the inner field is `pub` but using
+    /// `Self(...)` directly from a generated path requires the macro to know
+    /// the field is positional; this constructor keeps the surface stable).
+    pub fn from_root(schema: RootSchema) -> Self {
+        Self(schema)
+    }
+
     /// Borrow the underlying schema.
     pub fn as_root_schema(&self) -> &RootSchema {
         &self.0
