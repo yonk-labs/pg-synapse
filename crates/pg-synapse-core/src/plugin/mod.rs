@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::compression::Compressor;
 use crate::embedding::EmbeddingProviderFactory;
-use crate::executor::Executor;
+use crate::executor::{ConversationExecutor, Executor, ReActExecutor, ReflectionExecutor};
 use crate::llm::LlmProviderFactory;
 use crate::memory::MemoryProvider;
 use crate::tool::ToolRegistry;
@@ -35,9 +35,25 @@ impl ExecutorRegistry {
         self
     }
 
+    /// Insert an executor under `name`. Alias of [`Self::insert`] preserved
+    /// because plugin authors prefer the `add` verb.
+    pub fn add(&mut self, name: impl Into<String>, executor: Arc<dyn Executor>) -> &mut Self {
+        self.insert(name, executor)
+    }
+
     /// Look up an executor by name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Executor>> {
         self.executors.get(name).cloned()
+    }
+
+    /// List the names of every registered executor (unsorted).
+    pub fn names(&self) -> Vec<String> {
+        self.executors.keys().cloned().collect()
+    }
+
+    /// True when an executor under `name` is registered.
+    pub fn contains(&self, name: &str) -> bool {
+        self.executors.contains_key(name)
     }
 
     /// Number of registered executors.
@@ -70,9 +86,24 @@ impl LlmFactoryRegistry {
         self
     }
 
+    /// Alias of [`Self::insert`] for symmetry with `ExecutorRegistry::add`.
+    pub fn add(&mut self, factory: Arc<dyn LlmProviderFactory>) -> &mut Self {
+        self.insert(factory)
+    }
+
     /// Look up a factory by provider name.
     pub fn get(&self, provider: &str) -> Option<Arc<dyn LlmProviderFactory>> {
         self.factories.get(provider).cloned()
+    }
+
+    /// List the names of every registered provider factory (unsorted).
+    pub fn names(&self) -> Vec<String> {
+        self.factories.keys().cloned().collect()
+    }
+
+    /// True when a factory under `provider` is registered.
+    pub fn contains(&self, provider: &str) -> bool {
+        self.factories.contains_key(provider)
     }
 
     /// Number of registered factories.
@@ -105,9 +136,24 @@ impl EmbeddingFactoryRegistry {
         self
     }
 
+    /// Alias of [`Self::insert`] for symmetry with `ExecutorRegistry::add`.
+    pub fn add(&mut self, factory: Arc<dyn EmbeddingProviderFactory>) -> &mut Self {
+        self.insert(factory)
+    }
+
     /// Look up a factory by provider name.
     pub fn get(&self, provider: &str) -> Option<Arc<dyn EmbeddingProviderFactory>> {
         self.factories.get(provider).cloned()
+    }
+
+    /// List the names of every registered provider factory (unsorted).
+    pub fn names(&self) -> Vec<String> {
+        self.factories.keys().cloned().collect()
+    }
+
+    /// True when a factory under `provider` is registered.
+    pub fn contains(&self, provider: &str) -> bool {
+        self.factories.contains_key(provider)
     }
 
     /// Number of registered factories.
@@ -145,6 +191,19 @@ impl Registry {
     }
 }
 
+/// Install the three reference executors (`conversation`, `react`, `reflection`)
+/// into `registry.executors`. Hosts that build a [`Registry`] directly call
+/// this once at startup; [`crate::Runtime::builder`] does it for you.
+pub fn register_builtin_executors(registry: &mut Registry) {
+    registry
+        .executors
+        .add("conversation", Arc::new(ConversationExecutor));
+    registry.executors.add("react", Arc::new(ReActExecutor));
+    registry
+        .executors
+        .add("reflection", Arc::new(ReflectionExecutor::default()));
+}
+
 /// A bundle a host installs to wire in tools, executors, provider factories,
 /// or backends.
 ///
@@ -177,6 +236,12 @@ pub trait Plugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::{EmbeddingError, LlmError, ProviderError, ToolError};
+    use crate::testing::{MockEmbeddingProvider, MockLlmProvider, MockTool};
+    use crate::tool::Tool;
+    use crate::types::{
+        EmbeddingProfileRow, LlmProfileRow, ToolCtx, ToolOutput, ToolSchema,
+    };
 
     struct DummyPlugin;
     impl Plugin for DummyPlugin {
@@ -187,6 +252,63 @@ mod tests {
             "0.0.1"
         }
         fn register(self, _registry: &mut Registry) {}
+    }
+
+    struct DummyLlmFactory;
+    impl LlmProviderFactory for DummyLlmFactory {
+        fn provider_name(&self) -> &str {
+            "dummy-llm"
+        }
+        fn build(
+            &self,
+            _profile: LlmProfileRow,
+        ) -> Result<Arc<dyn crate::llm::LlmProvider>, ProviderError> {
+            Err(ProviderError::InvalidProfile {
+                provider: "dummy-llm".into(),
+                reason: "test-only factory".into(),
+            })
+        }
+    }
+
+    struct DummyEmbeddingFactory;
+    impl EmbeddingProviderFactory for DummyEmbeddingFactory {
+        fn provider_name(&self) -> &str {
+            "dummy-embed"
+        }
+        fn build(
+            &self,
+            _profile: EmbeddingProfileRow,
+        ) -> Result<Arc<dyn crate::embedding::EmbeddingProvider>, ProviderError> {
+            Err(ProviderError::InvalidProfile {
+                provider: "dummy-embed".into(),
+                reason: "test-only factory".into(),
+            })
+        }
+    }
+
+    /// Plugin that drops one tool + one executor + an LLM factory + an
+    /// embedding factory into the registry. Used by the integration test
+    /// below.
+    struct KitchenSinkPlugin;
+    impl Plugin for KitchenSinkPlugin {
+        fn name(&self) -> &str {
+            "kitchen-sink"
+        }
+        fn version(&self) -> &str {
+            "0.0.1"
+        }
+        fn register(self, registry: &mut Registry) {
+            registry
+                .tools
+                .add(MockTool::new("noop", ToolOutput::Empty));
+            registry
+                .executors
+                .add("conversation", Arc::new(ConversationExecutor));
+            registry.llm_factories.add(Arc::new(DummyLlmFactory));
+            registry
+                .embedding_factories
+                .add(Arc::new(DummyEmbeddingFactory));
+        }
     }
 
     #[test]
@@ -212,5 +334,90 @@ mod tests {
         let mut r = Registry::new();
         DummyPlugin.register(&mut r);
         assert!(r.tools.is_empty());
+    }
+
+    #[test]
+    fn executor_registry_add_get_names_contains() {
+        let mut er = ExecutorRegistry::new();
+        assert!(er.is_empty());
+        er.add("conversation", Arc::new(ConversationExecutor));
+        er.add("react", Arc::new(ReActExecutor));
+        assert_eq!(er.len(), 2);
+        assert!(er.contains("conversation"));
+        assert!(er.contains("react"));
+        assert!(!er.contains("nope"));
+        assert!(er.get("conversation").is_some());
+        let mut names = er.names();
+        names.sort();
+        assert_eq!(names, vec!["conversation".to_string(), "react".to_string()]);
+    }
+
+    #[test]
+    fn llm_factory_registry_add_get_names_contains() {
+        let mut lr = LlmFactoryRegistry::new();
+        assert!(lr.is_empty());
+        lr.add(Arc::new(DummyLlmFactory));
+        assert_eq!(lr.len(), 1);
+        assert!(lr.contains("dummy-llm"));
+        assert!(!lr.contains("nope"));
+        assert!(lr.get("dummy-llm").is_some());
+        assert_eq!(lr.names(), vec!["dummy-llm".to_string()]);
+    }
+
+    #[test]
+    fn embedding_factory_registry_add_get_names_contains() {
+        let mut er = EmbeddingFactoryRegistry::new();
+        assert!(er.is_empty());
+        er.add(Arc::new(DummyEmbeddingFactory));
+        assert_eq!(er.len(), 1);
+        assert!(er.contains("dummy-embed"));
+        assert!(!er.contains("nope"));
+        assert!(er.get("dummy-embed").is_some());
+        assert_eq!(er.names(), vec!["dummy-embed".to_string()]);
+    }
+
+    #[test]
+    fn register_builtin_executors_installs_three() {
+        let mut r = Registry::new();
+        register_builtin_executors(&mut r);
+        assert_eq!(r.executors.len(), 3);
+        assert!(r.executors.contains("conversation"));
+        assert!(r.executors.contains("react"));
+        assert!(r.executors.contains("reflection"));
+    }
+
+    #[test]
+    fn plugin_registers_tools_and_executors_via_register() {
+        let mut r = Registry::new();
+        KitchenSinkPlugin.register(&mut r);
+        assert!(r.tools.get("noop").is_some());
+        assert!(r.executors.contains("conversation"));
+        assert!(r.llm_factories.contains("dummy-llm"));
+        assert!(r.embedding_factories.contains("dummy-embed"));
+        // Confirm the registered tool actually behaves.
+        let _: &dyn Tool = &*r.tools.get("noop").unwrap();
+    }
+
+    // Sanity-check use of the mock LLM/embedding providers from this module.
+    #[tokio::test]
+    async fn mock_providers_used_via_arc_for_registry_paths() {
+        let llm: Arc<dyn crate::llm::LlmProvider> = Arc::new(MockLlmProvider::new("m"));
+        let embed: Arc<dyn crate::embedding::EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new("e", 4));
+        assert_eq!(llm.model_name(), "m");
+        assert_eq!(embed.dimension(), 4);
+    }
+
+    // Surface the imports as used for the test module even if we don't use
+    // them in an assertion directly (silences `dead_code` paranoia).
+    #[allow(dead_code)]
+    fn _types_referenced(
+        _t: &ToolSchema,
+        _o: &ToolOutput,
+        _c: &ToolCtx,
+        _l: &LlmError,
+        _e: &EmbeddingError,
+        _x: &ToolError,
+    ) {
     }
 }

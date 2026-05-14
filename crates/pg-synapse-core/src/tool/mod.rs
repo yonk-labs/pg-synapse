@@ -85,6 +85,19 @@ impl ToolRegistry {
         self
     }
 
+    /// Insert a tool already wrapped in an `Arc`. Used when copying shared
+    /// instances out of a parent registry into a per-agent sub-registry (see
+    /// `Runtime::resolve_tools`). Replaces any prior tool of the same name.
+    pub fn add_arc(&mut self, name: impl Into<String>, tool: Arc<dyn Tool>) -> &mut Self {
+        self.tools.insert(name.into(), tool);
+        self
+    }
+
+    /// True when a tool under `name` is registered.
+    pub fn contains(&self, name: &str) -> bool {
+        self.tools.contains_key(name)
+    }
+
     /// Look up a tool by name.
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
@@ -173,6 +186,32 @@ mod tests {
         r.add(NoopTool);
         let names = r.names();
         assert_eq!(names, vec!["noop"]);
+    }
+
+    #[tokio::test]
+    async fn registry_add_arc_shares_instance() {
+        let mut src = ToolRegistry::new();
+        src.add(NoopTool);
+        let tool = src.get("noop").expect("present");
+        let mut sink = ToolRegistry::new();
+        sink.add_arc("renamed", tool.clone());
+        assert!(sink.contains("renamed"));
+        let out = sink
+            .get("renamed")
+            .unwrap()
+            .run(serde_json::Value::Null, &ToolCtx::default())
+            .await
+            .unwrap();
+        assert!(matches!(out, ToolOutput::Empty));
+    }
+
+    #[test]
+    fn registry_contains_reflects_membership() {
+        let mut r = ToolRegistry::new();
+        assert!(!r.contains("noop"));
+        r.add(NoopTool);
+        assert!(r.contains("noop"));
+        assert!(!r.contains("missing"));
     }
 
     #[tokio::test]
