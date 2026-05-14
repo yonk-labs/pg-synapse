@@ -1,0 +1,37 @@
+[package]
+name        = "pg-synapse-embeddings-ort"
+description = "pg_synapse embeddings plugin using ONNX Runtime + Hugging Face tokenizers (BGE family)"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[features]
+default      = []
+# Pull tokenizer + ONNX weights from Hugging Face on first use.
+download     = ["dep:reqwest"]
+# Enable CUDA execution provider in ONNX Runtime.
+gpu          = ["ort/cuda"]
+# Opt-in test gate for tests that download models and run real inference.
+live-tests   = ["download"]
+
+[dependencies]
+pg-synapse-core = { path = "../../crates/pg-synapse-core" }
+tokio        = { workspace = true }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+ndarray      = "0.17"
+tokenizers   = { version = "0.21", default-features = false, features = ["onig"] }
+ort          = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
+reqwest      = { workspace = true, features = ["blocking"], optional = true }
+parking_lot  = "0.12"
+dirs         = "5"
+
+[dev-dependencies]
+tokio        = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

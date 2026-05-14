@@ -4,6 +4,7 @@ members = [
     "crates/pg-synapse-core",
     "crates/pg-synapse-macros",
     "crates/pg-synapse-pgrx",
+    "plugins/pg-synapse-embeddings-ort",
     "plugins/pg-synapse-provider-openai",
     "plugins/pg-synapse-tools-http",
     "plugins/pg-synapse-tools-sql",
