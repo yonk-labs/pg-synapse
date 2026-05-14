@@ -1,0 +1,7 @@
+comment = 'pg_synapse: Postgres-native agent-loop runtime'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_synapse_pgrx'
+relocatable = false
+superuser = true
+trusted = false
+
