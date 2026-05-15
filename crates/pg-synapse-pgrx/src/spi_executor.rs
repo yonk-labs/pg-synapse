@@ -9,6 +9,7 @@
 //! thread (see `runtime_holder`).
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use pgrx::JsonB;
@@ -23,13 +24,62 @@ use pg_synapse_tools_sql::SqlExecutor;
 
 /// SQL executor that runs queries via SPI from inside a Postgres backend.
 ///
-/// v0.1-alpha limitation: positional bind parameters (`$1`, `$2`, ...) are
-/// not yet supported. The kernel-level SQL tools forward the agent's `params`
-/// array and the executor rejects calls that supply any. The agent prompt
-/// should instruct the LLM to inline literal values until full bind support
-/// lands in M7-phase-B.
+/// Two integrity guarantees (v0.1.1, N1.2 + N1.3):
+///
+/// * **Positional bind params.** The agent's `params` JSON array is mapped to
+///   typed Postgres bind parameters (`$1`, `$2`, ...) so the LLM never has to
+///   inline literals into the SQL string. Removes an injection footgun.
+/// * **SAVEPOINT per tool call.** Every `query` / `execute` runs inside its
+///   own Postgres internal subtransaction (a savepoint). On success it is
+///   released; on error it is rolled back. A failing tool call therefore
+///   discards only its own partial writes and never an earlier tool call's
+///   committed work. See [`with_savepoint`] for why an internal
+///   subtransaction is required rather than the SQL `SAVEPOINT` statement.
 #[derive(Default)]
 pub struct SpiSqlExecutor;
+
+/// Monotonic suffix for savepoint names so nested / sequential tool calls on
+/// one connection never collide. The kernel is single-threaded per backend
+/// today, but a unique name is cheap insurance.
+static SAVEPOINT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Map one agent-supplied JSON value to a typed Postgres bind datum.
+///
+/// * string  -> TEXT
+/// * integer -> INT8 (`bigint`)
+/// * float   -> FLOAT8 (`double precision`)
+/// * bool    -> BOOL
+/// * null    -> typed NULL (TEXT NULL, a safe default)
+/// * object / array -> JSONB (the value re-serialized)
+///
+/// The returned datum owns its data via the `String` / `JsonB` it wraps;
+/// callers must keep the produced `Vec` alive for the duration of the SPI
+/// call (the slice of `DatumWithOid` borrows from it).
+fn json_to_datum(v: &Value) -> DatumWithOid<'static> {
+    match v {
+        Value::String(s) => DatumWithOid::from(s.clone()),
+        Value::Bool(b) => DatumWithOid::from(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                DatumWithOid::from(i)
+            } else if let Some(u) = n.as_u64() {
+                // u64 that doesn't fit i64: widen through f64 rather than
+                // overflow. Rare for agent-generated params.
+                DatumWithOid::from(u as f64)
+            } else {
+                DatumWithOid::from(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        Value::Null => DatumWithOid::null::<String>(),
+        Value::Object(_) | Value::Array(_) => DatumWithOid::from(JsonB(v.clone())),
+    }
+}
+
+/// Build a `Vec<DatumWithOid>` from the agent `params` array. Kept in a local
+/// so the borrowed slice handed to SPI stays valid.
+fn bind_args(params: &[Value]) -> Vec<DatumWithOid<'static>> {
+    params.iter().map(json_to_datum).collect()
+}
 
 #[async_trait]
 impl SqlExecutor for SpiSqlExecutor {
@@ -45,35 +95,40 @@ impl SqlExecutor for SpiSqlExecutor {
                 reason: "pg_synapse.disable_builtin_sql_tools is true".into(),
             });
         }
-        if !params.is_empty() {
-            return Err(ToolError::Execution {
-                name: "sql_query".into(),
-                reason: "positional params not yet supported in pgrx host (v0.1-alpha)".into(),
-            });
-        }
 
-        // Wrap arbitrary SELECTs in row_to_jsonb so result shape is uniform.
+        // Wrap arbitrary SELECTs in to_jsonb so result shape is uniform. The
+        // user's $1..$n placeholders pass straight through the superquery.
         let wrapped = format!("SELECT to_jsonb(t) FROM ({sql}) t");
 
-        Spi::connect(|client| -> Result<Vec<Value>, ToolError> {
-            let table =
-                client
-                    .select(wrapped.as_str(), None, &[])
-                    .map_err(|e| ToolError::Execution {
+        with_savepoint("sql_query", || {
+            let args = bind_args(params);
+            // `connect_mut` + `update` (not `connect` + `select`) on purpose:
+            // a read-only SPI query reuses the ActiveSnapshot, and inside the
+            // fresh internal subtransaction no XID is assigned yet, so pgrx
+            // would run the SELECT read-only and miss rows written earlier in
+            // the same outer transaction (an earlier tool call, or the
+            // caller). `update` marks the statement mutable, which takes a
+            // current snapshot and gives correct read-your-writes semantics.
+            // A SELECT issued through `update` is otherwise harmless.
+            Spi::connect_mut(|client| -> Result<Vec<Value>, ToolError> {
+                let table = client.update(wrapped.as_str(), None, &args).map_err(|e| {
+                    ToolError::Execution {
+                        name: "sql_query".into(),
+                        reason: e.to_string(),
+                    }
+                })?;
+                let mut out: Vec<Value> = Vec::new();
+                for row in table {
+                    let v: Option<JsonB> = row.get(1).map_err(|e| ToolError::Execution {
                         name: "sql_query".into(),
                         reason: e.to_string(),
                     })?;
-            let mut out: Vec<Value> = Vec::new();
-            for row in table {
-                let v: Option<JsonB> = row.get(1).map_err(|e| ToolError::Execution {
-                    name: "sql_query".into(),
-                    reason: e.to_string(),
-                })?;
-                if let Some(JsonB(j)) = v {
-                    out.push(j);
+                    if let Some(JsonB(j)) = v {
+                        out.push(j);
+                    }
                 }
-            }
-            Ok(out)
+                Ok(out)
+            })
         })
     }
 
@@ -89,23 +144,113 @@ impl SqlExecutor for SpiSqlExecutor {
                 reason: "pg_synapse.disable_builtin_sql_tools is true".into(),
             });
         }
-        if !params.is_empty() {
-            return Err(ToolError::Execution {
-                name: "sql_exec".into(),
-                reason: "positional params not yet supported in pgrx host (v0.1-alpha)".into(),
-            });
-        }
 
-        Spi::connect_mut(|client| -> Result<u64, ToolError> {
-            let table = client
-                .update(sql, None, &[])
-                .map_err(|e| ToolError::Execution {
-                    name: "sql_exec".into(),
-                    reason: e.to_string(),
-                })?;
-            Ok(table.len() as u64)
+        with_savepoint("sql_exec", || {
+            let args = bind_args(params);
+            Spi::connect_mut(|client| -> Result<u64, ToolError> {
+                let table = client
+                    .update(sql, None, &args)
+                    .map_err(|e| ToolError::Execution {
+                        name: "sql_exec".into(),
+                        reason: e.to_string(),
+                    })?;
+                Ok(table.len() as u64)
+            })
         })
     }
+}
+
+/// Run `body` inside a Postgres internal subtransaction (a savepoint), so a
+/// tool failure rolls back only that tool call's writes.
+///
+/// ## Why an internal subtransaction, not an SQL `SAVEPOINT`
+///
+/// The kernel invokes the SQL tools from inside `synapse.execute(...)`, a
+/// SECURITY DEFINER function. Postgres rejects the SQL `SAVEPOINT` /
+/// `ROLLBACK TO SAVEPOINT` statements when issued from within a function
+/// (they are only valid at the top transaction level or inside a
+/// PROCEDURE). The supported mechanism in this position is a Postgres
+/// *internal subtransaction*, the same primitive PL/pgSQL's
+/// `BEGIN ... EXCEPTION` block uses. We drive it via the documented C API
+/// (`BeginInternalSubTransaction` / `ReleaseCurrentSubTransaction` /
+/// `RollbackAndReleaseCurrentSubTransaction`) wrapped by [`PgTryBuilder`],
+/// which converts a Postgres `ereport(ERROR)` longjmp into a catchable Rust
+/// path so we can roll the subtransaction back instead of unwinding past it.
+///
+/// ## Behaviour
+///
+/// * `body` returns `Ok` -> the subtransaction is released; its writes stay
+///   (subject to the outer transaction).
+/// * `body` returns `Err(ToolError)` (a soft, pgrx-reported error) -> the
+///   subtransaction is rolled back; the `ToolError` is returned.
+/// * `body` triggers a hard Postgres `ERROR` (e.g. a constraint violation)
+///   -> the error is caught, the subtransaction is rolled back, and a
+///   [`ToolError::Execution`] describing it is returned.
+///
+/// In every case, writes made by *earlier* tool calls are untouched, and a
+/// failing call leaves none of its own partial writes behind.
+///
+/// The `SAVEPOINT_SEQ` counter only names the savepoint for diagnostics;
+/// internal subtransactions nest by stack discipline regardless of name.
+fn with_savepoint<T>(
+    tool: &str,
+    body: impl FnOnce() -> Result<T, ToolError> + std::panic::UnwindSafe,
+) -> Result<T, ToolError> {
+    use pgrx::PgTryBuilder;
+    use pgrx::pg_sys;
+    use pgrx::pg_sys::panic::CaughtError;
+
+    let _n = SAVEPOINT_SEQ.fetch_add(1, Ordering::Relaxed);
+
+    // Save the memory context and resource owner so we can restore them after
+    // the subtransaction commits or aborts (Postgres swaps these during a
+    // subxact and an aborted subxact leaves them pointing at freed state).
+    #[allow(unsafe_code)]
+    // SAFETY: reading the two well-known Postgres globals on the backend
+    // thread, which is where SPI (and therefore this code) always runs.
+    let (saved_cxt, saved_owner) =
+        unsafe { (pg_sys::CurrentMemoryContext, pg_sys::CurrentResourceOwner) };
+
+    #[allow(unsafe_code)]
+    // SAFETY: opening an internal subtransaction on the backend thread, the
+    // same primitive PL/pgSQL uses for its EXCEPTION blocks.
+    unsafe {
+        pg_sys::BeginInternalSubTransaction(std::ptr::null());
+    }
+
+    let outcome: Result<T, ToolError> = PgTryBuilder::new(body)
+        .catch_others(|caught: CaughtError| {
+            // A hard Postgres ERROR longjmped out of `body`; pgrx turned it into
+            // this catchable cause. Map it to a ToolError; the subtransaction is
+            // rolled back below.
+            let reason = match &caught {
+                CaughtError::PostgresError(e)
+                | CaughtError::ErrorReport(e)
+                | CaughtError::RustPanic { ereport: e, .. } => e.message().to_string(),
+            };
+            Err(ToolError::Execution {
+                name: tool.to_string(),
+                reason,
+            })
+        })
+        .execute();
+
+    // Release on success, roll back on any failure (soft ToolError or caught
+    // hard error). Then restore the saved context / resource owner.
+    #[allow(unsafe_code)]
+    // SAFETY: closing the subtransaction we opened above, on the backend
+    // thread, then restoring the globals we saved before opening it.
+    unsafe {
+        if outcome.is_ok() {
+            pg_sys::ReleaseCurrentSubTransaction();
+        } else {
+            pg_sys::RollbackAndReleaseCurrentSubTransaction();
+        }
+        pg_sys::CurrentMemoryContext = saved_cxt;
+        pg_sys::CurrentResourceOwner = saved_owner;
+    }
+
+    outcome
 }
 
 /// `ProfileSource` reading from the `pg_synapse.*` tables via SPI.
