@@ -116,3 +116,98 @@ These supersede the phase-A findings above where they conflict.
   user's `$1..$n` placeholders resolve through it unchanged. The example
   agent prompts were switched from "inline literals" to "use `$1, $2`
   placeholders with a params array".
+
+## v0.1.1 N2 adaptations
+
+### N2.1 NUMERIC cost round-trip
+
+- **`NUMERIC` maps to `pgrx::AnyNumeric`.** `cost_cap_usd` and `cost_usd`
+  are `NUMERIC(12,6)` columns. pgrx 0.18 exposes `AnyNumeric` (both
+  `FromDatum` and `IntoDatum`). Read path: `row.get::<AnyNumeric>(n)` then
+  `f64::try_from(AnyNumeric)` (Postgres `numeric_float8`). Write path:
+  `AnyNumeric::try_from(f64)` (Postgres `float8_numeric`), bound as a
+  `DatumWithOid`. **Precision tradeoff:** an `f64` carries ~15-17
+  significant decimal digits; the column holds at most 12 digits / 6
+  decimals, so the round trip is lossless for any storable value. Both
+  conversions are fallible; on failure (only a non-finite f64) we fall
+  back to NULL rather than poisoning the audit row.
+
+- **Cost-cap surfacing decision (no `RAISE`).** The kernel returns
+  `OutcomeStatus::CostCapExceeded`; `status_label` already maps it to
+  `"cost_cap_exceeded"`. The plan floated `RAISE EXCEPTION` on cap breach.
+  We deliberately do **not** raise: `synapse.execute` is SECURITY DEFINER
+  and a raised error would roll back the whole function, **including the
+  `executions` audit row** that records the partial cost and the
+  `cost_cap_exceeded` status. The better contract is: return the JSONB
+  envelope with `"status":"cost_cap_exceeded"` AND log the `executions`
+  row with `status='cost_cap_exceeded'` and the partial NUMERIC cost. The
+  caller can branch in SQL on the envelope status; the audit trail
+  survives. (`log_execution` already records `o.status` verbatim, so this
+  needed no new code beyond the NUMERIC cost fix.)
+
+### N2.2 Remaining SQL functions
+
+- **`TABLE` returns vs JSONB.** `agent_list` / `tool_list` return a single
+  `JsonB` array (objects) rather than `TABLE(...)` / `SETOF`. Consistent
+  with `execution_status` and trivial to consume from SQL
+  (`jsonb_array_elements`). Avoids the pgrx 0.18 `TableIterator` lifetime
+  ceremony for a read that is not hot.
+
+- **`execute_async` is synchronous under the hood (v0.1.1).** SPI is only
+  legal on the backend thread that owns the transaction. The shared tokio
+  runtime is `current_thread` precisely so `block_on` polls inline on that
+  thread; a `tokio::spawn`ed task would poll on a different logical context
+  with no backend transaction and **cannot SPI**. True background
+  execution needs a Postgres bgworker (its own backend + transaction),
+  which is out of scope for v0.1.1. So `execute_async`: (1) inserts a
+  `status='queued'` placeholder row keyed by a fresh uuid, (2) runs the
+  agent inline via the same kernel path as `execute`, (3) on success
+  deletes the placeholder and logs the real outcome through
+  `log_execution` (identical audit rows to the sync path), returning the
+  kernel's execution_id; on failure marks the placeholder
+  `status='errored'` and returns its id. The async **contract** (returns a
+  uuid, pollable via `execution_status`) holds; only the scheduling is
+  synchronous. True background execution is deferred to v0.2.
+
+- **`tool_call` via new additive kernel method.** Added
+  `Runtime::call_tool(name, input, caller_role) -> Result<Value,
+  RuntimeError>` to `pg-synapse-core` (additive, no existing signature
+  changed). It resolves the tool in the shared registry, runs it with a
+  fresh `ToolCtx`, and flattens `ToolOutput` (`Text` -> JSON string,
+  `Json` -> value, `Empty` -> null). The pgrx `tool_call` wraps it.
+
+- **`tool_register` uses `default!`.** pgrx 0.18 `#[pg_extern]` supports
+  `default!(&str, "'manual'")` / `default!(JsonB, "'{}'")` for SQL-level
+  DEFAULTs; the SQL signature is `tool_register(text, text, jsonb, text,
+  jsonb)` for the GRANT.
+
+- **Grants extended.** `grants.sql` now also grants the new admin
+  functions (`tool_register`, `llm_profile_drop`,
+  `embedding_profile_drop`, `secret_drop`) to `synapse_admin` only and the
+  new run/read functions (`agent_list`, `tool_list`, `tool_call`,
+  `execute_async`, `execution_status`) to both roles.
+
+### N2.3 Full GUC set + fallback resolution
+
+- **All 10 design-spec GUCs registered** (`docs/design.md`, "GUCs (10 in
+  v0.1)"): `default_llm_profile_main/_small/_judge`,
+  `default_embedding_profile`, `default_timeout_seconds`,
+  `default_cost_cap_usd`, `trace_enabled`, `sidecar_url`, `master_key`,
+  `compression_threshold_tokens`. The v0.1.0 operational GUCs
+  (`disable_builtin_sql_tools`, `default_timeout_ms`,
+  `default_max_iterations`) are kept (removing them would regress) plus
+  `default_executor` (named in the N2.3 fallback list but not the design
+  table).
+
+- **`default_cost_cap_usd` is a string GUC, not float.** The design
+  default is "(none)" and a Postgres `real` GUC cannot represent "unset"
+  (it always has a value). A string GUC distinguishes "" (no cap) from a
+  parseable number. `master_key` is `Suset` context (superuser-set);
+  everything else is `Userset`.
+
+- **Fallback resolution lives in one function.**
+  `schema_guc::apply_guc_fallbacks(&mut AgentRow)` fills NULL / zero /
+  empty agent fields from the matching GUC. It is called once, from
+  `SpiProfileSource::agents`, after each row is read and before it reaches
+  the kernel. Timeout precedence: `default_timeout_ms` first
+  (millisecond fidelity), then `default_timeout_seconds * 1000`.

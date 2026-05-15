@@ -337,14 +337,14 @@ impl ProfileSource for SpiProfileSource {
         Spi::connect(|client| -> Result<Vec<AgentRow>, RuntimeError> {
             let table = client
                 .select(
-                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms FROM synapse.agents",
+                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms, cost_cap_usd FROM synapse.agents",
                     None,
                     &[],
                 )
                 .map_err(|e| RuntimeError::Config(e.to_string()))?;
             let mut out = Vec::new();
             for row in table {
-                out.push(AgentRow {
+                let mut agent = AgentRow {
                     name: row
                         .get::<String>(1)
                         .map_err(|e| RuntimeError::Config(e.to_string()))?
@@ -365,9 +365,20 @@ impl ProfileSource for SpiProfileSource {
                     tools: row.get::<Vec<String>>(9).ok().flatten().unwrap_or_default(),
                     max_iterations: row.get::<i32>(10).ok().flatten().unwrap_or(10) as u32,
                     timeout_ms: row.get::<i64>(11).ok().flatten().unwrap_or(60_000) as u64,
-                    // cost_cap_usd: NUMERIC handling is deferred to M7-phase-B.
-                    cost_cap_usd: None,
-                });
+                    // `cost_cap_usd` is `NUMERIC(12,6)`. pgrx 0.18 maps NUMERIC
+                    // to `AnyNumeric`; `f64::try_from(AnyNumeric)` converts via
+                    // Postgres' `numeric_float8`. Precision tradeoff: an f64
+                    // carries ~15-17 significant decimal digits, far more than
+                    // the 12-digit / 6-decimal USD cost cap needs, so the
+                    // round-trip is lossless for any value the column can hold.
+                    cost_cap_usd: row
+                        .get::<pgrx::AnyNumeric>(12)
+                        .ok()
+                        .flatten()
+                        .and_then(|n| f64::try_from(n).ok()),
+                };
+                crate::schema_guc::apply_guc_fallbacks(&mut agent);
+                out.push(agent);
             }
             Ok(out)
         })

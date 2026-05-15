@@ -62,9 +62,15 @@ pub(crate) fn log_execution(
         DatumWithOid::from(status),
         DatumWithOid::from(o.tokens_in as i32),
         DatumWithOid::from(o.tokens_out as i32),
-        match o.cost_usd {
-            Some(c) => DatumWithOid::from(c),
-            None => DatumWithOid::null::<f64>(),
+        // `synapse.executions.cost_usd` is `NUMERIC(12,6)`. Bind it as
+        // `AnyNumeric` (built from the f64 via Postgres' `float8_numeric`) so
+        // the stored value keeps the column's full 6-decimal precision rather
+        // than the lossy float text round-trip the previous `f64` bind used.
+        // If the conversion ever fails (non-finite f64), fall back to NULL
+        // instead of poisoning the whole audit row.
+        match o.cost_usd.and_then(|c| pgrx::AnyNumeric::try_from(c).ok()) {
+            Some(n) => DatumWithOid::from(n),
+            None => DatumWithOid::null::<pgrx::AnyNumeric>(),
         },
         DatumWithOid::from(o.duration_ms as i64),
         match caller {
@@ -322,5 +328,270 @@ pub(crate) mod synapse {
     #[pg_extern(name = "rebuild_kernel", security_definer)]
     pub fn rebuild_kernel_fn() {
         rebuild_kernel();
+    }
+
+    // ---- v0.1.1 N2.2: remaining SQL surface ----
+
+    /// List every registered agent. Returns a JSONB array of objects
+    /// `{name, executor_name, llm_profile_main, tools}`. A JSONB array (not a
+    /// `TABLE`) keeps the pgrx 0.18 surface simple and is consistent with
+    /// `tool_list` / `execution_status`.
+    #[pg_extern(security_definer)]
+    pub fn agent_list() -> JsonB {
+        let rows = Spi::connect(|client| -> Result<Vec<serde_json::Value>, String> {
+            let table = client
+                .select(
+                    "SELECT name, executor_name, llm_profile_main, tools FROM synapse.agents ORDER BY name",
+                    None,
+                    &[],
+                )
+                .map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            for row in table {
+                out.push(json!({
+                    "name": row.get::<String>(1).ok().flatten().unwrap_or_default(),
+                    "executor_name": row.get::<String>(2).ok().flatten().unwrap_or_default(),
+                    "llm_profile_main": row.get::<String>(3).ok().flatten(),
+                    "tools": row.get::<Vec<String>>(4).ok().flatten().unwrap_or_default(),
+                }));
+            }
+            Ok(out)
+        });
+        match rows {
+            Ok(v) => JsonB(serde_json::Value::Array(v)),
+            Err(e) => JsonB(json!({ "error": e })),
+        }
+    }
+
+    /// List every registered tool. Returns a JSONB array of objects
+    /// `{name, description, kind}` from `synapse.tools`.
+    #[pg_extern(security_definer)]
+    pub fn tool_list() -> JsonB {
+        let rows = Spi::connect(|client| -> Result<Vec<serde_json::Value>, String> {
+            let table = client
+                .select(
+                    "SELECT name, description, kind FROM synapse.tools ORDER BY name",
+                    None,
+                    &[],
+                )
+                .map_err(|e| e.to_string())?;
+            let mut out = Vec::new();
+            for row in table {
+                out.push(json!({
+                    "name": row.get::<String>(1).ok().flatten().unwrap_or_default(),
+                    "description": row.get::<String>(2).ok().flatten(),
+                    "kind": row.get::<String>(3).ok().flatten().unwrap_or_default(),
+                }));
+            }
+            Ok(out)
+        });
+        match rows {
+            Ok(v) => JsonB(serde_json::Value::Array(v)),
+            Err(e) => JsonB(json!({ "error": e })),
+        }
+    }
+
+    /// UPSERT a row into `synapse.tools`. Registry metadata only; the kernel
+    /// resolves the actual tool implementation from registered plugins.
+    /// Invalidates the kernel cache.
+    #[pg_extern(security_definer)]
+    pub fn tool_register(
+        name: &str,
+        description: &str,
+        schema_json: JsonB,
+        kind: default!(&str, "'manual'"),
+        config: default!(JsonB, "'{}'"),
+    ) {
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(name.to_string()),
+            DatumWithOid::from(description.to_string()),
+            DatumWithOid::from(schema_json),
+            DatumWithOid::from(kind.to_string()),
+            DatumWithOid::from(config),
+        ];
+        Spi::run_with_args(
+            "INSERT INTO synapse.tools (name, description, schema_json, kind, config) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, schema_json=EXCLUDED.schema_json, kind=EXCLUDED.kind, config=EXCLUDED.config",
+            &args,
+        )
+        .unwrap();
+        rebuild_kernel();
+    }
+
+    /// Delete an LLM profile row. Invalidates the kernel cache.
+    #[pg_extern(security_definer)]
+    pub fn llm_profile_drop(name: &str) {
+        let args: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(name.to_string())];
+        Spi::run_with_args("DELETE FROM synapse.llm_profiles WHERE name = $1", &args).unwrap();
+        rebuild_kernel();
+    }
+
+    /// Delete an embedding profile row. Invalidates the kernel cache.
+    #[pg_extern(security_definer)]
+    pub fn embedding_profile_drop(name: &str) {
+        let args: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(name.to_string())];
+        Spi::run_with_args(
+            "DELETE FROM synapse.embedding_profiles WHERE name = $1",
+            &args,
+        )
+        .unwrap();
+        rebuild_kernel();
+    }
+
+    /// Delete a secret row. Invalidates the kernel cache.
+    #[pg_extern(security_definer)]
+    pub fn secret_drop(name: &str) {
+        let args: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(name.to_string())];
+        Spi::run_with_args("DELETE FROM synapse.secrets WHERE name = $1", &args).unwrap();
+        rebuild_kernel();
+    }
+
+    /// Invoke a registered tool directly, bypassing the agent loop. For
+    /// testing and operator introspection. The tool runs with a `ToolCtx`
+    /// whose `caller_role` is the calling Postgres role. Returns the tool's
+    /// output as JSONB, or `{"error": "...", "status": "errored"}`.
+    #[pg_extern(security_definer)]
+    pub fn tool_call(tool_name: &str, input: JsonB) -> JsonB {
+        let caller_role: Option<String> = Spi::get_one("SELECT current_user::text").ok().flatten();
+
+        let kernel = match kernel_handle() {
+            Ok(k) => k,
+            Err(e) => {
+                return JsonB(json!({ "error": e, "status": "errored" }));
+            }
+        };
+
+        let result =
+            tokio().block_on(async { kernel.call_tool(tool_name, input.0, caller_role).await });
+
+        match result {
+            Ok(v) => JsonB(v),
+            Err(e) => JsonB(json!({ "error": e.to_string(), "status": "errored" })),
+        }
+    }
+
+    /// Enqueue an agent run and return its execution id.
+    ///
+    /// v0.1.1 is **synchronous under the hood**: a true background worker
+    /// requires a Postgres bgworker (SPI is only legal on the backend thread
+    /// that owns the transaction; a spawned tokio task cannot SPI). So this
+    /// runs the execution inline, records the row, and returns the id. The
+    /// async contract (return a uuid; poll with `execution_status`) is
+    /// preserved. Real background execution is deferred to v0.2. See
+    /// `NOTES.md`.
+    #[pg_extern(security_definer)]
+    pub fn execute_async(agent_name: &str, input: &str) -> pgrx::Uuid {
+        let caller_role: Option<String> = Spi::get_one("SELECT current_user::text").ok().flatten();
+
+        // Pre-insert a 'queued' row keyed by a fresh id so a poller can see
+        // the execution exists even if the run below fails hard.
+        let queued_id = uuid::Uuid::new_v4();
+        let queued_args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(queued_id.to_string()),
+            DatumWithOid::from(agent_name.to_string()),
+            DatumWithOid::from(input.to_string()),
+            DatumWithOid::from("queued".to_string()),
+            match caller_role.as_deref() {
+                Some(c) => DatumWithOid::from(c.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+        ];
+        let _ = Spi::run_with_args(
+            "INSERT INTO synapse.executions (execution_id, agent_name, input, status, caller_role) VALUES ($1::uuid, $2, $3, $4, $5)",
+            &queued_args,
+        );
+
+        let kernel = match kernel_handle() {
+            Ok(k) => k,
+            Err(e) => {
+                let args: Vec<DatumWithOid<'_>> = vec![
+                    DatumWithOid::from(format!("kernel error: {e}")),
+                    DatumWithOid::from(queued_id.to_string()),
+                ];
+                let _ = Spi::run_with_args(
+                    "UPDATE synapse.executions SET status='errored', output=$1, finished_at=now() WHERE execution_id=$2::uuid",
+                    &args,
+                );
+                return pgrx::Uuid::from_bytes(*queued_id.as_bytes());
+            }
+        };
+
+        let outcome = tokio().block_on(async {
+            kernel
+                .execute_with_caller(agent_name, input, caller_role.clone())
+                .await
+        });
+
+        match outcome {
+            Ok(o) => {
+                // The kernel minted its own execution_id for the messages.
+                // Drop the placeholder 'queued' row and log the real outcome
+                // (executions + messages) through the shared logger so the
+                // sync and async paths produce identical audit rows.
+                let del: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(queued_id.to_string())];
+                let _ = Spi::run_with_args(
+                    "DELETE FROM synapse.executions WHERE execution_id = $1::uuid",
+                    &del,
+                );
+                let _ = log_execution(&o, agent_name, input, caller_role.as_deref());
+                let real_id = o
+                    .messages
+                    .first()
+                    .map(|m| m.execution_id)
+                    .unwrap_or(queued_id);
+                pgrx::Uuid::from_bytes(*real_id.as_bytes())
+            }
+            Err(e) => {
+                let args: Vec<DatumWithOid<'_>> = vec![
+                    DatumWithOid::from(e.to_string()),
+                    DatumWithOid::from(queued_id.to_string()),
+                ];
+                let _ = Spi::run_with_args(
+                    "UPDATE synapse.executions SET status='errored', output=$1, finished_at=now() WHERE execution_id=$2::uuid",
+                    &args,
+                );
+                pgrx::Uuid::from_bytes(*queued_id.as_bytes())
+            }
+        }
+    }
+
+    /// Poll an execution by id. Returns
+    /// `{status, output, tokens_in, tokens_out, cost_usd, duration_ms}` or
+    /// `{"status": "not_found"}` when the id is unknown.
+    #[pg_extern(security_definer)]
+    pub fn execution_status(execution_id: pgrx::Uuid) -> JsonB {
+        let id = uuid::Uuid::from_bytes(*execution_id.as_bytes()).to_string();
+        let result = Spi::connect(|client| -> Result<Option<serde_json::Value>, String> {
+            let arg: DatumWithOid<'_> = DatumWithOid::from(id);
+            let table = client
+                .select(
+                    "SELECT status, output, tokens_in, tokens_out, cost_usd, duration_ms FROM synapse.executions WHERE execution_id = $1::uuid",
+                    None,
+                    &[arg],
+                )
+                .map_err(|e| e.to_string())?;
+            match table.into_iter().next() {
+                Some(row) => {
+                    let cost = row
+                        .get::<pgrx::AnyNumeric>(5)
+                        .ok()
+                        .flatten()
+                        .and_then(|n| f64::try_from(n).ok());
+                    Ok(Some(json!({
+                        "status": row.get::<String>(1).ok().flatten().unwrap_or_default(),
+                        "output": row.get::<String>(2).ok().flatten(),
+                        "tokens_in": row.get::<i32>(3).ok().flatten().unwrap_or(0),
+                        "tokens_out": row.get::<i32>(4).ok().flatten().unwrap_or(0),
+                        "cost_usd": cost,
+                        "duration_ms": row.get::<i64>(6).ok().flatten(),
+                    })))
+                }
+                None => Ok(None),
+            }
+        });
+        match result {
+            Ok(Some(v)) => JsonB(v),
+            Ok(None) => JsonB(json!({ "status": "not_found" })),
+            Err(e) => JsonB(json!({ "error": e, "status": "errored" })),
+        }
     }
 }

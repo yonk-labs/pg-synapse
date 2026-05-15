@@ -211,6 +211,43 @@ impl Runtime {
         Ok(vectors.pop().unwrap_or_default())
     }
 
+    /// Invoke a registered tool directly, bypassing the agent loop.
+    ///
+    /// For testing and operator introspection: resolves `name` in the shared
+    /// tool registry and runs it with a [`crate::types::ToolCtx`] carrying a
+    /// fresh execution id and the supplied `caller_role`. Returns the tool's
+    /// output as a `serde_json::Value` (`Text` -> JSON string, `Json` -> the
+    /// value as-is, `Empty` -> `null`).
+    ///
+    /// Errors with [`RuntimeError::Config`] when the tool is not registered,
+    /// and propagates [`RuntimeError`] from a tool failure.
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+        caller_role: Option<String>,
+    ) -> Result<serde_json::Value, RuntimeError> {
+        let tool = self
+            .registry
+            .tools
+            .get(name)
+            .ok_or_else(|| RuntimeError::Config(format!("tool '{name}' not registered")))?;
+        let ctx = crate::types::ToolCtx {
+            execution_id: Uuid::new_v4(),
+            caller_role,
+            agent_name: None,
+        };
+        let out = tool
+            .run(input, &ctx)
+            .await
+            .map_err(|e| RuntimeError::Config(format!("tool '{name}' failed: {e}")))?;
+        Ok(match out {
+            crate::types::ToolOutput::Text(s) => serde_json::Value::String(s),
+            crate::types::ToolOutput::Json(v) => v,
+            crate::types::ToolOutput::Empty => serde_json::Value::Null,
+        })
+    }
+
     /// Borrow the underlying registry. Hosts use this to enumerate registered
     /// tools, executors, factories, or to attach observability layers.
     pub fn registry(&self) -> &Registry {
@@ -583,5 +620,70 @@ mod tests {
         let runtime = Runtime::builder().build().await.unwrap();
         let reg = runtime.registry();
         assert_eq!(reg.executors.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn call_tool_errors_when_tool_not_registered() {
+        let runtime = Runtime::builder().build().await.unwrap();
+        let err = runtime
+            .call_tool("nope", serde_json::Value::Null, None)
+            .await
+            .unwrap_err();
+        match err {
+            RuntimeError::Config(msg) => assert!(msg.contains("not registered"), "msg: {msg}"),
+            other => panic!("expected Config, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_tool_runs_a_registered_tool() {
+        use crate::plugin::{Plugin, Registry};
+        use crate::tool::Tool;
+        use crate::types::{ToolCtx, ToolOutput, ToolSchema};
+        use async_trait::async_trait;
+        use std::sync::OnceLock;
+
+        struct EchoTool;
+        #[async_trait]
+        impl Tool for EchoTool {
+            fn name(&self) -> &str {
+                "echo"
+            }
+            fn schema(&self) -> &ToolSchema {
+                static S: OnceLock<ToolSchema> = OnceLock::new();
+                S.get_or_init(ToolSchema::default)
+            }
+            async fn run(
+                &self,
+                input: serde_json::Value,
+                _ctx: &ToolCtx,
+            ) -> Result<ToolOutput, crate::error::ToolError> {
+                Ok(ToolOutput::json(input))
+            }
+        }
+
+        struct EchoPlugin;
+        impl Plugin for EchoPlugin {
+            fn name(&self) -> &str {
+                "echo-plugin"
+            }
+            fn version(&self) -> &str {
+                "0"
+            }
+            fn register(self, reg: &mut Registry) {
+                reg.tools.add(EchoTool);
+            }
+        }
+
+        let runtime = Runtime::builder()
+            .with_plugin(EchoPlugin)
+            .build()
+            .await
+            .unwrap();
+        let out = runtime
+            .call_tool("echo", serde_json::json!({"x": 1}), Some("alice".into()))
+            .await
+            .unwrap();
+        assert_eq!(out, serde_json::json!({"x": 1}));
     }
 }

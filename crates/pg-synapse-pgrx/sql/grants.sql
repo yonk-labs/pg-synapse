@@ -31,6 +31,11 @@ GRANT EXECUTE ON FUNCTION synapse.llm_profile_set(text, text, text, text, text, 
 GRANT EXECUTE ON FUNCTION synapse.embedding_profile_set(text, text, text, integer, text, jsonb) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.secret_set(text, text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.rebuild_kernel() TO synapse_admin;
+-- v0.1.1 N2.2 admin / write surface (registers, drops): synapse_admin only.
+GRANT EXECUTE ON FUNCTION synapse.tool_register(text, text, jsonb, text, jsonb) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.llm_profile_drop(text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.embedding_profile_drop(text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.secret_drop(text) TO synapse_admin;
 
 -- Run / read surface: synapse_user AND synapse_admin.
 GRANT EXECUTE ON FUNCTION synapse.execute(text, text) TO synapse_user;
@@ -39,6 +44,17 @@ GRANT EXECUTE ON FUNCTION synapse.embed(text, text) TO synapse_user;
 GRANT EXECUTE ON FUNCTION synapse.embed(text, text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.version() TO synapse_user;
 GRANT EXECUTE ON FUNCTION synapse.version() TO synapse_admin;
+-- v0.1.1 N2.2 run / read / list / status / tool_call surface: both roles.
+GRANT EXECUTE ON FUNCTION synapse.agent_list() TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.agent_list() TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.tool_list() TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.tool_list() TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.tool_call(text, jsonb) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.tool_call(text, jsonb) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.execute_async(text, text) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.execute_async(text, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.execution_status(uuid) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.execution_status(uuid) TO synapse_admin;
 
 -- synapse.secrets is never directly readable by synapse_user. schema.sql
 -- grants table DML only to synapse_admin; synapse_user got SELECT only on

@@ -350,6 +350,306 @@ mod tests {
         let cnt: Option<i64> = Spi::get_one("SELECT count(*)::bigint FROM n13i").unwrap();
         assert_eq!(cnt, Some(1));
     }
+
+    // ---- N2.1: NUMERIC cost roundtrip + cost-cap surface ----
+
+    use pg_synapse_core::runtime::ProfileSource;
+
+    /// N2.1: `cost_cap_usd` (NUMERIC) survives the round trip into
+    /// `AgentRow.cost_cap_usd` (Option<f64>) through `SpiProfileSource`.
+    #[pg_test]
+    fn agent_cost_cap_roundtrips() {
+        Spi::run(
+            "SELECT synapse.agent_create('cap_agent', 'p', 'conversation', 'x', ARRAY[]::text[], 5, 30000)",
+        )
+        .unwrap();
+        Spi::run("UPDATE synapse.agents SET cost_cap_usd = 1.250000 WHERE name = 'cap_agent'")
+            .unwrap();
+
+        let src = crate::spi_executor::SpiProfileSource;
+        let agents = crate::runtime_holder::tokio()
+            .block_on(async { src.agents().await })
+            .expect("agents() must succeed");
+        let a = agents
+            .iter()
+            .find(|a| a.name == "cap_agent")
+            .expect("cap_agent must be present");
+        assert_eq!(a.cost_cap_usd, Some(1.25), "cost cap must round-trip");
+    }
+
+    /// N2.1: a fractional `cost_usd` written through `log_execution` is stored
+    /// as NUMERIC and preserved to 6 decimals (not lossily stringified).
+    #[pg_test]
+    fn execution_logs_numeric_cost() {
+        use pg_synapse_core::types::{ExecutorOutcome, Message, OutcomeStatus};
+        use uuid::Uuid;
+
+        let eid = Uuid::new_v4();
+        // Build the Message via serde_json so the test does not need to name
+        // the chrono timestamp type (chrono is a core dep, not a pgrx dep).
+        let msg: Message = serde_json::from_value(json!({
+            "execution_id": eid,
+            "seq": 0,
+            "role": "assistant",
+            "content": "done",
+            "tool_call_id": null,
+            "tool_name": null,
+            "tool_input": null,
+            "tool_output": null,
+            "timestamp": "1970-01-01T00:00:00Z",
+        }))
+        .expect("Message must deserialize");
+        let outcome = ExecutorOutcome {
+            output: "done".into(),
+            messages: vec![msg],
+            tool_calls: vec![],
+            tokens_in: 3,
+            tokens_out: 4,
+            cost_usd: Some(0.123456),
+            duration_ms: 10,
+            status: OutcomeStatus::Completed,
+        };
+        crate::sql_functions::log_execution(&outcome, "numeric_agent", "hi", Some("tester"))
+            .expect("log_execution must succeed");
+
+        let arg: pgrx::datum::DatumWithOid<'_> = pgrx::datum::DatumWithOid::from(eid.to_string());
+        let cost: Option<f64> = Spi::connect(|c| {
+            let t = c
+                .select(
+                    "SELECT cost_usd::float8 FROM synapse.executions WHERE execution_id = $1::uuid",
+                    None,
+                    &[arg],
+                )
+                .unwrap();
+            t.into_iter()
+                .next()
+                .and_then(|r| r.get::<f64>(1).ok().flatten())
+        });
+        let cost = cost.expect("cost_usd row must exist");
+        assert!(
+            (cost - 0.123456).abs() < 1e-9,
+            "NUMERIC cost must be preserved to 6 decimals, got {cost}"
+        );
+    }
+
+    // ---- N2.2: remaining SQL functions ----
+
+    use serde_json::Value as JsonValue;
+
+    fn jsonb_of(sql: &str) -> JsonValue {
+        let v: Option<pgrx::JsonB> = Spi::get_one(sql).unwrap();
+        v.expect("function returned a JSONB value").0
+    }
+
+    #[pg_test]
+    fn agent_list_returns_created_agents() {
+        Spi::run(
+            "SELECT synapse.agent_create('list_a', 'p', 'conversation', 'x', ARRAY['sql_query']::text[], 5, 30000)",
+        )
+        .unwrap();
+        let v = jsonb_of("SELECT synapse.agent_list()");
+        let arr = v.as_array().expect("agent_list returns an array");
+        let found = arr.iter().any(|a| a["name"] == "list_a");
+        assert!(found, "agent_list must include list_a: {v}");
+    }
+
+    #[pg_test]
+    fn tool_register_and_tool_list_roundtrip() {
+        Spi::run(
+            "SELECT synapse.tool_register('my_tool', 'a test tool', '{\"type\":\"object\"}'::jsonb, 'manual', '{}'::jsonb)",
+        )
+        .unwrap();
+        let v = jsonb_of("SELECT synapse.tool_list()");
+        let arr = v.as_array().expect("tool_list returns an array");
+        let row = arr
+            .iter()
+            .find(|t| t["name"] == "my_tool")
+            .expect("tool_list must include my_tool");
+        assert_eq!(row["description"], "a test tool");
+        assert_eq!(row["kind"], "manual");
+    }
+
+    #[pg_test]
+    fn llm_profile_drop_removes_row() {
+        Spi::run(
+            "SELECT synapse.llm_profile_set('dropme', 'openai', 'm', NULL, NULL, '{}'::jsonb)",
+        )
+        .unwrap();
+        let before: Option<i64> =
+            Spi::get_one("SELECT count(*)::bigint FROM synapse.llm_profiles WHERE name='dropme'")
+                .unwrap();
+        assert_eq!(before, Some(1));
+        Spi::run("SELECT synapse.llm_profile_drop('dropme')").unwrap();
+        let after: Option<i64> =
+            Spi::get_one("SELECT count(*)::bigint FROM synapse.llm_profiles WHERE name='dropme'")
+                .unwrap();
+        assert_eq!(after, Some(0), "llm_profile_drop must remove the row");
+    }
+
+    #[pg_test]
+    fn secret_drop_removes_row() {
+        Spi::run("SELECT synapse.secret_set('sdrop', 'val')").unwrap();
+        let before: Option<i64> =
+            Spi::get_one("SELECT count(*)::bigint FROM synapse.secrets WHERE name='sdrop'")
+                .unwrap();
+        assert_eq!(before, Some(1));
+        Spi::run("SELECT synapse.secret_drop('sdrop')").unwrap();
+        let after: Option<i64> =
+            Spi::get_one("SELECT count(*)::bigint FROM synapse.secrets WHERE name='sdrop'")
+                .unwrap();
+        assert_eq!(after, Some(0), "secret_drop must remove the row");
+    }
+
+    #[pg_test]
+    fn execution_status_not_found_for_random_uuid() {
+        let v = jsonb_of("SELECT synapse.execution_status(gen_random_uuid())");
+        assert_eq!(v["status"], "not_found");
+    }
+
+    #[pg_test]
+    fn execute_async_returns_uuid_and_logs_row() {
+        // No live LLM in the harness: the kernel build/run will error, but the
+        // contract holds: a uuid is returned and a row exists with that id.
+        let id: Option<pgrx::Uuid> =
+            Spi::get_one("SELECT synapse.execute_async('no_such_agent', 'hello')").unwrap();
+        let id = id.expect("execute_async must return a uuid");
+        let id_str = format!("{:-x}", id);
+        let arg: pgrx::datum::DatumWithOid<'_> = pgrx::datum::DatumWithOid::from(id_str);
+        let cnt: Option<i64> = Spi::connect(|c| {
+            let t = c
+                .select(
+                    "SELECT count(*)::bigint FROM synapse.executions WHERE execution_id = $1::uuid",
+                    None,
+                    &[arg],
+                )
+                .unwrap();
+            t.into_iter()
+                .next()
+                .and_then(|r| r.get::<i64>(1).ok().flatten())
+        });
+        assert_eq!(cnt, Some(1), "execute_async must leave exactly one row");
+    }
+
+    #[pg_test]
+    fn tool_call_invokes_registered_tool() {
+        // sql_query needs no LLM. tool_call resolves it through the kernel and
+        // returns the rows as JSONB.
+        let v = jsonb_of(
+            "SELECT synapse.tool_call('sql_query', '{\"query\":\"SELECT 1 AS x\",\"params\":[]}'::jsonb)",
+        );
+        let arr = v.as_array().expect("sql_query returns a JSON array");
+        assert_eq!(arr.len(), 1, "one row expected: {v}");
+        assert_eq!(arr[0]["x"], 1);
+    }
+
+    /// N2.2 grant matrix: drops / register are admin-only; list / status /
+    /// tool_call reachable by synapse_user. Asserted via privilege
+    /// introspection (no error raised, stays in one transaction).
+    #[pg_test]
+    fn new_functions_grant_matrix() {
+        // Admin-only: synapse_user must NOT have EXECUTE.
+        for sig in [
+            "synapse.tool_register(text,text,jsonb,text,jsonb)",
+            "synapse.llm_profile_drop(text)",
+            "synapse.embedding_profile_drop(text)",
+            "synapse.secret_drop(text)",
+        ] {
+            let user_has: Option<bool> = Spi::get_one(&format!(
+                "SELECT has_function_privilege('synapse_user', '{sig}', 'EXECUTE')"
+            ))
+            .unwrap();
+            assert_eq!(user_has, Some(false), "synapse_user must NOT reach {sig}");
+            let admin_has: Option<bool> = Spi::get_one(&format!(
+                "SELECT has_function_privilege('synapse_admin', '{sig}', 'EXECUTE')"
+            ))
+            .unwrap();
+            assert_eq!(admin_has, Some(true), "synapse_admin must reach {sig}");
+        }
+
+        // Both roles: list / status / tool_call / execute_async.
+        for sig in [
+            "synapse.agent_list()",
+            "synapse.tool_list()",
+            "synapse.tool_call(text,jsonb)",
+            "synapse.execute_async(text,text)",
+            "synapse.execution_status(uuid)",
+        ] {
+            let user_has: Option<bool> = Spi::get_one(&format!(
+                "SELECT has_function_privilege('synapse_user', '{sig}', 'EXECUTE')"
+            ))
+            .unwrap();
+            assert_eq!(user_has, Some(true), "synapse_user must reach {sig}");
+        }
+    }
+
+    // ---- N2.3: full GUC set + fallback resolution ----
+
+    #[pg_test]
+    fn all_gucs_registered() {
+        let names = [
+            "pg_synapse.disable_builtin_sql_tools",
+            "pg_synapse.default_llm_profile_main",
+            "pg_synapse.default_llm_profile_small",
+            "pg_synapse.default_llm_profile_judge",
+            "pg_synapse.default_embedding_profile",
+            "pg_synapse.default_timeout_ms",
+            "pg_synapse.default_timeout_seconds",
+            "pg_synapse.default_max_iterations",
+            "pg_synapse.default_cost_cap_usd",
+            "pg_synapse.trace_enabled",
+            "pg_synapse.sidecar_url",
+            "pg_synapse.master_key",
+            "pg_synapse.compression_threshold_tokens",
+            "pg_synapse.default_executor",
+        ];
+        for n in names {
+            let present: Option<bool> = Spi::get_one(&format!(
+                "SELECT EXISTS (SELECT 1 FROM pg_settings WHERE name = '{n}')"
+            ))
+            .unwrap();
+            assert_eq!(present, Some(true), "GUC {n} must be registered");
+        }
+    }
+
+    #[pg_test]
+    fn guc_fallback_fills_missing_llm_profile() {
+        Spi::run("SET pg_synapse.default_llm_profile_main = 'gucprofile'").unwrap();
+        // Insert an agent with NULL llm_profile_main directly.
+        Spi::run(
+            "INSERT INTO synapse.agents (name, system_prompt, executor_name) VALUES ('guc_a', 'p', 'conversation')",
+        )
+        .unwrap();
+        let src = crate::spi_executor::SpiProfileSource;
+        let agents = crate::runtime_holder::tokio()
+            .block_on(async { src.agents().await })
+            .unwrap();
+        let a = agents.iter().find(|a| a.name == "guc_a").expect("guc_a");
+        assert_eq!(
+            a.llm_profile_main.as_deref(),
+            Some("gucprofile"),
+            "NULL llm_profile_main must resolve from the GUC"
+        );
+        Spi::run("RESET pg_synapse.default_llm_profile_main").unwrap();
+    }
+
+    #[pg_test]
+    fn guc_fallback_timeout_and_max_iterations() {
+        Spi::run("SET pg_synapse.default_timeout_ms = 12345").unwrap();
+        Spi::run("SET pg_synapse.default_max_iterations = 7").unwrap();
+        Spi::run(
+            "INSERT INTO synapse.agents (name, system_prompt, executor_name, max_iterations, timeout_ms) VALUES ('guc_t', 'p', 'conversation', 0, 0)",
+        )
+        .unwrap();
+        let src = crate::spi_executor::SpiProfileSource;
+        let agents = crate::runtime_holder::tokio()
+            .block_on(async { src.agents().await })
+            .unwrap();
+        let a = agents.iter().find(|a| a.name == "guc_t").expect("guc_t");
+        assert_eq!(a.timeout_ms, 12345, "timeout must resolve from GUC");
+        assert_eq!(a.max_iterations, 7, "max_iterations must resolve from GUC");
+        Spi::run("RESET pg_synapse.default_timeout_ms").unwrap();
+        Spi::run("RESET pg_synapse.default_max_iterations").unwrap();
+    }
 }
 
 /// pgrx test framework hook.
