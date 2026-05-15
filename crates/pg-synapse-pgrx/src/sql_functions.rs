@@ -130,7 +130,7 @@ pub(crate) mod synapse {
     /// agent's output, token / cost accounting, status, and a summary of the
     /// tool calls made. On error returns `{"error": "...", "status": "errored"}`
     /// instead of raising a Postgres error.
-    #[pg_extern(parallel_safe)]
+    #[pg_extern(security_definer, parallel_safe)]
     pub fn execute(agent_name: &str, input: &str) -> JsonB {
         let caller_role: Option<String> = Spi::get_one("SELECT current_user::text").ok().flatten();
 
@@ -180,7 +180,7 @@ pub(crate) mod synapse {
     }
 
     /// UPSERT an agent row. Invalidates the kernel cache.
-    #[pg_extern]
+    #[pg_extern(security_definer)]
     pub fn agent_create(
         name: &str,
         system_prompt: &str,
@@ -211,7 +211,7 @@ pub(crate) mod synapse {
     }
 
     /// Delete an agent row.
-    #[pg_extern]
+    #[pg_extern(security_definer)]
     pub fn agent_drop(name: &str) {
         let args: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(name.to_string())];
         Spi::run_with_args("DELETE FROM synapse.agents WHERE name = $1", &args).unwrap();
@@ -219,7 +219,7 @@ pub(crate) mod synapse {
     }
 
     /// UPSERT an LLM profile row. Invalidates the kernel cache.
-    #[pg_extern]
+    #[pg_extern(security_definer)]
     pub fn llm_profile_set(
         name: &str,
         provider: &str,
@@ -251,7 +251,7 @@ pub(crate) mod synapse {
     }
 
     /// UPSERT a secret row. Invalidates the kernel cache.
-    #[pg_extern]
+    #[pg_extern(security_definer)]
     pub fn secret_set(name: &str, value: &str) {
         let args: Vec<DatumWithOid<'_>> = vec![
             DatumWithOid::from(name.to_string()),
@@ -267,7 +267,7 @@ pub(crate) mod synapse {
 
     /// UPSERT an embedding profile row. Invalidates the kernel cache so the
     /// next `synapse.embed()` call sees the change.
-    #[pg_extern]
+    #[pg_extern(security_definer)]
     pub fn embedding_profile_set(
         name: &str,
         provider: &str,
@@ -298,7 +298,7 @@ pub(crate) mod synapse {
     /// Embed `text` using the named embedding profile (or the default profile
     /// when `profile_name` is NULL). Returns the raw embedding as
     /// `double precision[]`. Stores nothing.
-    #[pg_extern(parallel_safe)]
+    #[pg_extern(security_definer, parallel_safe)]
     pub fn embed(text: &str, profile_name: Option<&str>) -> Vec<f64> {
         let kernel = match kernel_handle() {
             Ok(k) => k,
@@ -312,14 +312,14 @@ pub(crate) mod synapse {
     }
 
     /// pg_synapse extension version.
-    #[pg_extern]
+    #[pg_extern(security_definer)]
     pub fn version() -> &'static str {
         env!("CARGO_PKG_VERSION")
     }
 
     /// Force the kernel cache to rebuild on the next `execute()` call.
     /// Useful after manual edits to the config tables.
-    #[pg_extern(name = "rebuild_kernel")]
+    #[pg_extern(name = "rebuild_kernel", security_definer)]
     pub fn rebuild_kernel_fn() {
         rebuild_kernel();
     }
