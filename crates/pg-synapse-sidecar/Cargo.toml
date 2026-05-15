@@ -1,0 +1,39 @@
+[package]
+name        = "pg-synapse-sidecar"
+description = "pg_synapse sidecar binary: axum HTTP host with 12 v1 endpoints, sqlx ProfileSource, sidecar-install.sql schema"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[[bin]]
+name = "pg-synapse-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+pg-synapse-core          = { path = "../pg-synapse-core",                          version = "0.1.0" }
+pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.1.0" }
+pg-synapse-tools-sql     = { path = "../../plugins/pg-synapse-tools-sql",          version = "0.1.0" }
+
+tokio        = { workspace = true }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+tracing      = { workspace = true }
+uuid         = { workspace = true }
+chrono       = { workspace = true }
+
+axum         = "0.7"
+clap         = { version = "4", features = ["derive", "env"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sqlx         = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "uuid", "chrono"] }
+anyhow       = "1"
+
+[dev-dependencies]
+tokio        = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+reqwest      = { workspace = true }
+axum         = { version = "0.7", features = [] }
+tower        = { workspace = true, features = ["util"] }
