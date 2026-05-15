@@ -1,0 +1,32 @@
+[package]
+name        = "pg-synapse-provider-anthropic"
+description = "pg_synapse provider plugin for Anthropic Claude models via the Messages API"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[features]
+default    = []
+# Opt-in network tests. Disabled by default so `cargo test` is hermetic.
+live-tests = []
+
+[dependencies]
+pg-synapse-core = { path = "../../crates/pg-synapse-core", version = "0.1.0" }
+tokio        = { workspace = true }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+reqwest      = { workspace = true }
+futures      = { workspace = true }
+
+[dev-dependencies]
+tokio        = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+wiremock     = "0.6"
+uuid         = { workspace = true }
+chrono       = { workspace = true }
