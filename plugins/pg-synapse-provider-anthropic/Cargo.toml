@@ -15,7 +15,7 @@ default    = []
 live-tests = []
 
 [dependencies]
-pg-synapse-core = { path = "../../crates/pg-synapse-core", version = "0.1.0" }
+pg-synapse-core = { path = "../../crates/pg-synapse-core", version = "0.1.1" }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

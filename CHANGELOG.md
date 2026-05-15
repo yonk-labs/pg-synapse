@@ -5,6 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-15
+
+Closes the v0.1.0 known gaps. Security and integrity fixes first, then host
+completeness, then provider and host breadth.
+
+### Security and integrity (pgrx host)
+
+- All `synapse.*` functions are now `SECURITY DEFINER` with role-scoped
+  `GRANT EXECUTE`: admin/write functions to `synapse_admin`, run/read
+  functions to `synapse_user`. `REVOKE ALL ... FROM PUBLIC` on the schema,
+  functions, and tables. `synapse.secrets` is not readable by
+  `synapse_user`. Proven by privilege tests.
+- SAVEPOINT-per-tool-call isolation: each tool dispatch runs in a Postgres
+  internal subtransaction, so a failing later tool call no longer discards
+  an earlier tool's writes, and a failing tool's partial writes roll back.
+- `sql_query` / `sql_exec` now take typed positional bind parameters
+  (`$1, $2, ...` plus a `params` array). The previous inline-literal
+  requirement was an injection footgun; example agent prompts switched to
+  parameterized form.
+- Fixed a stale-snapshot read bug surfaced by the subtransaction work.
+
+### pgrx host completeness
+
+- `cost_usd` and `cost_cap_usd` roundtrip as NUMERIC; cost-cap status is
+  surfaced in the result envelope and logged to `synapse.executions`.
+- New SQL functions: `agent_list`, `tool_list`, `tool_register`,
+  `llm_profile_drop`, `embedding_profile_drop`, `secret_drop`, `tool_call`,
+  `execute_async`, `execution_status`. `execute_async` is synchronous under
+  the hood for v0.1.1 (true background execution needs a bgworker, deferred).
+- Full GUC set (10+) with agent fallback resolution: an agent row with a
+  NULL profile, timeout, max-iterations, cost cap, or executor falls back to
+  the corresponding `pg_synapse.*` GUC default.
+- Added `Runtime::call_tool(name, input, caller_role)` to the kernel
+  (additive, no signature changes; backs the `tool_call` SQL function).
+
+### New provider plugins
+
+- `pg-synapse-provider-anthropic`: Anthropic Messages API, system
+  extraction, `tool_use` / `tool_result` block mapping, `cache_control`
+  ephemeral passthrough.
+- `pg-synapse-provider-llama-cpp`: llama.cpp server (OpenAI-compatible) as
+  both an LLM provider and an embedding provider, with a `download` feature
+  that fetches a small (under 2B) Granite GGUF from Hugging Face.
+
+### New host
+
+- `pg-synapse-sidecar`: an axum binary host serving all 12 v1 HTTP
+  endpoints (decision D7), with a `sqlx`-backed `ProfileSource` and
+  `SqlExecutor`, an `X-PG-Synapse-Admin-Token` gate on `/v1/admin/*`, and
+  `clap` CLI flags. `sql/sidecar-install.sql` mirrors the extension's
+  schema, roles, and grants and forwards via `pg_net`. This is the
+  managed-Postgres deployment path.
+
+### New example
+
+- `examples/local-llama-agent`: a repeatable demo that downloads a Granite
+  GGUF, runs it under llama.cpp server, and drives a read/write agent
+  (SKIPs cleanly if `llama-server` is not installed).
+
+### Known gaps (v0.2 backlog)
+
+- True background `execute_async` (needs a Postgres background worker).
+- Per-call `SET ROLE` in the sidecar `SqlExecutor` (currently runs as the
+  pool role; the extension host already enforces caller-role scoping).
+- Anthropic cost accounting (the API does not return pricing).
+
 ## [0.1.0] - 2026-05-15
 
 Initial release. A Postgres-native agent-loop runtime: invoke LLM agents and

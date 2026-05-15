@@ -25,11 +25,11 @@ embed-ort = ["dep:pg-synapse-embeddings-ort"]
 
 [dependencies]
 pgrx       = "=0.18.0"
-pg-synapse-core            = { path = "../pg-synapse-core", version = "0.1.0" }
-pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.1.0" }
-pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql", version = "0.1.0" }
-pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.1.0" }
-pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.1.0", optional = true }
+pg-synapse-core            = { path = "../pg-synapse-core", version = "0.1.1" }
+pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.1.1" }
+pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql", version = "0.1.1" }
+pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.1.1" }
+pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

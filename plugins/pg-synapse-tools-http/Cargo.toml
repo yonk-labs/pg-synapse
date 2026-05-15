@@ -10,8 +10,8 @@ homepage.workspace     = true
 authors.workspace      = true
 
 [dependencies]
-pg-synapse-core   = { path = "../../crates/pg-synapse-core", version = "0.1.0" }
-pg-synapse-macros = { path = "../../crates/pg-synapse-macros", version = "0.1.0" }
+pg-synapse-core   = { path = "../../crates/pg-synapse-core", version = "0.1.1" }
+pg-synapse-macros = { path = "../../crates/pg-synapse-macros", version = "0.1.1" }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
 schemars     = { workspace = true }

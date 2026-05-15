@@ -10,7 +10,7 @@ homepage.workspace     = true
 authors.workspace      = true
 
 [dependencies]
-pg-synapse-core = { path = "../../crates/pg-synapse-core", version = "0.1.0" }
+pg-synapse-core = { path = "../../crates/pg-synapse-core", version = "0.1.1" }
 async-trait  = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }
