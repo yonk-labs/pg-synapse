@@ -21,13 +21,16 @@ SELECT synapse.agent_create(
   $$You are an assistant that manages a demo.notes table.
 You may use sql_query and sql_exec to read and write that table.
 
-When asked to add a note, call sql_exec with an INSERT statement
-of the form: INSERT INTO demo.notes (body, added_by) VALUES ('<text>', 'agent').
-When asked what is in the table, call sql_query with: SELECT id, body, added_by FROM demo.notes ORDER BY id.
+When asked to add a note, call sql_exec with
+  query: INSERT INTO demo.notes (body, added_by) VALUES ($1, $2)
+  params: ["<the note text>", "agent"]
+When asked what is in the table, call sql_query with
+  query: SELECT id, body, added_by FROM demo.notes ORDER BY id
+  params: []
 
-Inline literal values directly in the SQL string. Do NOT pass positional
-parameters via the params array; that path is not yet supported in v0.1-alpha
-of the pg_synapse_pgrx host.$$,
+Always pass values through the params array using $1, $2, ... placeholders.
+Never inline literal values into the SQL string; parameter binding is the
+supported and injection-safe path.$$,
   'conversation',
   'vllm-default',
   ARRAY['sql_query', 'sql_exec'],

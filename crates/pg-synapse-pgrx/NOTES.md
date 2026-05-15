@@ -65,3 +65,54 @@
 - The docker-based integration harness (`examples/sql-agent-readwrite/run.sh
   --docker` is a stub).
 - A `synapse.executions_logs` SECURITY DEFINER view filtered by `caller_role`.
+
+## v0.1.1 N1 adaptations
+
+These supersede the phase-A findings above where they conflict.
+
+- **`SECURITY DEFINER` IS a valid `#[pg_extern]` key in pgrx 0.18.** The
+  phase-A note ("pgrx 0.18's `#[pg_extern]` does not accept that key") was
+  wrong. `pgrx-sql-entity-graph` 0.18 parses `security_definer` and
+  `security_invoker` (see `extern_args.rs` / `pg_extern/attribute.rs`). Every
+  `synapse.*` function is now `#[pg_extern(security_definer, ...)]`. No
+  post-install `ALTER FUNCTION` is required.
+
+- **Grant ordering via `extension_sql_file!(..., finalize)`.** GRANT/REVOKE
+  on `synapse.*` functions must run after pgrx emits the `CREATE FUNCTION`
+  statements. `schema.sql` stays `bootstrap` (first); the new `grants.sql`
+  uses `finalize`, which pgrx emits last in the install script. This gives
+  the correct ordering without a `requires = [...]` list or a deferred
+  `synapse._apply_grants()` function.
+
+- **SAVEPOINT-per-tool-call uses a Postgres *internal subtransaction*, not
+  the SQL `SAVEPOINT` statement.** The kernel invokes the SQL tools from
+  inside `synapse.execute(...)`, which is a SECURITY DEFINER function.
+  Postgres rejects `SAVEPOINT` / `ROLLBACK TO SAVEPOINT` / `RELEASE
+  SAVEPOINT` SQL when issued from within a function (valid only at the top
+  transaction level or inside a PROCEDURE). The supported primitive in this
+  position is an internal subtransaction, the same one PL/pgSQL's
+  `BEGIN ... EXCEPTION` block uses. `spi_executor::with_savepoint` drives it
+  via the documented C API (`BeginInternalSubTransaction`,
+  `ReleaseCurrentSubTransaction`, `RollbackAndReleaseCurrentSubTransaction`)
+  wrapped in pgrx's `PgTryBuilder` so a hard Postgres `ERROR` longjmp is
+  converted into a catchable path and the subtransaction is rolled back
+  instead of unwinding past it. `CurrentMemoryContext` /
+  `CurrentResourceOwner` are saved before and restored after, because an
+  aborted subxact leaves them dangling.
+
+- **`#![forbid(unsafe_code)]` relaxed to `#![deny(unsafe_code)]`.** The
+  internal-subtransaction calls and the two global reads/writes they need
+  are FFI and therefore `unsafe`. They are confined to the single helper
+  `spi_executor::with_savepoint`, each `unsafe` block carrying a `SAFETY:`
+  note. Nothing else in the crate uses `unsafe`.
+
+- **Positional bind params are implemented.** `SpiSqlExecutor::query` /
+  `::execute` no longer reject a non-empty `params` array. `json_to_datum`
+  maps each `serde_json::Value` to a typed `DatumWithOid` (string -> TEXT,
+  integer -> INT8, float -> FLOAT8, bool -> BOOL, null -> typed TEXT NULL,
+  object/array -> JSONB) and the slice is passed to `client.select` /
+  `client.update`, exactly as `SpiProfileSource::secrets` already binds its
+  array argument. The `sql_query` to_jsonb wrapper is a superquery, so the
+  user's `$1..$n` placeholders resolve through it unchanged. The example
+  agent prompts were switched from "inline literals" to "use `$1, $2`
+  placeholders with a params array".
