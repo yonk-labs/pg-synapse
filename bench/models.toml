@@ -1,0 +1,58 @@
+# bench/models.toml: model registry for the pg_synapse benchmark harness.
+# Each [[model]] entry is one row in the leaderboard.
+#
+# Fields:
+#   key           unique slug used in DB names, result keys, and --models filter
+#   kind          "remote_openai" | "local_gguf"
+#
+# remote_openai extras:
+#   base_url      OpenAI-compatible chat completions base (no trailing slash)
+#   model         model identifier sent in the API request
+#   api_key_env   (optional) env-var name holding the API key; omit for no-auth endpoints
+#
+# local_gguf extras:
+#   gguf_repo     HuggingFace repo slug (user/repo)
+#   gguf_file     filename inside the repo to download
+#   served_model_id  model name to pass in the llama-cpp-server API request
+
+[[model]]
+key           = "openai-gpt5-mini"
+kind          = "remote_openai"
+base_url      = "https://api.openai.com/v1"
+model         = "gpt-5-mini"
+api_key_env   = "OPENAI_API_KEY"
+
+[[model]]
+key           = "vllm-qwen3-coder"
+kind          = "remote_openai"
+base_url      = "http://192.168.1.193:8000/v1"
+model         = "Intel/Qwen3-Coder-Next-int4-AutoRound"
+# No api_key_env: local vLLM endpoint, no auth required.
+
+[[model]]
+key           = "gemma-4-E2B-it"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/gemma-4-E2B-it-GGUF"
+gguf_file     = "gemma-4-E2B-it-Q4_K_M.gguf"
+served_model_id = "gemma-4-E2B-it"
+
+[[model]]
+key           = "qwen3.5-2b"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/Qwen3.5-2B-GGUF"
+gguf_file     = "Qwen3.5-2B-Q4_K_M.gguf"
+served_model_id = "Qwen3.5-2B"
+
+[[model]]
+key           = "qwen3.5-0.8b"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/Qwen3.5-0.8B-GGUF"
+gguf_file     = "Qwen3.5-0.8B-Q4_K_M.gguf"
+served_model_id = "Qwen3.5-0.8B"
+
+[[model]]
+key           = "smollm3-3b"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/SmolLM3-3B-GGUF"
+gguf_file     = "SmolLM3-3B-Q4_K_M.gguf"
+served_model_id = "SmolLM3-3B"

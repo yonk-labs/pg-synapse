@@ -1,0 +1,57 @@
+-- s2_triage seed.
+-- SCALE controls ticket count (default 1 yields 3 tickets).
+-- Rows are fixed/deterministic so assert.sql is stable.
+
+CREATE SCHEMA IF NOT EXISTS support;
+
+CREATE TABLE IF NOT EXISTS support.customers (
+    id   BIGSERIAL PRIMARY KEY,
+    email TEXT NOT NULL,
+    tier  TEXT NOT NULL CHECK (tier IN ('free','pro','enterprise'))
+);
+
+CREATE TABLE IF NOT EXISTS support.tickets (
+    id        BIGSERIAL PRIMARY KEY,
+    subject   TEXT NOT NULL,
+    body      TEXT NOT NULL,
+    category  TEXT,          -- NULL until triaged
+    priority  TEXT,          -- NULL until triaged
+    escalated BOOLEAN,       -- NULL until triaged
+    customer_id BIGINT REFERENCES support.customers(id)
+);
+
+-- Fixed customer set.
+INSERT INTO support.customers (email, tier) VALUES
+  ('alice@example.com', 'enterprise'),
+  ('bob@example.com',   'pro'),
+  ('carol@example.com', 'free')
+ON CONFLICT DO NOTHING;
+
+-- Seed SCALE*3 tickets (cycling through fixed bodies).
+DO $$
+DECLARE
+    i        INT;
+    top      INT := {{SCALE}} * 3;
+    subjects TEXT[] := ARRAY[
+        'API rate limit exceeded',
+        'How do I export my data?',
+        'Invoice looks wrong'
+    ];
+    bodies TEXT[] := ARRAY[
+        'I am hitting 429 errors on every call to your REST API since this morning.',
+        'I need to download all my records as CSV. Where is that option?',
+        'My last invoice shows a charge I did not authorise. Please investigate.'
+    ];
+    cust_ids BIGINT[];
+BEGIN
+    SELECT ARRAY_AGG(id ORDER BY id) INTO cust_ids FROM support.customers;
+
+    FOR i IN 1..top LOOP
+        INSERT INTO support.tickets (subject, body, customer_id)
+        VALUES (
+            subjects[((i - 1) % 3) + 1],
+            bodies  [((i - 1) % 3) + 1],
+            cust_ids[((i - 1) % array_length(cust_ids, 1)) + 1]
+        );
+    END LOOP;
+END $$;

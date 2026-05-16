@@ -1,0 +1,23 @@
+-- s1_notes seed ({{SCALE}} background rows).
+-- Default SCALE=1 means 2 rows; SCALE N means N*2 rows.
+-- The agent task will add one more row (BENCH_MARK_OK).
+
+CREATE SCHEMA IF NOT EXISTS demo;
+
+CREATE TABLE IF NOT EXISTS demo.notes (
+    id       BIGSERIAL PRIMARY KEY,
+    body     TEXT NOT NULL,
+    added_by TEXT NOT NULL DEFAULT 'seed'
+);
+
+-- Insert SCALE*2 background rows (fixed values, deterministic).
+DO $$
+DECLARE
+    i   INT;
+    top INT := {{SCALE}} * 2;
+BEGIN
+    FOR i IN 1..top LOOP
+        INSERT INTO demo.notes (body, added_by)
+        VALUES ('Seed note ' || i, 'seed');
+    END LOOP;
+END $$;

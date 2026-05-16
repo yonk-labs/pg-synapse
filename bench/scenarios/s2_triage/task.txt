@@ -1,0 +1,1 @@
+Triage every ticket whose category is NULL: for each one, read the ticket with sql_query, then set category (one of: api, billing, howto, other), priority (one of: low, normal, high, urgent), and escalated (boolean) via sql_exec. Tickets from enterprise-tier customers with urgent priority must have escalated = true. Update all un-triaged tickets before you stop.

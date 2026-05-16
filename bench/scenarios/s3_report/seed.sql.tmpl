@@ -1,0 +1,42 @@
+-- s3_report seed.
+-- SCALE controls rows: SCALE * 10 orders across 3 regions.
+-- All amounts are fixed so the top-region is always deterministic.
+
+CREATE SCHEMA IF NOT EXISTS sales;
+
+CREATE TABLE IF NOT EXISTS sales.orders (
+    id         BIGSERIAL PRIMARY KEY,
+    customer   TEXT NOT NULL,
+    amount     NUMERIC(12, 2) NOT NULL,
+    region     TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS sales.findings (
+    id         BIGSERIAL PRIMARY KEY,
+    metric     TEXT NOT NULL UNIQUE,
+    value      TEXT NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Fixed order amounts per region (deterministic).
+-- EMEA: 1000*n, AMER: 900*n, APAC: 800*n => EMEA always wins.
+DO $$
+DECLARE
+    i   INT;
+    top INT := {{SCALE}} * 10;
+    regions TEXT[] := ARRAY['EMEA', 'AMER', 'APAC'];
+    amounts NUMERIC[] := ARRAY[1000.00, 900.00, 800.00];
+    ridx INT;
+BEGIN
+    FOR i IN 1..top LOOP
+        ridx := ((i - 1) % 3) + 1;
+        INSERT INTO sales.orders (customer, amount, region, created_at)
+        VALUES (
+            'customer_' || i,
+            amounts[ridx] * i,
+            regions[ridx],
+            now() - ((top - i) * INTERVAL '1 day')
+        );
+    END LOOP;
+END $$;

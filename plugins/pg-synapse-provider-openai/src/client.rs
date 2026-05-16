@@ -25,6 +25,51 @@ use pg_synapse_core::types::{
     CompletionChunk, CompletionRequest, CompletionResponse, Role, ToolCall, Usage,
 };
 
+/// Recursively sanitize a JSON Schema value so OpenAI's strict schema
+/// validator accepts it.
+///
+/// The only known issue today is `items` being a boolean or empty object,
+/// which schemars emits for `Vec<serde_json::Value>`. The rule is:
+/// if `items` is not a JSON object, replace it with `{"type": "string"}`.
+/// This covers the `params` bind-parameter array used by sql_exec / sql_query.
+pub fn sanitize_tool_schema(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            if let Some(items) = map.get("items") {
+                if !items.is_object() {
+                    // Replace boolean schema or missing object with a permissive
+                    // string schema. "string" is the safest primitive; the actual
+                    // runtime accepts any JSON value via the bind-param path.
+                    map.insert("items".into(), json!({"type": "string"}));
+                }
+            }
+            for val in map.values_mut() {
+                sanitize_tool_schema(val);
+            }
+        }
+        Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                sanitize_tool_schema(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns true when `model` is a reasoning model (gpt-5, o1, o3, o4 families).
+///
+/// Reasoning models have two key API differences compared with standard chat
+/// completion models:
+///   1. They reject any explicit `temperature` (must be omitted).
+///   2. They use `max_completion_tokens` rather than `max_tokens`.
+pub fn is_reasoning_model(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    lower.starts_with("gpt-5")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+}
+
 /// Live provider that speaks OpenAI Chat Completions over HTTPS / HTTP.
 pub struct OpenAiProvider {
     http: Client,
@@ -178,16 +223,28 @@ impl OpenAiProvider {
             _ => self.model.as_str(),
         };
 
+        let reasoning = is_reasoning_model(model);
+
         let mut payload = json!({
             "model": model,
             "messages": messages,
         });
 
-        if let Some(t) = req.temperature {
-            payload["temperature"] = json!(t);
-        }
-        if let Some(n) = req.max_tokens {
-            payload["max_tokens"] = json!(n);
+        if reasoning {
+            // Reasoning models (gpt-5, o1, o3, o4 families) reject non-default
+            // temperature. Omit it entirely regardless of what the caller set.
+            // Use max_completion_tokens (not max_tokens) per OpenAI spec.
+            // Default to 2048 when unset: reasoning models spend tokens on
+            // hidden chain-of-thought; too low a budget yields empty content.
+            let budget = req.max_tokens.unwrap_or(2048);
+            payload["max_completion_tokens"] = json!(budget);
+        } else {
+            if let Some(t) = req.temperature {
+                payload["temperature"] = json!(t);
+            }
+            if let Some(n) = req.max_tokens {
+                payload["max_tokens"] = json!(n);
+            }
         }
         if stream {
             payload["stream"] = json!(true);
@@ -199,9 +256,17 @@ impl OpenAiProvider {
                 .tools
                 .iter()
                 .map(|td| {
+                    let mut func = td.to_openai_function();
+                    // Sanitize the parameters schema: OpenAI gpt-5 (and strict
+                    // schema validation in general) rejects array schemas where
+                    // `items` is a boolean or an empty object. schemars emits
+                    // `items: true` for Vec<serde_json::Value>. Replace any
+                    // non-object `items` with `{"type": "string"}` (covers
+                    // the common `params` bind-parameter array case).
+                    sanitize_tool_schema(&mut func);
                     json!({
                         "type": "function",
-                        "function": td.to_openai_function(),
+                        "function": func,
                     })
                 })
                 .collect();
@@ -337,10 +402,21 @@ impl LlmProvider for OpenAiProvider {
             .unwrap_or("stop")
             .to_string();
 
+        // Reasoning models may return content: null when they produce only
+        // chain-of-thought tokens. Return Some("") rather than None so the
+        // agent loop can inspect finish_reason and decide whether to retry
+        // or stop, without crashing on an unexpected None content path.
         let content = message
             .get("content")
             .and_then(|v| v.as_str())
-            .map(String::from);
+            .map(String::from)
+            .or_else(|| {
+                if message.get("content").map(|v| v.is_null()).unwrap_or(false) {
+                    Some(String::new())
+                } else {
+                    None
+                }
+            });
 
         let mut tool_calls = Vec::<ToolCall>::new();
         if let Some(arr) = message.get("tool_calls").and_then(|v| v.as_array()) {
@@ -513,5 +589,87 @@ mod tests {
             m["tool_calls"][0]["function"]["arguments"],
             "{\"q\":\"rust\"}"
         );
+    }
+
+    // B1: reasoning-model payload uses max_completion_tokens, omits temperature.
+    #[test]
+    fn build_payload_reasoning_model_uses_max_completion_tokens() {
+        let p = OpenAiProvider::new("gpt-5-mini", "http://x");
+        let req = CompletionRequest {
+            messages: vec![user_msg("think")],
+            tools: vec![],
+            model: None,
+            temperature: Some(0.7), // should be silently dropped
+            max_tokens: Some(512),
+            params: serde_json::Value::Null,
+        };
+        let payload = p.build_payload(&req, false);
+        assert_eq!(payload["max_completion_tokens"], 512);
+        assert!(
+            payload.get("max_tokens").is_none(),
+            "max_tokens must be absent for reasoning models"
+        );
+        assert!(
+            payload.get("temperature").is_none(),
+            "temperature must be absent for reasoning models"
+        );
+    }
+
+    // B1: non-reasoning model payload is unchanged (max_tokens + temperature present).
+    #[test]
+    fn build_payload_non_reasoning_model_unchanged() {
+        let p = OpenAiProvider::new("gpt-4o", "http://x");
+        let req = CompletionRequest {
+            messages: vec![user_msg("hi")],
+            tools: vec![],
+            model: None,
+            temperature: Some(0.5),
+            max_tokens: Some(128),
+            params: serde_json::Value::Null,
+        };
+        let payload = p.build_payload(&req, false);
+        assert_eq!(payload["max_tokens"], 128);
+        assert_eq!(payload["temperature"], 0.5);
+        assert!(
+            payload.get("max_completion_tokens").is_none(),
+            "max_completion_tokens must be absent for standard models"
+        );
+    }
+
+    // B1: is_reasoning_model matches expected prefixes.
+    #[test]
+    fn reasoning_model_detection() {
+        assert!(is_reasoning_model("gpt-5-mini"));
+        assert!(is_reasoning_model("GPT-5"));
+        assert!(is_reasoning_model("o1-preview"));
+        assert!(is_reasoning_model("o3-mini"));
+        assert!(is_reasoning_model("o4-mini"));
+        assert!(!is_reasoning_model("gpt-4o"));
+        assert!(!is_reasoning_model("gpt-3.5-turbo"));
+        assert!(!is_reasoning_model("claude-3-sonnet"));
+    }
+
+    // B1: live test against gpt-5-mini (skipped without live-tests feature).
+    #[cfg(feature = "live-tests")]
+    #[tokio::test]
+    async fn live_gpt5_mini_completes() {
+        let key =
+            std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set for live-tests");
+        let provider =
+            OpenAiProvider::new("gpt-5-mini", "https://api.openai.com/v1").with_api_key(key);
+        let req = CompletionRequest {
+            messages: vec![user_msg("Reply with exactly the word PONG.")],
+            tools: vec![],
+            model: None,
+            temperature: None,
+            max_tokens: Some(2048),
+            params: serde_json::Value::Null,
+        };
+        let resp = provider
+            .complete(req)
+            .await
+            .expect("live completion must succeed");
+        let content = resp.content.unwrap_or_default();
+        assert!(!content.is_empty(), "gpt-5-mini returned empty content");
     }
 }

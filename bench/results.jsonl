@@ -1,0 +1,1 @@
+{"model": "openai-gpt5-mini", "scenario": "s1_notes", "scale": 1, "task_passed": true, "tool_emitted": true, "tokens_in": 943, "tokens_out": 266, "latency_ms": 3533, "iterations": 0, "error": "", "run_date": "2026-05-16T12:30Z"}

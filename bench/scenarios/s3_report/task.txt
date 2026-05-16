@@ -1,0 +1,1 @@
+Find the region with the highest total order amount using sql_query (GROUP BY region), then record it by calling sql_exec to INSERT into sales.findings: metric "top_region", value = the region name you found.
