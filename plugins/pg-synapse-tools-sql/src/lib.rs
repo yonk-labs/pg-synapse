@@ -33,6 +33,36 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Lenient deserializer for `params`. Handles all of:
+/// 1. Real JSON array: use as-is.
+/// 2. JSON string that contains a JSON array: parse and use.
+/// 3. JSON string that contains a single JSON scalar: wrap as `vec![scalar]`.
+/// 4. JSON string that is not valid JSON at all: wrap the raw string as a text param.
+/// 5. Single non-array, non-string JSON scalar (number/bool): wrap as `vec![scalar]`.
+/// 6. JSON null or field absent: empty vec (preserves existing `#[serde(default)]` behavior).
+fn deserialize_lenient_params<'de, D>(d: D) -> Result<Vec<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v: Value = Value::deserialize(d)?;
+    match v {
+        // Rule 6: null -> empty
+        Value::Null => Ok(vec![]),
+        // Rule 1: already an array
+        Value::Array(arr) => Ok(arr),
+        // Rules 2/3/4: string encoding
+        Value::String(s) => {
+            match serde_json::from_str::<Value>(&s) {
+                Ok(Value::Array(arr)) => Ok(arr),     // rule 2
+                Ok(scalar) => Ok(vec![scalar]),       // rule 3 (scalar inside string)
+                Err(_) => Ok(vec![Value::String(s)]), // rule 4 (not JSON at all)
+            }
+        }
+        // Rule 5: bare scalar (number, bool)
+        other => Ok(vec![other]),
+    }
+}
+
 /// Host-supplied executor. Hosts implement this against their SQL surface
 /// (SPI inside pgrx, `sqlx::PgPool` inside the sidecar, an in-memory map in
 /// tests) and pass an `Arc<dyn SqlExecutor>` to [`SqlToolsPlugin::new`].
@@ -62,7 +92,7 @@ struct SqlQueryArgs {
     /// SQL SELECT statement with `$1, $2, ...` placeholders.
     query: String,
     /// Positional bind parameters as a JSON array. Pass `[]` if none.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_params")]
     params: Vec<Value>,
 }
 
@@ -108,7 +138,7 @@ struct SqlExecArgs {
     #[serde(alias = "statement")]
     query: String,
     /// Positional bind parameters as a JSON array. Pass `[]` if none.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_lenient_params")]
     params: Vec<Value>,
 }
 
@@ -355,5 +385,70 @@ mod tests {
         let p = SqlToolsPlugin::new(exec);
         assert_eq!(p.name(), "pg-synapse-tools-sql");
         assert!(!p.version().is_empty());
+    }
+
+    // --- lenient params deserialization tests ---
+
+    fn parse_exec_params(json: &str) -> Vec<Value> {
+        let args: SqlExecArgs = serde_json::from_str(json).expect("deserialize failed");
+        args.params
+    }
+
+    fn parse_query_params(json: &str) -> Vec<Value> {
+        let args: SqlQueryArgs = serde_json::from_str(json).expect("deserialize failed");
+        args.params
+    }
+
+    #[test]
+    fn params_real_array_ok() {
+        // Rule 1: real JSON array passes through unchanged
+        let p = parse_exec_params(r#"{"query":"SELECT 1","params":["a","b"]}"#);
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0], Value::String("a".into()));
+        assert_eq!(p[1], Value::String("b".into()));
+    }
+
+    #[test]
+    fn params_json_string_array_coerced() {
+        // Rule 2: the exact bug - string-encoded JSON array
+        let p = parse_exec_params(
+            r#"{"query":"INSERT INTO demo.notes (body,added_by) VALUES ($1,$2)","params":"[\"BENCH_MARK_OK\", \"bench\"]"}"#,
+        );
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0], Value::String("BENCH_MARK_OK".into()));
+        assert_eq!(p[1], Value::String("bench".into()));
+    }
+
+    #[test]
+    fn params_json_string_scalar_wrapped() {
+        // Rule 3: string contains a JSON scalar (number) - wrap in vec
+        let p = parse_exec_params(r#"{"query":"SELECT 1","params":"5"}"#);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0], serde_json::json!(5));
+    }
+
+    #[test]
+    fn params_plain_string_becomes_single_text_param() {
+        // Rule 4: string is not valid JSON at all - treat as one text param
+        let p = parse_exec_params(r#"{"query":"SELECT 1","params":"hello"}"#);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0], Value::String("hello".into()));
+    }
+
+    #[test]
+    fn params_missing_defaults_empty() {
+        // Rule 6: missing field -> empty vec (both structs)
+        let p_exec = parse_exec_params(r#"{"query":"SELECT 1"}"#);
+        assert_eq!(p_exec, Vec::<Value>::new());
+        let p_query = parse_query_params(r#"{"query":"SELECT 1"}"#);
+        assert_eq!(p_query, Vec::<Value>::new());
+    }
+
+    #[test]
+    fn params_bare_scalar_wrapped() {
+        // Rule 5: bare JSON number (not in array, not in string) -> vec![scalar]
+        let p = parse_exec_params(r#"{"query":"SELECT 1","params":5}"#);
+        assert_eq!(p.len(), 1);
+        assert_eq!(p[0], serde_json::json!(5));
     }
 }

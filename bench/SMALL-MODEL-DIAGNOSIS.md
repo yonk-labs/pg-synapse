@@ -164,3 +164,59 @@ After fix:
 
 The remaining failures after the fix are SQL correctness issues from small-model capability
 limits at 0.8B to 3B parameter scale, NOT serving-stack configuration problems.
+
+## B9 Lenient-Params Delta (2026-05-16)
+
+### Fix applied
+
+`deserialize_lenient_params` added to both `SqlExecArgs.params` and `SqlQueryArgs.params` in
+`plugins/pg-synapse-tools-sql/src/lib.rs`. Accepts: (1) real JSON array unchanged, (2) JSON
+string containing an array (the core bug), (3) JSON string containing a scalar (wrap in vec),
+(4) non-JSON string (treat as single text param), (5) bare scalar (wrap in vec), (6) null or
+absent (empty vec). The `#[serde(alias = "statement")]` on `query` is preserved.
+
+### Per (model, scenario) before vs after
+
+| model | scenario | B7 pass | B7 tool | B7 error (truncated) | B9 pass | B9 tool | B9 error |
+|-------|----------|---------|---------|----------------------|---------|---------|----------|
+| llama-3.2-3b | s1_notes | false | false | invalid type: string "[... | **true** | true | (none) |
+| llama-3.2-3b | s2_triage | false | false | (none) | false | false | (none) |
+| llama-3.2-3b | s3_report | false | false | (none) | false | false | (none) |
+| gemma-4-E4B-it | s1_notes | true | true | (none) | true | true | (none) |
+| gemma-4-E4B-it | s2_triage | false | false | missing field `query` | false | false | missing field `query` |
+| gemma-4-E4B-it | s3_report | false | false | no parameter $2 | false | false | missing field `query` |
+| qwen3-4b-2507 | s1_notes | true | true | (none) | true | true | (none) |
+| qwen3-4b-2507 | s2_triage | true | true | (none) | true | true | (none) |
+| qwen3-4b-2507 | s3_report | false | false | no parameter $2 | false | false | no parameter $2 |
+
+### Net leaderboard change for the 3 re-run models
+
+| model | B7 passed | B9 passed | delta |
+|-------|-----------|-----------|-------|
+| llama-3.2-3b | 0/3 | 1/3 | +1 (s1_notes now PASS) |
+| gemma-4-E4B-it | 1/3 | 1/3 | 0 |
+| qwen3-4b-2507 | 2/3 | 2/3 | 0 |
+
+### Honest conclusion
+
+The lenient-params fix delivered exactly one measurable gain: llama-3.2-3b s1_notes flipped
+from FAIL(err) to PASS. The B7 error for that cell was `invalid type: string "[\"BENCH_MARK_OK\",
+\"bench\"]", expected a sequence`, which is precisely the string-encoded-array bug the fix
+targets. With params coercion in place the tool call was accepted and the assertion passed.
+
+The two remaining failures for llama-3.2-3b (s2_triage, s3_report) are SQL-correctness gaps
+where the model does not emit a structured tool call at all (tool_emitted=false, no error from
+the deserializer). These are model-capability limits at 3B scale, not parsing problems.
+
+For gemma-4-E4B-it, s2_triage and s3_report continue to fail with `missing field 'query'`.
+The model is emitting a tool call object that lacks the `query` key entirely (possibly using
+`statement` or another field name not covered by the existing alias). This is a tool-call
+formatting error by the model, not a params deserialization issue, and is unaffected by B9.
+
+For qwen3-4b-2507, s3_report continues to fail with `there is no parameter $2`. The model
+generates SQL with more placeholders than params it provides. This is SQL-correctness at the
+model level, not a parsing issue.
+
+No remaining failure across the 3 re-run models is attributable to lenient params
+deserialization. All outstanding failures are model-capability or model-formatting issues
+that cannot be resolved by deserializer changes.
