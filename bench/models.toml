@@ -64,3 +64,31 @@ kind          = "local_gguf"
 gguf_repo     = "unsloth/SmolLM3-3B-GGUF"
 gguf_file     = "SmolLM3-3B-Q4_K_M.gguf"
 served_model_id = "SmolLM3-3B"
+
+[[model]]
+key           = "gemma-4-E4B-it"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/gemma-4-E4B-it-GGUF"
+gguf_file     = "gemma-4-E4B-it-Q4_K_M.gguf"
+served_model_id = "gemma-4-E4B-it"
+
+[[model]]
+key           = "llama-3.2-3b"
+kind          = "local_gguf"
+gguf_repo     = "bartowski/Llama-3.2-3B-Instruct-GGUF"
+gguf_file     = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+served_model_id = "Llama-3.2-3B-Instruct"
+
+[[model]]
+key           = "qwen3-4b-2507"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/Qwen3-4B-Instruct-2507-GGUF"
+gguf_file     = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+served_model_id = "Qwen3-4B-Instruct-2507"
+
+[[model]]
+key           = "qwen2.5-7b"
+kind          = "local_gguf"
+gguf_repo     = "bartowski/Qwen2.5-7B-Instruct-GGUF"
+gguf_file     = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+served_model_id = "Qwen2.5-7B-Instruct"
