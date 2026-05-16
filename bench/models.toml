@@ -14,6 +14,14 @@
 #   gguf_repo     HuggingFace repo slug (user/repo)
 #   gguf_file     filename inside the repo to download
 #   served_model_id  model name to pass in the llama-cpp-server API request
+#   chat_format   (optional) --chat_format flag passed to llama-cpp-python server.
+#                 Omit to use the model's embedded GGUF jinja template (recommended
+#                 for models like Qwen3.5, SmolLM3, gemma-4 that carry their own
+#                 tool-call template). The pg_synapse OpenAI provider client has a
+#                 content-extraction fallback (Fix B, B6) that parses <tool_call>
+#                 blocks from content when the server does not populate tool_calls.
+#   server_args   (optional) extra flags appended verbatim to the llama-cpp-python
+#                 server launch command (space-separated string).
 
 [[model]]
 key           = "openai-gpt5-mini"

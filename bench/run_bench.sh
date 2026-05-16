@@ -263,12 +263,27 @@ for MKEY in "${MODEL_KEYS[@]}"; do
 
         LLAMA_PORT="$(find_free_port)"
         MODEL_PROFILE_BASE_URL="http://127.0.0.1:$LLAMA_PORT/v1"
+
+        # Optional per-model server flags from models.toml.
+        CHAT_FORMAT="$(toml_get "$MKEY" chat_format 2>/dev/null || true)"
+        EXTRA_SERVER_ARGS="$(toml_get "$MKEY" server_args 2>/dev/null || true)"
+
         log "Starting llama-cpp-server on port $LLAMA_PORT for $MKEY"
-        "$LLAMA_SERVER_BIN" -m llama_cpp.server \
-            --model "$GGUF_PATH" \
-            --port "$LLAMA_PORT" \
-            --n_ctx 4096 \
-            > "/tmp/llama_${MKEY}.log" 2>&1 &
+        LAUNCH_CMD=("$LLAMA_SERVER_BIN" -m llama_cpp.server
+            --model "$GGUF_PATH"
+            --port "$LLAMA_PORT"
+            --n_ctx 4096)
+        if [[ -n "$CHAT_FORMAT" ]]; then
+            LAUNCH_CMD+=(--chat_format "$CHAT_FORMAT")
+            log "  chat_format: $CHAT_FORMAT"
+        fi
+        if [[ -n "$EXTRA_SERVER_ARGS" ]]; then
+            # Word-split intentional: server_args is a space-separated flags string.
+            # shellcheck disable=SC2086
+            LAUNCH_CMD+=($EXTRA_SERVER_ARGS)
+            log "  extra server_args: $EXTRA_SERVER_ARGS"
+        fi
+        "${LAUNCH_CMD[@]}" > "/tmp/llama_${MKEY}.log" 2>&1 &
         LLAMA_PID=$!
         LLAMA_PIDS+=("$LLAMA_PID")
 

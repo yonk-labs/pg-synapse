@@ -56,6 +56,278 @@ pub fn sanitize_tool_schema(v: &mut Value) {
     }
 }
 
+/// Try to extract tool calls from a content string when the serving stack did
+/// not populate `tool_calls` in the response (common with llama-cpp-python and
+/// other self-hosted runtimes that do not post-process the model output).
+///
+/// Two formats are recognised:
+///
+/// Format 1 - JSON inside `<tool_call>` tags (SmolLM3, Qwen3.5 template):
+/// ```text
+/// <tool_call>
+/// {"name": "sql_exec", "arguments": {"query": "...", "params": [...]}}
+/// </tool_call>
+/// ```
+///
+/// Format 2 - fenced JSON object (bare, or inside triple-backtick block):
+/// ```json
+/// {"name": "sql_exec", "arguments": {"query": "..."}}
+/// ```
+///
+/// Conservative matching rules (to avoid false positives on normal prose):
+/// * Only fires when the request actually sent `tools` (enforced by the caller).
+/// * The parsed object must have a `name` key whose value matches one of the
+///   sent tool names.
+/// * The parsed object must have an `arguments` or `parameters` key that is
+///   a JSON object.
+/// * If none of the above match, the function returns an empty vec so the
+///   caller leaves `content` untouched.
+pub fn extract_tool_calls_from_content(content: &str, tool_names: &[&str]) -> Vec<ToolCall> {
+    let mut results = Vec::new();
+
+    // Helper: try to parse a JSON string as a tool-call object.
+    let try_parse = |raw: &str| -> Option<ToolCall> {
+        let v: Value = serde_json::from_str(raw.trim()).ok()?;
+        let name = v.get("name").and_then(|n| n.as_str())?.to_string();
+        if !tool_names.contains(&name.as_str()) {
+            return None;
+        }
+        // Accept both "arguments" and "parameters" as the args key.
+        let args = v
+            .get("arguments")
+            .or_else(|| v.get("parameters"))
+            .cloned()
+            .unwrap_or(Value::Object(serde_json::Map::new()));
+        if !args.is_object() {
+            return None;
+        }
+        let id = format!("call_{}", uuid_v4_hex());
+        Some(ToolCall { id, name, args })
+    };
+
+    // Format 1: <tool_call>...</tool_call> blocks.
+    // The content between the tags may be JSON, or it may be XML-parameter
+    // format. We handle both sub-variants.
+    {
+        let mut search = content;
+        while let Some(start) = search.find("<tool_call>") {
+            let after_open = &search[start + "<tool_call>".len()..];
+            if let Some(end) = after_open.find("</tool_call>") {
+                let inner = after_open[..end].trim();
+                // Sub-variant A: JSON object directly inside the tags.
+                if let Some(tc) = try_parse(inner) {
+                    results.push(tc);
+                }
+                // Sub-variant B: <function=name><parameter=p>v</parameter></function>
+                // Only attempt if JSON parsing failed (inner not valid JSON).
+                else if let Some(tc) = parse_xml_function_block(inner, tool_names) {
+                    results.push(tc);
+                }
+                search = &after_open[end + "</tool_call>".len()..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Format 2 (Gemma-4): <|tool_call>call:NAME{...}<tool_call|> blocks.
+    // Gemma-4 uses special token delimiters; try before fenced JSON.
+    if results.is_empty() && content.contains("<|tool_call>") {
+        results.extend(parse_gemma_tool_call_openai(content, tool_names));
+    }
+
+    // Format 3: bare JSON object in a fenced code block or inline.
+    // Only attempt this if nothing matched above, to keep false-positive rate
+    // low (a model might output valid JSON for other reasons).
+    if results.is_empty() {
+        // Try triple-backtick fenced blocks first, then bare.
+        let candidates: Vec<&str> = {
+            let mut c = Vec::new();
+            let mut s = content;
+            while let Some(open) = s.find("```") {
+                let after = &s[open + 3..];
+                // Skip optional language tag on first line.
+                let body_start = after.find('\n').map(|i| i + 1).unwrap_or(0);
+                let body = &after[body_start..];
+                if let Some(close) = body.find("```") {
+                    c.push(body[..close].trim());
+                    s = &body[close + 3..];
+                } else {
+                    break;
+                }
+            }
+            // Also try the full content stripped of surrounding whitespace.
+            c.push(content.trim());
+            c
+        };
+        for raw in candidates {
+            if let Some(tc) = try_parse(raw) {
+                results.push(tc);
+                break;
+            }
+        }
+    }
+
+    results
+}
+
+/// Parse `<function=name><parameter=p>value</parameter>...</function>` blocks.
+fn parse_xml_function_block(inner: &str, tool_names: &[&str]) -> Option<ToolCall> {
+    // Expect: <function=NAME> ... </function>
+    let func_start = inner.find("<function=")?;
+    let after_func = &inner[func_start + "<function=".len()..];
+    let name_end = after_func.find('>')?;
+    let name = after_func[..name_end].trim().to_string();
+    if !tool_names.contains(&name.as_str()) {
+        return None;
+    }
+    let body = &after_func[name_end + 1..];
+    let body = if let Some(e) = body.rfind("</function>") {
+        &body[..e]
+    } else {
+        body
+    };
+
+    // Extract <parameter=KEY>VALUE</parameter> pairs.
+    let mut args = serde_json::Map::new();
+    let mut search = body;
+    while let Some(p_start) = search.find("<parameter=") {
+        let after_p = &search[p_start + "<parameter=".len()..];
+        let key_end = after_p.find('>')?;
+        let key = after_p[..key_end].trim().to_string();
+        let val_str = &after_p[key_end + 1..];
+        let val_end = val_str.find("</parameter>").unwrap_or(val_str.len());
+        let val = val_str[..val_end].trim();
+        // Try to parse value as JSON; fall back to string.
+        let json_val: Value =
+            serde_json::from_str(val).unwrap_or_else(|_| Value::String(val.to_string()));
+        args.insert(key, json_val);
+        search = &val_str[val_end + "</parameter>".len().min(val_str.len())..];
+    }
+
+    let id = format!("call_{}", uuid_v4_hex());
+    Some(ToolCall {
+        id,
+        name,
+        args: Value::Object(args),
+    })
+}
+
+/// Generate a short pseudo-random hex string for tool call IDs.
+/// Uses only std to avoid pulling in uuid as a direct dependency here
+/// (uuid is already in dev-deps; for production we use a simple counter +
+/// process-unique seed approach).
+/// Parse Gemma-4's native tool-call format (OpenAI provider copy).
+/// `<|tool_call>call:NAME{key:VALUE,...}<tool_call|>`
+fn parse_gemma_tool_call_openai(content: &str, tool_names: &[&str]) -> Vec<ToolCall> {
+    const OPEN: &str = "<|tool_call>call:";
+    const CLOSE: &str = "<tool_call|>";
+    const QMARK: &str = "<|\"|>";
+
+    let mut results = Vec::new();
+    let mut search = content;
+    while let Some(start) = search.find(OPEN) {
+        let after = &search[start + OPEN.len()..];
+        let Some(brace) = after.find('{') else { break };
+        let name = after[..brace].trim().to_string();
+        if !tool_names.contains(&name.as_str()) {
+            search = &after[brace..];
+            continue;
+        }
+        let rest = &after[brace..];
+        let end = rest.find(CLOSE).unwrap_or(rest.len());
+        let args_blob = rest[..end].trim();
+        let args_blob = args_blob
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or(args_blob);
+
+        let mut args = serde_json::Map::new();
+        let mut rem = args_blob;
+        while !rem.is_empty() {
+            rem = rem.trim_start_matches([',', ' ', '\n', '\t']);
+            if rem.is_empty() {
+                break;
+            }
+            let Some(colon) = rem.find(':') else { break };
+            let key = rem[..colon].trim().to_string();
+            rem = &rem[colon + 1..];
+            let val_json: Value;
+            if rem.starts_with(QMARK) {
+                let inner = &rem[QMARK.len()..];
+                let close = inner.find(QMARK).unwrap_or(inner.len());
+                val_json = json!(inner[..close].to_string());
+                rem = &inner[close + QMARK.len()..];
+            } else if rem.starts_with('[') {
+                let Some(arr_end) = rem.find(']') else { break };
+                let arr_str = &rem[1..arr_end];
+                let mut items = Vec::new();
+                let mut a = arr_str;
+                while !a.is_empty() {
+                    a = a.trim_start_matches([',', ' ']);
+                    if a.is_empty() {
+                        break;
+                    }
+                    if a.starts_with(QMARK) {
+                        let inner = &a[QMARK.len()..];
+                        let close = inner.find(QMARK).unwrap_or(inner.len());
+                        items.push(json!(inner[..close].to_string()));
+                        a = &inner[close + QMARK.len()..];
+                    } else {
+                        let end = a.find([',', ']']).unwrap_or(a.len());
+                        let v: Value = serde_json::from_str(a[..end].trim()).unwrap_or(Value::Null);
+                        items.push(v);
+                        a = &a[end..];
+                    }
+                }
+                val_json = Value::Array(items);
+                rem = &rem[arr_end + 1..];
+            } else {
+                let end = rem.find(',').unwrap_or(rem.len());
+                val_json = serde_json::from_str(rem[..end].trim())
+                    .unwrap_or_else(|_| json!(rem[..end].trim()));
+                rem = &rem[end..];
+            }
+            args.insert(key, val_json);
+        }
+
+        let id = format!("call_{}", uuid_v4_hex());
+        results.push(ToolCall {
+            id,
+            name,
+            args: Value::Object(args),
+        });
+
+        if end < rest.len() {
+            search = &rest[end + CLOSE.len()..];
+        } else {
+            break;
+        }
+    }
+    results
+}
+
+fn uuid_v4_hex() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    // Mix time nanos with a thread-local counter for uniqueness within a process.
+    // This is not cryptographically random, but tool-call IDs only need to be
+    // unique within a single completion response.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    // Thread-local counter.
+    std::thread_local! {
+        static CTR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let ctr = CTR.with(|c| {
+        let v = c.get();
+        c.set(v.wrapping_add(1));
+        v
+    });
+    format!("{nanos:08x}{ctr:04x}")
+}
+
 /// Returns true when `model` is a reasoning model (gpt-5, o1, o3, o4 families).
 ///
 /// Reasoning models have two key API differences compared with standard chat
@@ -442,6 +714,28 @@ impl LlmProvider for OpenAiProvider {
             }
         }
 
+        // Fallback: some self-hosted runtimes (llama-cpp-python with default
+        // chat_format, Ollama, etc.) never populate `tool_calls` in the wire
+        // response even when the model actually emitted a structured tool call
+        // inside `content`. When the request sent tools and the response
+        // `tool_calls` array is empty, attempt to extract calls from `content`.
+        if tool_calls.is_empty() && !req.tools.is_empty() {
+            if let Some(ref text) = content {
+                if !text.is_empty() {
+                    let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+                    let extracted = extract_tool_calls_from_content(text, &names);
+                    if !extracted.is_empty() {
+                        tracing::debug!(
+                            target: "pg_synapse_openai",
+                            count = extracted.len(),
+                            "synthesised tool_calls from content (server did not populate tool_calls)"
+                        );
+                        tool_calls = extracted;
+                    }
+                }
+            }
+        }
+
         let usage_obj = body.get("usage").cloned().unwrap_or(Value::Null);
         let tokens_in = usage_obj
             .get("prompt_tokens")
@@ -649,7 +943,58 @@ mod tests {
         assert!(!is_reasoning_model("claude-3-sonnet"));
     }
 
-    // B1: live test against gpt-5-mini (skipped without live-tests feature).
+    // B6: tool-call extraction from content -- fenced JSON format.
+    #[test]
+    fn extract_tool_calls_fenced_json() {
+        let content = "Sure!\n\n```json\n{\"name\": \"sql_exec\", \"arguments\": {\"query\": \"INSERT INTO t(a) VALUES ($1)\", \"params\": [\"hi\"]}}\n```";
+        let names = &["sql_exec", "sql_query"];
+        let calls = extract_tool_calls_from_content(content, names);
+        assert_eq!(calls.len(), 1, "expected one extracted tool call");
+        assert_eq!(calls[0].name, "sql_exec");
+        assert_eq!(calls[0].args["query"], "INSERT INTO t(a) VALUES ($1)");
+        assert_eq!(calls[0].args["params"][0], "hi");
+    }
+
+    // B6: tool-call extraction from content -- <tool_call> tag format with JSON inside.
+    #[test]
+    fn extract_tool_calls_tag_json() {
+        let content = "I will call the function.\n<tool_call>\n{\"name\": \"sql_exec\", \"arguments\": {\"query\": \"SELECT 1\"}}\n</tool_call>";
+        let names = &["sql_exec"];
+        let calls = extract_tool_calls_from_content(content, names);
+        assert_eq!(calls.len(), 1, "expected one extracted tool call");
+        assert_eq!(calls[0].name, "sql_exec");
+        assert_eq!(calls[0].args["query"], "SELECT 1");
+        assert!(!calls[0].id.is_empty());
+    }
+
+    // B6: tool-call extraction -- <tool_call><function=name><parameter=p>v</parameter></function></tool_call> format.
+    #[test]
+    fn extract_tool_calls_tag_xml_params() {
+        let content = "<tool_call>\n<function=sql_exec>\n<parameter=query>\nSELECT 42\n</parameter>\n<parameter=params>\n[]\n</parameter>\n</function>\n</tool_call>";
+        let names = &["sql_exec"];
+        let calls = extract_tool_calls_from_content(content, names);
+        assert_eq!(calls.len(), 1, "expected one extracted tool call");
+        assert_eq!(calls[0].name, "sql_exec");
+        assert_eq!(calls[0].args["query"], "SELECT 42");
+        // params parsed as JSON array
+        assert!(calls[0].args["params"].is_array());
+    }
+
+    // B6: tool-call extraction -- plain prose with tools sent must NOT synthesise
+    // a tool call (no false positives).
+    #[test]
+    fn extract_tool_calls_negative_plain_prose() {
+        let content =
+            "I cannot insert rows directly. Please provide the database connection details.";
+        let names = &["sql_exec", "sql_query"];
+        let calls = extract_tool_calls_from_content(content, names);
+        assert!(
+            calls.is_empty(),
+            "plain prose must not produce synthesised tool calls"
+        );
+    }
+
+    // B6: live test against gpt-5-mini (skipped without live-tests feature).
     #[cfg(feature = "live-tests")]
     #[tokio::test]
     async fn live_gpt5_mini_completes() {

@@ -32,6 +32,274 @@ use pg_synapse_core::{EmbeddingProvider, LlmProvider};
 pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080/v1";
 
 // ---------------------------------------------------------------------------
+// Tool-call extraction from content (Fix B6)
+// ---------------------------------------------------------------------------
+
+/// Try to extract tool calls from a content string when the serving stack did
+/// not populate `tool_calls` in the response.
+///
+/// llama-cpp-python (and many self-hosted runtimes) leave the model's raw
+/// output in `content` rather than post-processing it into the `tool_calls`
+/// JSON array. This function recognises the two common leaked formats so the
+/// kernel can dispatch tool calls correctly even from under-configured servers.
+///
+/// Formats recognised:
+///
+/// 1. JSON inside `<tool_call>` tags (SmolLM3, Qwen3.5 native template):
+///    `<tool_call>{"name": "sql_exec", "arguments": {...}}</tool_call>`
+///
+/// 2. XML parameter blocks inside `<tool_call>` tags (Qwen3 function format):
+///    `<tool_call><function=sql_exec><parameter=query>...</parameter></function></tool_call>`
+///
+/// 3. Bare or fenced JSON object:
+///    ` ```json\n{"name": "sql_exec", "arguments": {...}}\n``` `
+///
+/// Conservative: only fires when tool names match a sent tool and the parsed
+/// object has an `arguments`/`parameters` object key. Returns empty vec on
+/// no match so the caller leaves `content` untouched.
+fn extract_tool_calls_from_content(content: &str, tool_names: &[&str]) -> Vec<ToolCall> {
+    let mut results = Vec::new();
+
+    let try_parse = |raw: &str| -> Option<ToolCall> {
+        let v: Value = serde_json::from_str(raw.trim()).ok()?;
+        let name = v.get("name").and_then(|n| n.as_str())?.to_string();
+        if !tool_names.contains(&name.as_str()) {
+            return None;
+        }
+        let args = v
+            .get("arguments")
+            .or_else(|| v.get("parameters"))
+            .cloned()
+            .unwrap_or(Value::Object(serde_json::Map::new()));
+        if !args.is_object() {
+            return None;
+        }
+        let id = format!("call_{}", llama_uuid_hex());
+        Some(ToolCall { id, name, args })
+    };
+
+    // Format 1 + 2: <tool_call>...</tool_call> blocks.
+    {
+        let mut search = content;
+        while let Some(start) = search.find("<tool_call>") {
+            let after_open = &search[start + "<tool_call>".len()..];
+            if let Some(end) = after_open.find("</tool_call>") {
+                let inner = after_open[..end].trim();
+                if let Some(tc) = try_parse(inner) {
+                    results.push(tc);
+                } else if let Some(tc) = parse_llama_xml_function_block(inner, tool_names) {
+                    results.push(tc);
+                }
+                search = &after_open[end + "</tool_call>".len()..];
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Format 3 (Gemma-4): <|tool_call>call:NAME{...}<tool_call|> blocks.
+    // Try this before fenced JSON, as Gemma uses special token delimiters that
+    // will not match the generic JSON patterns.
+    if results.is_empty() && content.contains("<|tool_call>") {
+        results.extend(parse_gemma_tool_call(content, tool_names));
+    }
+
+    // Format 4: fenced or bare JSON (only if none of the above matched).
+    if results.is_empty() {
+        let candidates: Vec<&str> = {
+            let mut c = Vec::new();
+            let mut s = content;
+            while let Some(open) = s.find("```") {
+                let after = &s[open + 3..];
+                let body_start = after.find('\n').map(|i| i + 1).unwrap_or(0);
+                let body = &after[body_start..];
+                if let Some(close) = body.find("```") {
+                    c.push(body[..close].trim());
+                    s = &body[close + 3..];
+                } else {
+                    break;
+                }
+            }
+            c.push(content.trim());
+            c
+        };
+        for raw in candidates {
+            if let Some(tc) = try_parse(raw) {
+                results.push(tc);
+                break;
+            }
+        }
+    }
+
+    results
+}
+
+/// Parse `<function=name><parameter=p>value</parameter>...</function>` blocks.
+fn parse_llama_xml_function_block(inner: &str, tool_names: &[&str]) -> Option<ToolCall> {
+    let func_start = inner.find("<function=")?;
+    let after_func = &inner[func_start + "<function=".len()..];
+    let name_end = after_func.find('>')?;
+    let name = after_func[..name_end].trim().to_string();
+    if !tool_names.contains(&name.as_str()) {
+        return None;
+    }
+    let body = &after_func[name_end + 1..];
+    let body = if let Some(e) = body.rfind("</function>") {
+        &body[..e]
+    } else {
+        body
+    };
+
+    let mut args = serde_json::Map::new();
+    let mut search = body;
+    while let Some(p_start) = search.find("<parameter=") {
+        let after_p = &search[p_start + "<parameter=".len()..];
+        let key_end = after_p.find('>')?;
+        let key = after_p[..key_end].trim().to_string();
+        let val_str = &after_p[key_end + 1..];
+        let val_end = val_str.find("</parameter>").unwrap_or(val_str.len());
+        let val = val_str[..val_end].trim();
+        let json_val: Value =
+            serde_json::from_str(val).unwrap_or_else(|_| Value::String(val.to_string()));
+        args.insert(key, json_val);
+        search = &val_str[val_end + "</parameter>".len().min(val_str.len())..];
+    }
+
+    let id = format!("call_{}", llama_uuid_hex());
+    Some(ToolCall {
+        id,
+        name,
+        args: Value::Object(args),
+    })
+}
+
+/// Parse Gemma-4's native tool-call format:
+/// `<|tool_call>call:NAME{key:VALUE,...}<tool_call|>`
+///
+/// Gemma-4 uses `<|"|>` as a special-token quote and emits args in a
+/// brace-delimited comma-separated key:value format. Example:
+///   `<|tool_call>call:sql_exec{query:<|"|>SELECT 1<|"|>,params:[]}<tool_call|>`
+fn parse_gemma_tool_call(content: &str, tool_names: &[&str]) -> Vec<ToolCall> {
+    const OPEN: &str = "<|tool_call>call:";
+    const CLOSE: &str = "<tool_call|>";
+    const QMARK: &str = "<|\"|>";
+
+    let mut results = Vec::new();
+    let mut search = content;
+    while let Some(start) = search.find(OPEN) {
+        let after = &search[start + OPEN.len()..];
+        // Find the function name (up to '{').
+        let Some(brace) = after.find('{') else { break };
+        let name = after[..brace].trim().to_string();
+        if !tool_names.contains(&name.as_str()) {
+            search = &after[brace..];
+            continue;
+        }
+        let rest = &after[brace..];
+        // Find closing CLOSE tag; everything between '{' and the end of CLOSE
+        // is the args blob.
+        let end = rest.find(CLOSE).unwrap_or(rest.len());
+        let args_blob = rest[..end].trim();
+        // Strip outer braces.
+        let args_blob = args_blob
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or(args_blob);
+
+        // Parse key:value pairs. Values may be:
+        //   - quoted strings: <|"|>text<|"|>
+        //   - arrays: [<|"|>v1<|"|>,<|"|>v2<|"|>]
+        //   - bare numbers / true / false / null
+        let mut args = serde_json::Map::new();
+        let mut rem = args_blob;
+        while !rem.is_empty() {
+            rem = rem.trim_start_matches([',', ' ', '\n', '\t']);
+            if rem.is_empty() {
+                break;
+            }
+            // Key ends at ':'.
+            let Some(colon) = rem.find(':') else { break };
+            let key = rem[..colon].trim().to_string();
+            rem = &rem[colon + 1..];
+
+            let val_json: Value;
+            if rem.starts_with(QMARK) {
+                // Quoted string: find matching close QMARK.
+                let inner = &rem[QMARK.len()..];
+                let close = inner.find(QMARK).unwrap_or(inner.len());
+                let s = &inner[..close];
+                val_json = json!(s);
+                rem = &inner[close + QMARK.len()..];
+            } else if rem.starts_with('[') {
+                // Array: collect items up to ']'.
+                let Some(arr_end) = rem.find(']') else { break };
+                let arr_str = &rem[1..arr_end];
+                let mut items = Vec::new();
+                let mut a = arr_str;
+                while !a.is_empty() {
+                    a = a.trim_start_matches([',', ' ']);
+                    if a.is_empty() {
+                        break;
+                    }
+                    if a.starts_with(QMARK) {
+                        let inner = &a[QMARK.len()..];
+                        let close = inner.find(QMARK).unwrap_or(inner.len());
+                        items.push(json!(inner[..close].to_string()));
+                        a = &inner[close + QMARK.len()..];
+                    } else {
+                        // Bare value.
+                        let end = a.find([',', ']']).unwrap_or(a.len());
+                        let v: Value = serde_json::from_str(a[..end].trim()).unwrap_or(Value::Null);
+                        items.push(v);
+                        a = &a[end..];
+                    }
+                }
+                val_json = Value::Array(items);
+                rem = &rem[arr_end + 1..];
+            } else {
+                // Bare value (number, bool, null).
+                let end = rem.find(',').unwrap_or(rem.len());
+                val_json = serde_json::from_str(rem[..end].trim())
+                    .unwrap_or_else(|_| json!(rem[..end].trim()));
+                rem = &rem[end..];
+            }
+            args.insert(key, val_json);
+        }
+
+        let id = format!("call_{}", llama_uuid_hex());
+        results.push(ToolCall {
+            id,
+            name,
+            args: Value::Object(args),
+        });
+
+        if end < rest.len() {
+            search = &rest[end + CLOSE.len()..];
+        } else {
+            break;
+        }
+    }
+    results
+}
+
+fn llama_uuid_hex() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    std::thread_local! {
+        static CTR: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let ctr = CTR.with(|c| {
+        let v = c.get();
+        c.set(v.wrapping_add(1));
+        v
+    });
+    format!("{nanos:08x}{ctr:04x}")
+}
+
+// ---------------------------------------------------------------------------
 // LlamaCppProvider (LlmProvider)
 // ---------------------------------------------------------------------------
 
@@ -123,9 +391,19 @@ impl LlamaCppProvider {
                         .as_ref()
                         .map(|v| serde_json::to_string(v).unwrap_or_else(|_| "{}".into()))
                         .unwrap_or_else(|| "{}".into());
+                    // Use empty string instead of null for content when absent.
+                    // llama-cpp-python's pydantic validator rejects content:null
+                    // in assistant messages that carry tool_calls, which causes
+                    // HTTP 500 on the follow-up turn after content-extraction
+                    // (Fix B6) synthesises tool_calls with content=None.
+                    let content_val = m
+                        .content
+                        .as_deref()
+                        .map(|s| json!(s))
+                        .unwrap_or_else(|| json!(""));
                     messages.push(json!({
                         "role": "assistant",
-                        "content": m.content,
+                        "content": content_val,
                         "tool_calls": [{
                             "id": m.tool_call_id.as_deref().unwrap_or(""),
                             "type": "function",
@@ -286,6 +564,26 @@ impl LlmProvider for LlamaCppProvider {
                 let args: Value =
                     serde_json::from_str(args_str).unwrap_or_else(|_| json!({ "_raw": args_str }));
                 tool_calls.push(ToolCall { id, name, args });
+            }
+        }
+
+        // Fallback (Fix B6): llama-cpp-python with default chat_format leaves the
+        // model's raw output in `content` rather than post-processing into
+        // `tool_calls`. Extract structured calls when the server did not.
+        if tool_calls.is_empty() && !req.tools.is_empty() {
+            if let Some(ref text) = content {
+                if !text.is_empty() {
+                    let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+                    let extracted = extract_tool_calls_from_content(text, &names);
+                    if !extracted.is_empty() {
+                        tracing::debug!(
+                            target: "pg_synapse_llama_cpp",
+                            count = extracted.len(),
+                            "synthesised tool_calls from content (llama-cpp server did not populate tool_calls)"
+                        );
+                        tool_calls = extracted;
+                    }
+                }
             }
         }
 
