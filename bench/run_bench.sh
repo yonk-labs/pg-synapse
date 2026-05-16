@@ -116,6 +116,73 @@ wait_for_llama_server() {
     log "llama-cpp-server ready on port $port (${elapsed}s)"
 }
 
+# Warm up a local llama-cpp-python server with one tiny chat completion.
+# This ensures the model is fully loaded before timed scenario execution.
+warmup_llama_server() {
+    local port="$1" model_id="$2"
+    log "Warming up llama-cpp-server on port $port ..."
+    curl -sf -X POST "http://127.0.0.1:$port/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"${model_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
+        > /dev/null 2>&1 || true
+    log "Warmup done for port $port"
+}
+
+# ensure_pg_ready: verify Postgres is accepting connections and the extension
+# is available. Retries psql up to ~20s; hard-fails if not available.
+ensure_pg_ready() {
+    local elapsed=0
+    log "Ensuring Postgres is ready (socket=$PG_SOCKET_DIR port=$PG_PORT)..."
+    while ! pg_run postgres -Atc "SELECT 1" > /dev/null 2>&1; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+        if [[ $elapsed -ge 20 ]]; then
+            echo "[bench][FATAL] Postgres not reachable at socket=$PG_SOCKET_DIR port=$PG_PORT after ${elapsed}s. Aborting." >&2
+            exit 1
+        fi
+    done
+    log "Postgres reachable (${elapsed}s wait)."
+
+    # Verify the extension is available (not necessarily installed, just available).
+    local avail
+    avail="$(pg_run postgres -Atc \
+        "SELECT 1 FROM pg_available_extensions WHERE name='pg_synapse_pgrx'" 2>/dev/null || true)"
+    if [[ "$avail" != "1" ]]; then
+        echo "[bench][FATAL] pg_synapse_pgrx not found in pg_available_extensions." >&2
+        echo "[bench][FATAL] Run: cargo pgrx install ... --features pg17,... first." >&2
+        exit 1
+    fi
+    log "pg_synapse_pgrx is available in pg_available_extensions."
+}
+
+# install_extension_with_retry: wraps CREATE EXTENSION with up to 3 attempts.
+# On persistent failure, records the row with infra_error=true and returns 1.
+# Usage: install_extension_with_retry <db> <mkey> <scenario> <scale> <kind> <run_date>
+install_extension_with_retry() {
+    local db="$1" mkey="$2" scenario="$3" scale="$4" kind="$5" run_date="$6"
+    local attempt=0
+    while [[ $attempt -lt 3 ]]; do
+        if pg_run "$db" -c "CREATE EXTENSION IF NOT EXISTS pg_synapse_pgrx;" > /dev/null 2>&1; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [[ $attempt -lt 3 ]]; then
+            warn "  CREATE EXTENSION failed (attempt $attempt/3); retrying in 2s..."
+            sleep 2
+        fi
+    done
+    # All attempts failed: record infra-error row and signal caller to skip.
+    local err_msg="failed to CREATE EXTENSION pg_synapse_pgrx after 3 attempts (infra)"
+    warn "  $err_msg"
+    record_result "$(python3 -c "import json; print(json.dumps({
+        'model':'$mkey','scenario':'$scenario','scale':$scale,'kind':'$kind',
+        'task_passed':False,'tool_emitted':False,
+        'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,
+        'error':'$err_msg','infra_error':True,'run_date':'$run_date'
+    }))")"
+    return 1
+}
+
 # Parse a specific field from models.toml for a given key.
 # Usage: toml_get <model_key> <field>
 toml_get() {
@@ -204,6 +271,12 @@ log "Models:    ${MODEL_KEYS[*]}"
 log "Scenarios: ${SCENARIO_NAMES[*]}"
 log "Scale:     $OPT_SCALE"
 log "Timeout:   ${OPT_TIMEOUT}s"
+
+# ---------------------------------------------------------------------------
+# Pre-flight: ensure Postgres is up and the extension is available.
+# Fail fast here rather than failing every model cell.
+# ---------------------------------------------------------------------------
+ensure_pg_ready
 
 # ---------------------------------------------------------------------------
 # Global cleanup trap (handles local llama-cpp servers)
@@ -300,6 +373,9 @@ for MKEY in "${MODEL_KEYS[@]}"; do
             kill "$LLAMA_PID" 2>/dev/null || true
             continue
         fi
+
+        # Warm up: one tiny completion to force model load before timed scenarios.
+        warmup_llama_server "$LLAMA_PORT" "$MODEL_PROFILE_MODEL_ID"
     else
         warn "Unknown kind '$KIND' for $MKEY; skipping."
         continue
@@ -360,12 +436,10 @@ for MKEY in "${MODEL_KEYS[@]}"; do
         drop_db "$DB"
         create_db "$DB"
 
-        # Install extension.
-        if ! pg_run "$DB" -c "CREATE EXTENSION IF NOT EXISTS pg_synapse_pgrx;" > /dev/null 2>&1; then
-            ERROR="failed to CREATE EXTENSION pg_synapse_pgrx"
-            warn "  $ERROR"
+        # Install extension (with retry; records infra_error row on persistent failure).
+        if ! install_extension_with_retry \
+                "$DB" "$MKEY" "$SCENARIO" "$OPT_SCALE" "$SCENARIO_KIND" "$RUN_DATE"; then
             drop_db "$DB"
-            record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'kind':'$SCENARIO_KIND','task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
             continue
         fi
 
@@ -484,10 +558,20 @@ print(arr)
 
         # Run agent execute() with statement_timeout.
         # Use a separate -c for SET so psql -Atc only outputs the JSON row.
+        # On a network/transport error (local model server hiccup), retry once.
         TIMEOUT_MS="$((OPT_TIMEOUT * 1000))"
         pg_run "$DB" -c "SET statement_timeout = ${TIMEOUT_MS};" > /dev/null 2>&1 || true
         EXEC_JSON="$(pg_run "$DB" -Atc \
             "SELECT synapse.execute('$AGENT_NAME', \$\$${TASK_ESC}\$\$);" 2>&1)" || true
+
+        # If the raw output looks like a network error and no JSON row was found,
+        # retry the execute once (handles transient local server hiccups).
+        if echo "$EXEC_JSON" | grep -qi "network error\|error sending request"; then
+            warn "  Network error detected; retrying execute once..."
+            pg_run "$DB" -c "SET statement_timeout = ${TIMEOUT_MS};" > /dev/null 2>&1 || true
+            EXEC_JSON="$(pg_run "$DB" -Atc \
+                "SELECT synapse.execute('$AGENT_NAME', \$\$${TASK_ESC}\$\$);" 2>&1)" || true
+        fi
 
         # Parse execution JSON. The raw EXEC_JSON may contain error lines from
         # psql before the JSON row; extract the first JSON object found.
@@ -549,6 +633,12 @@ print('true' if tcs else 'false')
 
         log "  Result: passed=$TASK_PASSED tool=$TOOL_EMITTED tokens_in=$TOKENS_IN tokens_out=$TOKENS_OUT latency=${LATENCY_MS}ms"
 
+        # Classify infra errors so consumers can exclude them from model verdicts.
+        INFRA_ERROR="false"
+        if echo "${ERROR:-}" | grep -qi "network error\|error sending request\|CREATE EXTENSION"; then
+            INFRA_ERROR="true"
+        fi
+
         # Record JSON line. Use python3 json.dumps for all values to avoid
         # bash interpolation breaking JSON booleans or special chars in error.
         record_result "$(python3 - \
@@ -556,10 +646,10 @@ print('true' if tcs else 'false')
             "$TASK_PASSED" "$TOOL_EMITTED" \
             "${TOKENS_IN:-0}" "${TOKENS_OUT:-0}" \
             "${LATENCY_MS:-0}" "${ITERATIONS:-0}" \
-            "${ERROR:-}" "$RUN_DATE" <<'PYEOF'
+            "${ERROR:-}" "$INFRA_ERROR" "$RUN_DATE" <<'PYEOF'
 import json, sys
 (_, mkey, scenario, scale, kind, task_passed, tool_emitted,
- tokens_in, tokens_out, latency_ms, iterations, error, run_date) = sys.argv
+ tokens_in, tokens_out, latency_ms, iterations, error, infra_error, run_date) = sys.argv
 row = {
     'model': mkey,
     'scenario': scenario,
@@ -572,6 +662,7 @@ row = {
     'latency_ms': int(latency_ms) if latency_ms.isdigit() else 0,
     'iterations': int(iterations) if iterations.isdigit() else 0,
     'error': error[:300],
+    'infra_error': infra_error == 'true',
     'run_date': run_date,
 }
 print(json.dumps(row))

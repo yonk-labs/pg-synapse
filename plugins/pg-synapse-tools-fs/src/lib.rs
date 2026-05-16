@@ -13,6 +13,15 @@
 //! 4. Canonicalizes the deepest existing ancestor of the joined path.
 //! 5. Verifies the result starts with the canonicalized root. If not, returns
 //!    an `InvalidInput` error (catches symlink escapes).
+//!
+//! ## Arg-alias leniency
+//!
+//! Models frequently name tool arguments differently from the canonical field
+//! names. Every input struct accepts the most common variants via
+//! `#[serde(alias = "...")]`. The JSON schema still advertises only the
+//! canonical names (schemars derives from field names, not aliases), so the
+//! model is guided toward canonical names while aliased variants are silently
+//! accepted at deserialization time.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -175,9 +184,19 @@ fn coerce_string_to_field(input: Value, field: &str) -> Value {
 const MAX_FILE_BYTES: u64 = 1024 * 1024; // 1 MiB
 
 /// Input schema for `read_file`.
+///
+/// Canonical field: `path`. Accepted aliases: `file`, `filename`, `filepath`,
+/// `file_path`, `filePath`.
 #[derive(Deserialize, JsonSchema, Debug)]
 struct ReadFileInput {
     /// Path to the file to read, relative to the sandbox root.
+    #[serde(
+        alias = "file",
+        alias = "filename",
+        alias = "filepath",
+        alias = "file_path",
+        alias = "filePath"
+    )]
     path: String,
 }
 
@@ -251,12 +270,30 @@ impl Tool for ReadFileTool {
 // ---------------------------------------------------------------------------
 
 /// Input schema for `write_file`.
+///
+/// Canonical fields: `path`, `content`. Path aliases: `file`, `filename`,
+/// `filepath`, `file_path`, `filePath`. Content aliases: `text`, `data`,
+/// `body`, `file_content`, `contents`.
 #[derive(Deserialize, JsonSchema, Debug)]
 struct WriteFileInput {
     /// Path to write, relative to the sandbox root. Parent directories are
     /// created automatically.
+    #[serde(
+        alias = "file",
+        alias = "filename",
+        alias = "filepath",
+        alias = "file_path",
+        alias = "filePath"
+    )]
     path: String,
     /// File contents as a UTF-8 string.
+    #[serde(
+        alias = "text",
+        alias = "data",
+        alias = "body",
+        alias = "file_content",
+        alias = "contents"
+    )]
     content: String,
 }
 
@@ -315,13 +352,39 @@ impl Tool for WriteFileTool {
 // ---------------------------------------------------------------------------
 
 /// Input schema for `edit_file`.
+///
+/// Canonical fields: `path`, `old`, `new`. Path aliases: `file`, `filename`,
+/// `filepath`, `file_path`, `filePath`. Old-text aliases: `old_string`,
+/// `old_str`, `search`, `find`, `from`. New-text aliases: `new_string`,
+/// `new_str`, `replace`, `replacement`, `to`.
 #[derive(Deserialize, JsonSchema, Debug)]
 struct EditFileInput {
     /// Path to the file to edit, relative to the sandbox root.
+    #[serde(
+        alias = "file",
+        alias = "filename",
+        alias = "filepath",
+        alias = "file_path",
+        alias = "filePath"
+    )]
     path: String,
     /// Exact text to find. Must appear exactly once in the file.
+    #[serde(
+        alias = "old_string",
+        alias = "old_str",
+        alias = "search",
+        alias = "find",
+        alias = "from"
+    )]
     old: String,
     /// Replacement text.
+    #[serde(
+        alias = "new_string",
+        alias = "new_str",
+        alias = "replace",
+        alias = "replacement",
+        alias = "to"
+    )]
     new: String,
 }
 
@@ -401,11 +464,21 @@ impl Tool for EditFileTool {
 // ---------------------------------------------------------------------------
 
 /// Input schema for `list_files`.
+///
+/// Canonical field: `dir`. Accepted aliases: `directory`, `folder`,
+/// `dir_path`, `dirpath`, `path` (models often say `path` for list_files).
 #[derive(Deserialize, JsonSchema, Debug)]
 struct ListFilesInput {
     /// Directory to list, relative to the sandbox root. Defaults to "." (the
     /// root itself).
-    #[serde(default = "default_dot")]
+    #[serde(
+        default = "default_dot",
+        alias = "directory",
+        alias = "folder",
+        alias = "dir_path",
+        alias = "dirpath",
+        alias = "path"
+    )]
     dir: String,
 }
 
@@ -500,13 +573,31 @@ impl Tool for ListFilesTool {
 const GREP_MAX_MATCHES: usize = 200;
 
 /// Input schema for `grep`.
+///
+/// Canonical fields: `pattern`, `path`. Pattern aliases: `query`, `search`,
+/// `regex`, `q`, `text`. Path aliases: `file`, `filename`, `filepath`,
+/// `file_path`, `filePath`.
 #[derive(Deserialize, JsonSchema, Debug)]
 struct GrepInput {
     /// Plain substring to search for (not a regex).
+    #[serde(
+        alias = "query",
+        alias = "search",
+        alias = "regex",
+        alias = "q",
+        alias = "text"
+    )]
     pattern: String,
     /// File or directory to search. Defaults to ".". When a directory is
     /// given, the search recurses into subdirectories.
-    #[serde(default = "default_dot")]
+    #[serde(
+        default = "default_dot",
+        alias = "file",
+        alias = "filename",
+        alias = "filepath",
+        alias = "file_path",
+        alias = "filePath"
+    )]
     path: String,
 }
 

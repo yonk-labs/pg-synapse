@@ -317,3 +317,174 @@ async fn test_grep_single_file() {
         panic!("expected Json from grep");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Arg-alias leniency tests (B12)
+// Each test verifies that a common LLM alias is accepted at deserialization.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_alias_read_file_via_file_field() {
+    // Models often say {"file": "x.txt"} instead of {"path": "x.txt"}.
+    let (reg, dir) = setup();
+    std::fs::write(dir.path().join("alias_test.txt"), b"alias content").unwrap();
+
+    let out = call(&reg, "read_file", json!({ "file": "alias_test.txt" }))
+        .await
+        .expect("read_file should accept 'file' alias for path");
+    assert!(
+        matches!(&out, ToolOutput::Text(s) if s == "alias content"),
+        "unexpected output: {out:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_alias_write_file_via_filename_and_text() {
+    // Models sometimes say {"filename": ..., "text": ...}.
+    let (reg, _dir) = setup();
+
+    let w = call(
+        &reg,
+        "write_file",
+        json!({ "filename": "aliaswrite.txt", "text": "written via aliases" }),
+    )
+    .await
+    .expect("write_file should accept 'filename'/'text' aliases");
+    assert!(matches!(w, ToolOutput::Json(_)));
+
+    let r = call(&reg, "read_file", json!({ "path": "aliaswrite.txt" }))
+        .await
+        .expect("read back");
+    assert!(
+        matches!(&r, ToolOutput::Text(s) if s == "written via aliases"),
+        "unexpected: {r:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_alias_list_files_via_directory() {
+    // Models often say {"directory": "subdir"} for list_files.
+    let (reg, dir) = setup();
+    std::fs::create_dir(dir.path().join("mydir")).unwrap();
+    std::fs::write(dir.path().join("mydir/x.txt"), b"x").unwrap();
+
+    let out = call(&reg, "list_files", json!({ "directory": "mydir" }))
+        .await
+        .expect("list_files should accept 'directory' alias for dir");
+    if let ToolOutput::Json(v) = out {
+        let entries = v["entries"].as_array().expect("entries");
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"x.txt"), "expected x.txt, got {names:?}");
+    } else {
+        panic!("expected Json from list_files");
+    }
+}
+
+#[tokio::test]
+async fn test_alias_list_files_via_path_field() {
+    // Some models say {"path": "."} for list_files.
+    let (reg, dir) = setup();
+    std::fs::write(dir.path().join("rootfile.txt"), b"r").unwrap();
+
+    let out = call(&reg, "list_files", json!({ "path": "." }))
+        .await
+        .expect("list_files should accept 'path' alias for dir");
+    if let ToolOutput::Json(v) = out {
+        let entries = v["entries"].as_array().expect("entries");
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            names.contains(&"rootfile.txt"),
+            "expected rootfile.txt, got {names:?}"
+        );
+    } else {
+        panic!("expected Json from list_files with path alias");
+    }
+}
+
+#[tokio::test]
+async fn test_alias_edit_file_via_old_string_new_string() {
+    // Claude-style tool use sends {"old_string": ..., "new_string": ...}.
+    let (reg, _dir) = setup();
+    call(
+        &reg,
+        "write_file",
+        json!({ "path": "editalias.txt", "content": "alpha beta gamma" }),
+    )
+    .await
+    .unwrap();
+
+    let out = call(
+        &reg,
+        "edit_file",
+        json!({
+            "path": "editalias.txt",
+            "old_string": "beta",
+            "new_string": "DELTA"
+        }),
+    )
+    .await
+    .expect("edit_file should accept 'old_string'/'new_string' aliases");
+    assert!(matches!(out, ToolOutput::Json(_)));
+
+    let r = call(&reg, "read_file", json!({ "path": "editalias.txt" }))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&r, ToolOutput::Text(s) if s == "alpha DELTA gamma"),
+        "unexpected: {r:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_alias_grep_via_query_field() {
+    // Some models call the pattern field "query" or "search".
+    let (reg, dir) = setup();
+    std::fs::write(dir.path().join("grep_alias.txt"), b"foo bar\nbaz qux\n").unwrap();
+
+    let out = call(
+        &reg,
+        "grep",
+        json!({ "query": "bar", "path": "grep_alias.txt" }),
+    )
+    .await
+    .expect("grep should accept 'query' alias for pattern");
+    if let ToolOutput::Json(v) = out {
+        let matches = v["matches"].as_array().expect("matches");
+        assert_eq!(
+            matches.len(),
+            1,
+            "expected 1 match for 'bar', got {matches:?}"
+        );
+        assert!(matches[0]["line"].as_str().unwrap().contains("bar"));
+    } else {
+        panic!("expected Json from grep with query alias");
+    }
+}
+
+#[tokio::test]
+async fn test_alias_write_file_via_filepath_and_contents() {
+    // filepath and contents are also common.
+    let (reg, _dir) = setup();
+
+    call(
+        &reg,
+        "write_file",
+        json!({ "filepath": "fp_alias.txt", "contents": "written via filepath+contents" }),
+    )
+    .await
+    .expect("write_file should accept 'filepath'/'contents' aliases");
+
+    let r = call(&reg, "read_file", json!({ "path": "fp_alias.txt" }))
+        .await
+        .expect("read back");
+    assert!(
+        matches!(&r, ToolOutput::Text(s) if s == "written via filepath+contents"),
+        "unexpected: {r:?}"
+    );
+}

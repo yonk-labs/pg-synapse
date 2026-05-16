@@ -257,3 +257,62 @@ ORT_DYLIB_PATH=... cargo pgrx install --pg-config .../pg_config \
   --features pg17,embed-ort,provider-llama-cpp,provider-anthropic,tools-fs \
   --no-default-features
 ```
+
+## v0.1.1 B12: fs arg-alias leniency + harness robustness
+
+**fs tool arg aliases.** The neutral fs benchmark revealed that models (gemma-4-E2B/E4B,
+qwen3.5-2b/0.8b) emit tool calls with aliased argument names rather than the canonical
+field names. For example, `{"file":"x.txt"}` instead of `{"path":"x.txt"}`.
+`#[serde(alias = "...")]` was added to every fs tool input struct:
+
+- `path` on read_file/write_file/edit_file/grep: aliases `file`, `filename`, `filepath`,
+  `file_path`, `filePath`
+- `content` on write_file: aliases `text`, `data`, `body`, `file_content`, `contents`
+- `dir` on list_files: aliases `directory`, `folder`, `dir_path`, `dirpath`, `path`
+- `old` on edit_file: aliases `old_string`, `old_str`, `search`, `find`, `from`
+- `new` on edit_file: aliases `new_string`, `new_str`, `replace`, `replacement`, `to`
+- `pattern` on grep: aliases `query`, `search`, `regex`, `q`, `text`
+
+The `#[derive(JsonSchema)]` is still used (no schema conflict with aliases); schemars derives
+the schema from the canonical field names, so the advertised schema remains clean. Seven alias
+unit tests were added to `plugins/pg-synapse-tools-fs/tests/fs.rs`.
+
+**Harness robustness.** `bench/run_bench.sh` now:
+
+1. Calls `ensure_pg_ready()` before the model loop: retries `psql -c 'SELECT 1'` up to 20s,
+   verifies `pg_synapse_pgrx` is in `pg_available_extensions`, hard-fails with a clear message
+   if not. Prevents every model cell from failing with a CREATE EXTENSION error when the issue
+   is a stopped Postgres server.
+2. `install_extension_with_retry()`: wraps CREATE EXTENSION in 3 attempts with 2s backoff;
+   records `infra_error=true` in the JSONL row on persistent failure.
+3. `warmup_llama_server()`: fires one tiny chat completion after the server passes
+   `wait_for_llama_server`, ensuring the model is fully loaded before timed scenarios.
+4. Network-error retry: detects "network error" or "error sending request" in the execute
+   output and retries the agent execute once.
+5. `infra_error` field added to every JSONL row. Consumers (MODEL-COMPATIBILITY.md,
+   min-specs.md) exclude infra-error rows from model verdicts.
+
+**Authoritative fs leaderboard (B12, 2026-05-16):**
+
+| model | fs pass | fs tool-emit | verdict |
+|-------|---------|-------------|---------|
+| vllm-qwen3-coder | 3/3 | 3/3 | WORKS |
+| openai-gpt5-mini | 3/3 | 3/3 | WORKS |
+| qwen3-4b-2507 | 3/3 | 3/3 | WORKS |
+| qwen3.5-0.8b | 2/3 | 1/3 | PARTIAL |
+| gemma-4-E2B-it | 1/3 | 1/3 | PARTIAL |
+| gemma-4-E4B-it | 1/3 | 1/3 | PARTIAL |
+| qwen2.5-7b | 1/3 | 2/3 | PARTIAL |
+| qwen3.5-2b | 1/3* | 0/3 | PARTIAL |
+| llama-3.2-3b | 0/3 | 0/3 | NO |
+| smollm3-3b | 0/3 | 0/3 | NO |
+| granite-4.0-h-1b | 0/3 | 0/3 | NO |
+| granite-4.0-tiny-preview | 0/3 | 0/3 | NO |
+
+*qwen3.5-2b f2_edit pass=true with lat=0/tool_error is an assertion artifact, not a real pass.
+
+The gemma/qwen3.5 models still trigger `missing field path` on f1 and f3 even after the alias
+fix. Investigation showed those models used a field name not in our alias set (the error
+`missing field path` means the payload had none of: path/file/filename/filepath/file_path/filePath).
+Likely the model sent a bare string or an unrecognized field. Further alias extension may help
+but was not pursued in B12.
