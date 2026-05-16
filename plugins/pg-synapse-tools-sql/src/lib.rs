@@ -102,8 +102,11 @@ impl Tool for SqlQueryTool {
 /// Arguments accepted by [`SqlExecTool`].
 #[derive(JsonSchema, Deserialize)]
 struct SqlExecArgs {
-    /// SQL statement (INSERT / UPDATE / DELETE) with `$1, $2, ...` placeholders.
-    statement: String,
+    /// SQL statement (INSERT / UPDATE / DELETE) with `$1, $2, ...`
+    /// placeholders. Accepts the legacy field name `statement` as an alias so
+    /// callers can use the same `query` key as `sql_query`.
+    #[serde(alias = "statement")]
+    query: String,
     /// Positional bind parameters as a JSON array. Pass `[]` if none.
     #[serde(default)]
     params: Vec<Value>,
@@ -136,7 +139,7 @@ impl Tool for SqlExecTool {
             })?;
         let rows = self
             .executor
-            .execute(&args.statement, &args.params, ctx.caller_role.as_deref())
+            .execute(&args.query, &args.params, ctx.caller_role.as_deref())
             .await?;
         Ok(ToolOutput::Json(
             serde_json::json!({ "rows_affected": rows }),
