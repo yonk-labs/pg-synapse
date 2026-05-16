@@ -1,0 +1,1 @@
+Use list_files to list all files in {{FSDIR}}/notes/. Then use read_file to read each file. Finally, use write_file to create {{FSDIR}}/index.txt containing one line per note in the format: <filename> => <first line of that file>. The lines must be sorted by filename (ascending). Include all note files and no other lines.

@@ -1,0 +1,1 @@
+Read the file {{FSDIR}}/config.ini, then use edit_file to change the line "timeout=30" to "timeout=99". Do not modify any other lines. The file must still contain retries=3 and mode=fast after your edit.

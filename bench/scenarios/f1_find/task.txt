@@ -1,0 +1,1 @@
+Search the files under {{FSDIR}}/data/ for the token THE_SECRET_TOKEN using grep. Then read the file that contains it to confirm. Finally, write the file {{FSDIR}}/found.txt containing exactly one line in the format: <filename>:<value> (for example: b.txt:42). The filename should be the basename only (no directory path).

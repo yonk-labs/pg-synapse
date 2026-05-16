@@ -35,9 +35,17 @@ MODEL_CACHE_DIR="$HOME/.cache/pg-synapse/models/bench"
 LLAMA_SERVER_BIN="/tmp/pgs-venv/bin/python3"
 OPENAI_KEY_FILE="$REPO_ROOT/.openai"
 
-PG_SOCKET_DIR="/home/yonk/.pgrx"
 PG_PORT="28817"
 PG_USER="$(whoami)"
+# Resolve the pgrx unix socket directory from postmaster.pid (line 5).
+# Fall back to /home/yonk/.pgrx if the pid file is absent or unreadable.
+_PGRX_DATA="/home/yonk/.pgrx/data-17"
+if [[ -f "$_PGRX_DATA/postmaster.pid" ]]; then
+    PG_SOCKET_DIR="$(sed -n '5p' "$_PGRX_DATA/postmaster.pid" | tr -d '[:space:]')"
+    PG_SOCKET_DIR="${PG_SOCKET_DIR:-/home/yonk/.pgrx}"
+else
+    PG_SOCKET_DIR="/home/yonk/.pgrx"
+fi
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -309,6 +317,17 @@ for MKEY in "${MODEL_KEYS[@]}"; do
 
         log "  Scenario: $SCENARIO"
 
+        # Load per-scenario metadata. Defaults: KIND=sql, TOOLS=sql_query,sql_exec.
+        SCENARIO_KIND="sql"
+        SCENARIO_TOOLS="sql_query,sql_exec"
+        if [[ -f "$SCENARIO_DIR/meta.env" ]]; then
+            # shellcheck source=/dev/null
+            source "$SCENARIO_DIR/meta.env"
+            SCENARIO_KIND="${KIND:-sql}"
+            SCENARIO_TOOLS="${TOOLS:-sql_query,sql_exec}"
+        fi
+        log "  Kind: $SCENARIO_KIND  Tools: $SCENARIO_TOOLS"
+
         if [[ $OPT_FORCE -eq 0 ]] && already_done "$MKEY" "$SCENARIO" "$OPT_SCALE"; then
             log "  Already done ($MKEY/$SCENARIO/scale=$OPT_SCALE); skipping. Use --force to re-run."
             continue
@@ -330,6 +349,13 @@ for MKEY in "${MODEL_KEYS[@]}"; do
         ERROR=""
         EXEC_JSON=""
 
+        # For fs scenarios, compute the per-run sandbox dir and FSDIR token.
+        # FSDIR is the relative path from the pgrx fs sandbox root (/tmp/pg_synapse_fs).
+        # DB is already "bench_<sanitized_model>_<scenario>", so use it directly.
+        FS_SANDBOX_ROOT="/tmp/pg_synapse_fs"
+        FSDIR_RELPATH="$DB"
+        FS_RUN_DIR="${FS_SANDBOX_ROOT}/${FSDIR_RELPATH}"
+
         # Cleanup any prior DB.
         drop_db "$DB"
         create_db "$DB"
@@ -339,24 +365,41 @@ for MKEY in "${MODEL_KEYS[@]}"; do
             ERROR="failed to CREATE EXTENSION pg_synapse_pgrx"
             warn "  $ERROR"
             drop_db "$DB"
-            record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
+            record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'kind':'$SCENARIO_KIND','task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
             continue
         fi
 
-        # Apply seed (render template first).
-        SEED_TMPL="$SCENARIO_DIR/seed.sql.tmpl"
-        if [[ -f "$SEED_TMPL" ]]; then
-            RENDERED_SEED="$(mktemp /tmp/bench_seed_XXXXXX.sql)"
-            render_seed "$SEED_TMPL" "$OPT_SCALE" > "$RENDERED_SEED"
-            if ! pg_run "$DB" -f "$RENDERED_SEED" > /dev/null 2>&1; then
-                ERROR="seed.sql failed"
-                warn "  $ERROR for $MKEY/$SCENARIO"
+        if [[ "$SCENARIO_KIND" == "sql" ]]; then
+            # Apply SQL seed (render template first).
+            SEED_TMPL="$SCENARIO_DIR/seed.sql.tmpl"
+            if [[ -f "$SEED_TMPL" ]]; then
+                RENDERED_SEED="$(mktemp /tmp/bench_seed_XXXXXX.sql)"
+                render_seed "$SEED_TMPL" "$OPT_SCALE" > "$RENDERED_SEED"
+                if ! pg_run "$DB" -f "$RENDERED_SEED" > /dev/null 2>&1; then
+                    ERROR="seed.sql failed"
+                    warn "  $ERROR for $MKEY/$SCENARIO"
+                    rm -f "$RENDERED_SEED"
+                    drop_db "$DB"
+                    record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'kind':'$SCENARIO_KIND','task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
+                    continue
+                fi
                 rm -f "$RENDERED_SEED"
-                drop_db "$DB"
-                record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
-                continue
             fi
-            rm -f "$RENDERED_SEED"
+        else
+            # KIND=fs: prepare a fresh per-run sandbox dir and run seed_fs.sh.
+            rm -rf "$FS_RUN_DIR"
+            mkdir -p "$FS_RUN_DIR"
+            SEED_FS="$SCENARIO_DIR/seed_fs.sh"
+            if [[ -f "$SEED_FS" ]]; then
+                if ! FS_ROOT="$FS_RUN_DIR" SCALE="$OPT_SCALE" bash "$SEED_FS"; then
+                    ERROR="seed_fs.sh failed"
+                    warn "  $ERROR for $MKEY/$SCENARIO"
+                    drop_db "$DB"
+                    record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'kind':'$SCENARIO_KIND','task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
+                    continue
+                fi
+                log "  FS seed done: $FS_RUN_DIR"
+            fi
         fi
 
         # Register LLM profile.
@@ -400,9 +443,27 @@ PYEOF
         SYSTEM_PROMPT="$(cat "$SCENARIO_DIR/system_prompt.txt")"
         TASK="$(cat "$SCENARIO_DIR/task.txt")"
 
+        # For fs scenarios, substitute {{FSDIR}} with the relative sandbox subdir.
+        if [[ "$SCENARIO_KIND" == "fs" ]]; then
+            SYSTEM_PROMPT="${SYSTEM_PROMPT//\{\{FSDIR\}\}/$FSDIR_RELPATH}"
+            TASK="${TASK//\{\{FSDIR\}\}/$FSDIR_RELPATH}"
+        fi
+
+        # Also substitute {{SCALE}} in task/system_prompt (same as seed rendering).
+        SYSTEM_PROMPT="${SYSTEM_PROMPT//\{\{SCALE\}\}/$OPT_SCALE}"
+        TASK="${TASK//\{\{SCALE\}\}/$OPT_SCALE}"
+
         # Escape single quotes for SQL.
         SYSTEM_PROMPT_ESC="${SYSTEM_PROMPT//\'/\'\'}"
         TASK_ESC="${TASK//\'/\'\'}"
+
+        # Build ARRAY literal from SCENARIO_TOOLS (comma-separated tool names).
+        TOOLS_ARRAY_SQL="$(python3 -c "
+import sys
+tools = sys.argv[1].split(',')
+arr = 'ARRAY[' + ','.join(repr(t.strip()) for t in tools) + ']'
+print(arr)
+" "$SCENARIO_TOOLS")"
 
         # Register agent.
         pg_run "$DB" -Atc "SELECT synapse.agent_create(
@@ -410,14 +471,14 @@ PYEOF
             \$\$${SYSTEM_PROMPT_ESC}\$\$,
             'conversation',
             '$PROFILE_NAME',
-            ARRAY['sql_query','sql_exec'],
+            ${TOOLS_ARRAY_SQL},
             10,
             $((OPT_TIMEOUT * 1000))
         );" > /dev/null 2>&1 || {
             ERROR="agent_create failed"
             warn "  $ERROR"
             drop_db "$DB"
-            record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
+            record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'kind':'$SCENARIO_KIND','task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
             continue
         }
 
@@ -462,14 +523,27 @@ print('true' if tcs else 'false')
             warn "  Agent error: $ERROR"
         fi
 
-        # Run assertion SQL.
-        ASSERT_SQL="$SCENARIO_DIR/assert.sql"
-        if [[ -f "$ASSERT_SQL" ]]; then
-            ASSERT_RESULT="$(pg_run "$DB" -Atc "$(cat "$ASSERT_SQL")" 2>/dev/null || echo 'false')"
-            if [[ "$ASSERT_RESULT" == "t" || "$ASSERT_RESULT" == "true" ]]; then
-                TASK_PASSED="true"
-            else
-                TASK_PASSED="false"
+        # Run assertion (SQL for KIND=sql, shell script for KIND=fs).
+        if [[ "$SCENARIO_KIND" == "sql" ]]; then
+            ASSERT_SQL="$SCENARIO_DIR/assert.sql"
+            if [[ -f "$ASSERT_SQL" ]]; then
+                ASSERT_RESULT="$(pg_run "$DB" -Atc "$(cat "$ASSERT_SQL")" 2>/dev/null || echo 'false')"
+                if [[ "$ASSERT_RESULT" == "t" || "$ASSERT_RESULT" == "true" ]]; then
+                    TASK_PASSED="true"
+                else
+                    TASK_PASSED="false"
+                fi
+            fi
+        else
+            ASSERT_FS="$SCENARIO_DIR/assert_fs.sh"
+            if [[ -f "$ASSERT_FS" ]]; then
+                if FS_ROOT="$FS_RUN_DIR" bash "$ASSERT_FS" > /dev/null 2>&1; then
+                    TASK_PASSED="true"
+                else
+                    TASK_PASSED="false"
+                    ASSERT_DETAIL="$(FS_ROOT="$FS_RUN_DIR" bash "$ASSERT_FS" 2>&1 || true)"
+                    log "  FS assert detail: $ASSERT_DETAIL"
+                fi
             fi
         fi
 
@@ -478,18 +552,19 @@ print('true' if tcs else 'false')
         # Record JSON line. Use python3 json.dumps for all values to avoid
         # bash interpolation breaking JSON booleans or special chars in error.
         record_result "$(python3 - \
-            "$MKEY" "$SCENARIO" "$OPT_SCALE" \
+            "$MKEY" "$SCENARIO" "$OPT_SCALE" "$SCENARIO_KIND" \
             "$TASK_PASSED" "$TOOL_EMITTED" \
             "${TOKENS_IN:-0}" "${TOKENS_OUT:-0}" \
             "${LATENCY_MS:-0}" "${ITERATIONS:-0}" \
             "${ERROR:-}" "$RUN_DATE" <<'PYEOF'
 import json, sys
-(_, mkey, scenario, scale, task_passed, tool_emitted,
+(_, mkey, scenario, scale, kind, task_passed, tool_emitted,
  tokens_in, tokens_out, latency_ms, iterations, error, run_date) = sys.argv
 row = {
     'model': mkey,
     'scenario': scenario,
     'scale': int(scale),
+    'kind': kind,
     'task_passed': task_passed == 'true',
     'tool_emitted': tool_emitted == 'true',
     'tokens_in': int(tokens_in) if tokens_in.isdigit() else 0,
