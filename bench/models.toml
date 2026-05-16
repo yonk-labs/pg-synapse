@@ -92,3 +92,18 @@ kind          = "local_gguf"
 gguf_repo     = "bartowski/Qwen2.5-7B-Instruct-GGUF"
 gguf_file     = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
 served_model_id = "Qwen2.5-7B-Instruct"
+
+[[model]]
+key           = "granite-4.0-h-1b"
+kind          = "local_gguf"
+gguf_repo     = "ibm-granite/granite-4.0-h-1b-GGUF"
+gguf_file     = "granite-4.0-h-1b-Q4_K_M.gguf"
+served_model_id = "granite-4.0-h-1b"
+# Granite 4 hybrid Mamba-2 arch; needs a current llama.cpp. Official IBM GGUF.
+
+[[model]]
+key           = "granite-4.0-tiny-preview"
+kind          = "local_gguf"
+gguf_repo     = "bartowski/ibm-granite_granite-4.0-tiny-preview-GGUF"
+gguf_file     = "ibm-granite_granite-4.0-tiny-preview-Q4_K_M.gguf"
+served_model_id = "granite-4.0-tiny-preview"
