@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg18", "embed-ort"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -22,6 +22,10 @@ pg_test   = []
 # Bundle the ORT-backed embeddings plugin. Requires the host environment to
 # expose libonnxruntime (1.24.x) via ORT_DYLIB_PATH or the system loader path.
 embed-ort = ["dep:pg-synapse-embeddings-ort"]
+# Bundle the llama.cpp provider plugin (OpenAI-compatible local server).
+provider-llama-cpp   = ["dep:pg-synapse-provider-llama-cpp"]
+# Bundle the Anthropic Claude provider plugin.
+provider-anthropic   = ["dep:pg-synapse-provider-anthropic"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -30,6 +34,8 @@ pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai"
 pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql", version = "0.1.1" }
 pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.1.1" }
 pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.1.1", optional = true }
+pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llama-cpp", version = "0.1.1", optional = true }
+pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

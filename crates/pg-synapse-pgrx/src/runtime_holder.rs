@@ -71,6 +71,14 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
         .with_plugin(pg_synapse_provider_openai::OpenAiProviderFactory)
         .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec));
 
+    #[cfg(feature = "provider-llama-cpp")]
+    let builder = builder
+        .with_plugin(pg_synapse_provider_llama_cpp::LlamaCppProviderFactory)
+        .with_plugin(pg_synapse_provider_llama_cpp::LlamaCppEmbeddingFactory);
+
+    #[cfg(feature = "provider-anthropic")]
+    let builder = builder.with_plugin(pg_synapse_provider_anthropic::AnthropicProviderFactory);
+
     #[cfg(feature = "embed-ort")]
     let builder = builder.with_plugin(pg_synapse_embeddings_ort::OrtEmbeddingFactory);
 
