@@ -25,9 +25,10 @@ use anyhow::Context;
 use clap::Parser;
 use pg_synapse_core::Runtime;
 use pg_synapse_provider_openai::OpenAiProviderFactory;
+use pg_synapse_tools_fs::FsToolsPlugin;
 use pg_synapse_tools_sql::SqlToolsPlugin;
 use sqlx::PgPool;
-use tracing::info;
+use tracing::{info, warn};
 
 use db::{SqlxProfileSource, SqlxSqlExecutor};
 
@@ -61,9 +62,28 @@ pub struct Cli {
 pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Runtime> {
     let executor = Arc::new(SqlxSqlExecutor::new(pool.clone()));
     let source = SqlxProfileSource::new(pool.clone());
-    Runtime::builder()
+
+    // Sandboxed filesystem tools root. Override via PG_SYNAPSE_FS_ROOT env var.
+    let fs_root =
+        std::env::var("PG_SYNAPSE_FS_ROOT").unwrap_or_else(|_| "/tmp/pg_synapse_fs".into());
+    if let Err(e) = std::fs::create_dir_all(&fs_root) {
+        warn!("could not create fs_tools root {fs_root}: {e}");
+    }
+
+    let mut builder = Runtime::builder()
         .with_plugin(OpenAiProviderFactory)
-        .with_plugin(SqlToolsPlugin::new(executor))
+        .with_plugin(SqlToolsPlugin::new(executor));
+
+    match FsToolsPlugin::new(&fs_root) {
+        Ok(plugin) => {
+            builder = builder.with_plugin(plugin);
+        }
+        Err(e) => {
+            warn!("FsToolsPlugin init failed, fs tools disabled: {e}");
+        }
+    }
+
+    builder
         .load_profiles_from(source)
         .build()
         .await

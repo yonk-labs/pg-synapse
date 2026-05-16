@@ -1,0 +1,23 @@
+[package]
+name        = "pg-synapse-tools-fs"
+description = "pg_synapse tool plugin: read_file, write_file, edit_file, list_files, grep (sandboxed)"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[dependencies]
+pg-synapse-core   = { path = "../../crates/pg-synapse-core", version = "0.1.1" }
+pg-synapse-macros = { path = "../../crates/pg-synapse-macros", version = "0.1.1" }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+schemars     = { workspace = true }
+tracing      = { workspace = true }
+
+[dev-dependencies]
+tokio    = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
+tempfile = "3"

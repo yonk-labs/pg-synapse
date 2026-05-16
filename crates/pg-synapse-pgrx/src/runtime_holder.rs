@@ -82,6 +82,24 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     #[cfg(feature = "embed-ort")]
     let builder = builder.with_plugin(pg_synapse_embeddings_ort::OrtEmbeddingFactory);
 
+    // Sandboxed filesystem tools (read_file, write_file, edit_file, list_files, grep).
+    // Root defaults to /tmp/pg_synapse_fs; set pg_synapse.fs_tools_root GUC to override.
+    // TODO: plumb as a proper GUC once pgrx GUC registration is added (see NOTES.md B10).
+    #[cfg(feature = "tools-fs")]
+    let builder = {
+        let fs_root = "/tmp/pg_synapse_fs";
+        if let Err(e) = std::fs::create_dir_all(fs_root) {
+            tracing::warn!("could not create fs_tools root {fs_root}: {e}");
+        }
+        match pg_synapse_tools_fs::FsToolsPlugin::new(fs_root) {
+            Ok(plugin) => builder.with_plugin(plugin),
+            Err(e) => {
+                tracing::warn!("FsToolsPlugin init failed, fs tools disabled: {e}");
+                builder
+            }
+        }
+    };
+
     builder
         .load_profiles_from(source)
         .build()

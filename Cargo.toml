@@ -10,7 +10,7 @@ members = [
     "plugins/pg-synapse-provider-llama-cpp",
     "plugins/pg-synapse-tools-http",
     "plugins/pg-synapse-tools-sql",
-    "crates/pg-synapse-sidecar",
+    "crates/pg-synapse-sidecar", "plugins/pg-synapse-tools-fs",
 ]
 
 [workspace.package]

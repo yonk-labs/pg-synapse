@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -26,6 +26,8 @@ embed-ort = ["dep:pg-synapse-embeddings-ort"]
 provider-llama-cpp   = ["dep:pg-synapse-provider-llama-cpp"]
 # Bundle the Anthropic Claude provider plugin.
 provider-anthropic   = ["dep:pg-synapse-provider-anthropic"]
+# Bundle the sandboxed filesystem tools plugin (read_file, write_file, edit_file, list_files, grep).
+tools-fs = ["dep:pg-synapse-tools-fs"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -36,6 +38,7 @@ pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", ver
 pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.1.1", optional = true }
 pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llama-cpp", version = "0.1.1", optional = true }
 pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.1.1", optional = true }
+pg-synapse-tools-fs        = { path = "../../plugins/pg-synapse-tools-fs", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

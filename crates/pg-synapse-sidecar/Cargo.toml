@@ -17,6 +17,7 @@ path = "src/main.rs"
 pg-synapse-core          = { path = "../pg-synapse-core",                          version = "0.1.1" }
 pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.1.1" }
 pg-synapse-tools-sql     = { path = "../../plugins/pg-synapse-tools-sql",          version = "0.1.1" }
+pg-synapse-tools-fs      = { path = "../../plugins/pg-synapse-tools-fs",           version = "0.1.1" }
 
 tokio        = { workspace = true }
 async-trait  = { workspace = true }

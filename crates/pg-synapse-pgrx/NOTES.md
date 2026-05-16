@@ -237,3 +237,23 @@ breaking text columns. The fix is in `spi_executor::json_to_datum`; no unsafe
 code is required. Four regression tests were added under the B5 heading in
 `lib.rs`: `bind_stringified_int_id_coerces`, `bind_numeric_id_still_works`,
 `bind_update_with_stringified_id`, `bind_text_predicate_still_works`.
+
+## v0.1.1 B10: pg-synapse-tools-fs wiring
+
+`tools-fs` is now in the `default` feature list. At kernel build time
+(`build_kernel_from_db`) the fs plugin is registered under
+`#[cfg(feature = "tools-fs")]`. The sandbox root is hardcoded to
+`/tmp/pg_synapse_fs` (created with `create_dir_all` if absent).
+
+**TODO (GUC):** Wire a `pg_synapse.fs_tools_root` string GUC so operators can
+configure the sandbox root without recompiling. The pgrx GUC registration API
+(via `pgrx::GucSetting`) would live in a new `gucs.rs` module. Deferred
+because the GUC fetch path requires a `_PG_init` hook that is not yet present;
+the hardcoded default is safe for current development use.
+
+**Install command used for B10:**
+```
+ORT_DYLIB_PATH=... cargo pgrx install --pg-config .../pg_config \
+  --features pg17,embed-ort,provider-llama-cpp,provider-anthropic,tools-fs \
+  --no-default-features
+```
