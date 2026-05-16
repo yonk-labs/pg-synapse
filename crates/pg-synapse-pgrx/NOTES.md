@@ -211,3 +211,29 @@ These supersede the phase-A findings above where they conflict.
   `SpiProfileSource::agents`, after each row is read and before it reaches
   the kernel. Timeout precedence: `default_timeout_ms` first
   (millisecond fidelity), then `default_timeout_seconds * 1000`.
+
+## v0.1.1 B5: stringified-param type coercion
+
+Benchmark run (gpt-5-mini s2_triage) revealed that the model emits integer
+ids as JSON strings (e.g. `params: ["api", "3"]`). The prior TEXT binding
+raised "operator does not exist: bigint = text".
+
+**Preferred approach attempted: UNKNOWNOID binding.**
+`DatumWithOid::new(CString, pg_sys::UNKNOWNOID)` was tried first. The
+Postgres `unknown` pseudo-type (OID 705) is what the parser assigns to
+untyped string literals, and its wire format is a null-terminated C string
+(typlen = -2). Tagging a CString datum with `UNKNOWNOID` and passing it to
+`SPI_execute_with_args` did resolve `bigint = $1` correctly, but raised
+"failed to find conversion function from unknown to text" for `text = $1`
+predicates. The `unknown -> text` implicit cast is wired in the parser's
+type-resolution path but is not available through the `SPI_execute_with_args`
+typed-parameter path. UNKNOWNOID is therefore unsafe as a general solution.
+
+**Chosen approach: numeric-coercion fallback.**
+`json_to_datum` for `Value::String` now tries `parse::<i64>()` (bind INT8),
+then `parse::<f64>()` with finite-only guard (bind FLOAT8), and falls back to
+TEXT. This covers the dominant LLM pattern (stringified integer id) without
+breaking text columns. The fix is in `spi_executor::json_to_datum`; no unsafe
+code is required. Four regression tests were added under the B5 heading in
+`lib.rs`: `bind_stringified_int_id_coerces`, `bind_numeric_id_still_works`,
+`bind_update_with_stringified_id`, `bind_text_predicate_still_works`.

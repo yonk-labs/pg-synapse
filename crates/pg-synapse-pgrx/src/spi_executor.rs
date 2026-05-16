@@ -45,19 +45,66 @@ static SAVEPOINT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Map one agent-supplied JSON value to a typed Postgres bind datum.
 ///
-/// * string  -> TEXT
+/// * string  -> numeric-coercion fallback (B5 fix, see below)
 /// * integer -> INT8 (`bigint`)
 /// * float   -> FLOAT8 (`double precision`)
 /// * bool    -> BOOL
 /// * null    -> typed NULL (TEXT NULL, a safe default)
 /// * object / array -> JSONB (the value re-serialized)
 ///
+/// ## B5: stringified-param coercion
+///
+/// LLMs routinely emit numeric ids as JSON strings, e.g. `"3"` instead of `3`.
+/// Before B5, JSON strings always bound as TEXT (TEXTOID), which caused Postgres
+/// to raise "operator does not exist: bigint = text" for predicates like
+/// `WHERE id = $1` against a bigint column.
+///
+/// The preferred fix (UNKNOWNOID binding) was attempted first. The Postgres
+/// `unknown` pseudo-type is what the parser assigns to untyped literals, and SPI
+/// exposes it via `UNKNOWNOID` (705) in `SPI_execute_with_args`. In practice,
+/// however, `SPI_execute_with_args` with `UNKNOWNOID` does not replicate the
+/// full parser-level implicit cast graph: Postgres raises "failed to find
+/// conversion function from unknown to text" when the target column IS text,
+/// because the `unknown -> text` path is only wired in the parser, not in the
+/// `SPI_execute_with_args` type-resolution path. This makes UNKNOWNOID unsafe
+/// as a general solution: it breaks text columns while fixing bigint columns.
+///
+/// Chosen approach: numeric-coercion fallback.
+/// * If the string parses as i64: bind INT8. Covers the dominant LLM pattern
+///   (stringified integer id). A genuine text column receiving "3" would now
+///   bind numeric; `text = bigint` has an implicit cast in Postgres so the
+///   comparison still works.
+/// * If the string parses as f64 (finite, round-trips exactly): bind FLOAT8.
+/// * Otherwise: bind TEXT as before.
+///
+/// Residual asymmetry (acceptable for v0.1.1): a text column storing the
+/// string "3" matched by `WHERE label = $1` with param `"3"` will now bind
+/// INT8 and succeed via Postgres's `text = bigint` implicit cast. The reverse
+/// (a numeric column compared to a non-numeric string) fails at the SQL level
+/// as it would anyway.
+///
 /// The returned datum owns its data via the `String` / `JsonB` it wraps;
 /// callers must keep the produced `Vec` alive for the duration of the SPI
 /// call (the slice of `DatumWithOid` borrows from it).
 fn json_to_datum(v: &Value) -> DatumWithOid<'static> {
     match v {
-        Value::String(s) => DatumWithOid::from(s.clone()),
+        Value::String(s) => {
+            // Numeric-coercion fallback for B5. Try i64 first (integer IDs are
+            // the dominant LLM-stringified case), then f64 (reject non-finite
+            // values and strings that do not round-trip cleanly), then TEXT.
+            if let Ok(i) = s.parse::<i64>() {
+                return DatumWithOid::from(i);
+            }
+            if let Ok(f) = s.parse::<f64>() {
+                // Reject NaN, infinity, and values where the string form differs
+                // from the f64 round-trip (e.g. "1.0abc" would parse partially
+                // via some parsers, but Rust's parse::<f64>() is strict).
+                if f.is_finite() {
+                    return DatumWithOid::from(f);
+                }
+            }
+            DatumWithOid::from(s.clone())
+        }
         Value::Bool(b) => DatumWithOid::from(*b),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {

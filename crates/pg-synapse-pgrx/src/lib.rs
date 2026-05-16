@@ -325,6 +325,75 @@ mod tests {
         assert_eq!(rows[0]["n"], json!(1));
     }
 
+    // ---- B5: stringified-param coercion (unknown-OID binding) ----
+    //
+    // LLMs routinely emit numeric ids as JSON strings, e.g. "3" instead of 3.
+    // Before B5, json_to_datum bound JSON strings as TEXT (TEXTOID), which
+    // caused Postgres to raise "operator does not exist: bigint = text" for
+    // predicates like `WHERE id = $1` when id is a bigint column.
+    // The fix binds JSON strings as UNKNOWNOID (OID 705) so Postgres applies
+    // the same context-driven coercion it uses for untyped SQL literals.
+
+    /// B5: a stringified integer id coerces to bigint via UNKNOWNOID binding.
+    /// This is the exact failure shape from the gpt-5-mini s2_triage benchmark
+    /// run: `WHERE id = $1` with params: ["3"].
+    #[pg_test]
+    fn bind_stringified_int_id_coerces() {
+        Spi::run("CREATE TEMP TABLE bq_b5a (id bigint primary key, label text)").unwrap();
+        Spi::run("INSERT INTO bq_b5a VALUES (3, 'three')").unwrap();
+
+        let rows = query_sql("SELECT label FROM bq_b5a WHERE id = $1", &[json!("3")])
+            .expect("stringified-int predicate must succeed, not raise bigint=text");
+        assert_eq!(rows.len(), 1, "must match exactly one row");
+        assert_eq!(rows[0]["label"], json!("three"));
+    }
+
+    /// B5 non-regression: a numeric JSON number still binds as INT8 and works.
+    #[pg_test]
+    fn bind_numeric_id_still_works() {
+        Spi::run("CREATE TEMP TABLE bq_b5b (id bigint primary key, label text)").unwrap();
+        Spi::run("INSERT INTO bq_b5b VALUES (3, 'three')").unwrap();
+
+        let rows = query_sql("SELECT label FROM bq_b5b WHERE id = $1", &[json!(3)])
+            .expect("numeric-int predicate must still work");
+        assert_eq!(rows.len(), 1, "must match exactly one row");
+        assert_eq!(rows[0]["label"], json!("three"));
+    }
+
+    /// B5: the exact s2_triage failure shape: UPDATE with mixed string params
+    /// where the second param is a stringified bigint id.
+    #[pg_test]
+    fn bind_update_with_stringified_id() {
+        Spi::run("CREATE TEMP TABLE bq_b5c (id bigint primary key, label text)").unwrap();
+        Spi::run("INSERT INTO bq_b5c VALUES (3, 'three')").unwrap();
+
+        let n = exec_sql(
+            "UPDATE bq_b5c SET label = $1 WHERE id = $2",
+            &[json!("updated"), json!("3")],
+        )
+        .expect("UPDATE with stringified id must succeed");
+        assert_eq!(n, 1, "must update exactly one row");
+
+        let stored: Option<String> = Spi::get_one("SELECT label FROM bq_b5c WHERE id = 3").unwrap();
+        assert_eq!(
+            stored.as_deref(),
+            Some("updated"),
+            "row must reflect the new label"
+        );
+    }
+
+    /// B5 non-regression: text column predicate with a plain string still works.
+    #[pg_test]
+    fn bind_text_predicate_still_works() {
+        Spi::run("CREATE TEMP TABLE bq_b5d (id bigint primary key, label text)").unwrap();
+        Spi::run("INSERT INTO bq_b5d VALUES (3, 'three')").unwrap();
+
+        let rows = query_sql("SELECT id FROM bq_b5d WHERE label = $1", &[json!("three")])
+            .expect("text-column predicate must still work after unknown-OID change");
+        assert_eq!(rows.len(), 1, "must match exactly one row");
+        assert_eq!(rows[0]["id"], json!(3));
+    }
+
     /// N1.3: a value that looks like a SQL injection payload is treated as
     /// pure data when bound positionally. The temp table survives and holds
     /// exactly the literal string.
