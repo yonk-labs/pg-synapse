@@ -55,14 +55,47 @@ pub struct Cli {
     pub admin_token: Option<String>,
 }
 
+/// Build (or rebuild) the kernel Runtime from the live database. Called once
+/// at startup and again after any admin mutation so freshly registered
+/// agents and profiles are visible without a process restart.
+pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Runtime> {
+    let executor = Arc::new(SqlxSqlExecutor::new(pool.clone()));
+    let source = SqlxProfileSource::new(pool.clone());
+    Runtime::builder()
+        .with_plugin(OpenAiProviderFactory)
+        .with_plugin(SqlToolsPlugin::new(executor))
+        .load_profiles_from(source)
+        .build()
+        .await
+        .context("building kernel Runtime")
+}
+
 /// Shared application state threaded into every axum handler via [`axum::extract::State`].
 pub struct AppState {
-    /// The kernel runtime (agent executor, LLM/embedding providers, tools).
-    pub runtime: Runtime,
+    /// The kernel runtime, swappable so admin writes take effect without a
+    /// restart. Read paths clone the inner `Arc` (cheap); admin paths rebuild
+    /// and swap under the write lock.
+    pub runtime: tokio::sync::RwLock<Arc<Runtime>>,
     /// Live database pool used by admin endpoints and async status queries.
     pub pool: PgPool,
     /// Admin token. None means admin endpoints are disabled.
     pub admin_token: Option<String>,
+}
+
+impl AppState {
+    /// Cheap snapshot of the current runtime for read/execute paths.
+    pub async fn runtime(&self) -> Arc<Runtime> {
+        self.runtime.read().await.clone()
+    }
+
+    /// Rebuild the runtime from the database and swap it in. Called after
+    /// admin mutations. Errors are returned to the caller to log; a failed
+    /// rebuild leaves the previous runtime in place.
+    pub async fn rebuild_runtime(&self) -> anyhow::Result<()> {
+        let rebuilt = build_runtime(&self.pool).await?;
+        *self.runtime.write().await = Arc::new(rebuilt);
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -80,19 +113,10 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("connecting to database: {}", cli.database_url))?;
 
-    let executor = Arc::new(SqlxSqlExecutor::new(pool.clone()));
-    let source = SqlxProfileSource::new(pool.clone());
-
-    let runtime = Runtime::builder()
-        .with_plugin(OpenAiProviderFactory)
-        .with_plugin(SqlToolsPlugin::new(executor))
-        .load_profiles_from(source)
-        .build()
-        .await
-        .context("building kernel Runtime")?;
+    let runtime = build_runtime(&pool).await?;
 
     let state = Arc::new(AppState {
-        runtime,
+        runtime: tokio::sync::RwLock::new(Arc::new(runtime)),
         pool,
         admin_token: cli.admin_token,
     });

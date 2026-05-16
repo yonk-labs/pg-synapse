@@ -211,7 +211,8 @@ async fn execute_handler(
 ) -> impl IntoResponse {
     info!("execute agent={}", body.agent);
     let result = state
-        .runtime
+        .runtime()
+        .await
         .execute_with_caller(&body.agent, &body.input, body.caller_role)
         .await;
 
@@ -272,7 +273,8 @@ async fn execute_async_handler(
     let caller_role = body.caller_role.clone();
     tokio::spawn(async move {
         let outcome = state2
-            .runtime
+            .runtime()
+            .await
             .execute_with_caller(&agent, &input, caller_role)
             .await;
 
@@ -371,7 +373,8 @@ async fn embed_handler(
     Json(body): Json<EmbedRequest>,
 ) -> impl IntoResponse {
     match state
-        .runtime
+        .runtime()
+        .await
         .embed(&body.text, body.profile.as_deref())
         .await
     {
@@ -398,7 +401,8 @@ async fn tool_call_handler(
     Json(body): Json<ToolCallRequest>,
 ) -> impl IntoResponse {
     match state
-        .runtime
+        .runtime()
+        .await
         .call_tool(&body.tool, body.input, body.caller_role)
         .await
     {
@@ -455,11 +459,16 @@ async fn admin_agent_handler(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "name": body.name })),
-        )
-            .into_response(),
+        Ok(_) => {
+            if let Err(e) = state.rebuild_runtime().await {
+                error!("runtime rebuild after admin write failed: {e}");
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "name": body.name })),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("admin_agent error: {e}");
             err_json(StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
@@ -498,11 +507,16 @@ async fn admin_llm_profile_handler(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "name": body.name })),
-        )
-            .into_response(),
+        Ok(_) => {
+            if let Err(e) = state.rebuild_runtime().await {
+                error!("runtime rebuild after admin write failed: {e}");
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "name": body.name })),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("admin_llm_profile error: {e}");
             err_json(StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
@@ -543,11 +557,16 @@ async fn admin_embedding_profile_handler(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "name": body.name })),
-        )
-            .into_response(),
+        Ok(_) => {
+            if let Err(e) = state.rebuild_runtime().await {
+                error!("runtime rebuild after admin write failed: {e}");
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "name": body.name })),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("admin_embedding_profile error: {e}");
             err_json(StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
@@ -576,11 +595,16 @@ async fn admin_secret_handler(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "name": body.name })),
-        )
-            .into_response(),
+        Ok(_) => {
+            if let Err(e) = state.rebuild_runtime().await {
+                error!("runtime rebuild after admin write failed: {e}");
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "name": body.name })),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("admin_secret error: {e}");
             err_json(StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
@@ -616,11 +640,16 @@ async fn admin_tool_handler(
     .await;
 
     match result {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(json!({ "ok": true, "name": body.name })),
-        )
-            .into_response(),
+        Ok(_) => {
+            if let Err(e) = state.rebuild_runtime().await {
+                error!("runtime rebuild after admin write failed: {e}");
+            }
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "name": body.name })),
+            )
+                .into_response()
+        }
         Err(e) => {
             error!("admin_tool error: {e}");
             err_json(StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
@@ -651,7 +680,7 @@ mod tests {
         let pool = PgPool::connect_lazy("postgres://localhost/nonexistent").unwrap();
 
         Arc::new(AppState {
-            runtime,
+            runtime: tokio::sync::RwLock::new(Arc::new(runtime)),
             pool,
             admin_token: admin_token.map(str::to_string),
         })
