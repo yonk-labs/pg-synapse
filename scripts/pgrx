@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Version-isolated cargo-pgrx wrapper.
+#
+# Why: cargo-pgrx is a single global binary in ~/.cargo/bin shared by every
+# process on the machine. This box also has a 0.17.0-edb pgrx dev tree whose
+# cargo-pgrx keeps getting restored into ~/.cargo/bin, clobbering any other
+# version. We pin the pgrx LIBRARY in Cargo.toml but cannot pin the CLI that
+# way. This wrapper keeps each cargo-pgrx version in its OWN isolated root
+# under ~/.local/share/pgrx-toolchains/<ver>/bin, immune to the global churn,
+# and runs `cargo pgrx` with that root first on PATH.
+#
+# Usage:
+#   scripts/pgrx <cargo-pgrx args>            # uses PGRX_VER (default 0.18.0)
+#   PGRX_VER=0.17.0 scripts/pgrx --version    # the isolated 0.17 toolchain
+#
+# The project pins pgrx = "=0.18.0", so 0.18.0 is the default. A 0.17 root is
+# available the same way for anyone who needs to match the box's edb tooling;
+# the two never overwrite each other.
+set -euo pipefail
+
+PGRX_VER="${PGRX_VER:-0.18.0}"
+ROOT="${HOME}/.local/share/pgrx-toolchains/${PGRX_VER}"
+BIN="${ROOT}/bin/cargo-pgrx"
+
+# Invoked directly, the binary prints "cargo <ver>"; via `cargo pgrx` it
+# prints "cargo-pgrx <ver>". Match on the trailing version token only.
+have_ver() { "$1" --version 2>/dev/null | awk '{print $NF}'; }
+
+ensure() {
+  if [[ -x "$BIN" ]] && [[ "$(have_ver "$BIN")" == "$PGRX_VER" ]]; then
+    return 0
+  fi
+  echo "[pgrx-wrapper] installing isolated cargo-pgrx ${PGRX_VER} into ${ROOT}" >&2
+  mkdir -p "$ROOT"
+  # --root installs ONLY into $ROOT/bin, never ~/.cargo/bin, so the global
+  # 0.17-edb restore cannot touch this copy.
+  cargo install --locked cargo-pgrx --version "${PGRX_VER}" --root "$ROOT" >&2
+  [[ "$(have_ver "$BIN")" == "$PGRX_VER" ]] \
+    || { echo "[pgrx-wrapper] FAILED to pin ${PGRX_VER}" >&2; exit 1; }
+}
+
+ensure
+# Prepend the isolated bin so `cargo pgrx` resolves to the pinned version,
+# regardless of what is in ~/.cargo/bin right now.
+export PATH="${ROOT}/bin:${PATH}"
+exec cargo pgrx "$@"

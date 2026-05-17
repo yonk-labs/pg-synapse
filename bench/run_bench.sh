@@ -149,7 +149,7 @@ ensure_pg_ready() {
         "SELECT 1 FROM pg_available_extensions WHERE name='pg_synapse_pgrx'" 2>/dev/null || true)"
     if [[ "$avail" != "1" ]]; then
         echo "[bench][FATAL] pg_synapse_pgrx not found in pg_available_extensions." >&2
-        echo "[bench][FATAL] Run: cargo pgrx install ... --features pg17,... first." >&2
+        echo "[bench][FATAL] Run: ./scripts/pgrx install ... --features pg17,... first (use the version-isolated wrapper, not bare cargo pgrx)." >&2
         exit 1
     fi
     log "pg_synapse_pgrx is available in pg_available_extensions."

@@ -489,3 +489,21 @@ pg17,embed-ort,provider-llama-cpp,provider-anthropic,tools-fs,tools-lede,tools-c
 ### oai_triage sub-agent seeding note
 
 Sub-agent rows (`math_specialist`, `history_specialist`) are inserted in `seed.sql.tmpl` referencing `llm_profile_main = 'bench_profile'`. The seed runs before the harness calls `llm_profile_set`, but the kernel is built lazily on first `synapse.execute()` (after the profile exists). This is safe.
+
+## Toolchain isolation (cargo-pgrx version churn)
+
+Root cause: `~/.cargo/bin/cargo-pgrx` is a single global binary shared
+machine-wide. This box has a `~/pgrx-develop-v0.17.0-edb-whpg` dev tree
+whose 0.17.0 cargo-pgrx is the environment default and keeps getting
+restored into the global slot, clobbering the 0.18.0 this project needs
+(Cargo.toml pins the pgrx LIBRARY to =0.18.0 but the CLI binary cannot
+be pinned that way). No rust-toolchain.toml / .cargo/config / container
+existed, so the host churn leaked into builds.
+
+Fix: `scripts/pgrx` runs cargo-pgrx from a version-isolated root
+`~/.local/share/pgrx-toolchains/<ver>/bin` (installed via
+`cargo install --root`, never `~/.cargo/bin`). v0.17 and v0.18 coexist
+in separate roots; the global binary is irrelevant. ALWAYS use
+`./scripts/pgrx ...` (default PGRX_VER=0.18.0) for install/start/stop/
+test, never bare `cargo pgrx`. Verified: wrapper stays 0.18.0 even after
+the global binary is forced back to 0.17.0.
