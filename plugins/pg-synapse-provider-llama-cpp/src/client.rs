@@ -40,18 +40,25 @@ pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8080/v1";
 ///
 /// llama-cpp-python (and many self-hosted runtimes) leave the model's raw
 /// output in `content` rather than post-processing it into the `tool_calls`
-/// JSON array. This function recognises the two common leaked formats so the
+/// JSON array. This function recognises the common leaked formats so the
 /// kernel can dispatch tool calls correctly even from under-configured servers.
 ///
 /// Formats recognised:
 ///
-/// 1. JSON inside `<tool_call>` tags (SmolLM3, Qwen3.5 native template):
+/// 1. JSON inside `<tool_call>` tags (Qwen3.5 native template):
 ///    `<tool_call>{"name": "sql_exec", "arguments": {...}}</tool_call>`
 ///
-/// 2. XML parameter blocks inside `<tool_call>` tags (Qwen3 function format):
+/// 2. XML parameter blocks inside `<tool_call>` tags (Qwen3 XML function format):
 ///    `<tool_call><function=sql_exec><parameter=query>...</parameter></function></tool_call>`
 ///
-/// 3. Bare or fenced JSON object:
+/// 3. Gemma-4 special-token format:
+///    `<|tool_call>call:sql_exec{query:<|"|>SELECT 1<|"|>}<tool_call|>`
+///    Gemma may also embed standard JSON (double-brace): fast-path via JSON parse.
+///
+/// 4. Python-style named kwargs in fenced python/tool_code blocks:
+///    ` ```python\nsql_exec(query="SELECT 1", params=[])\n``` `
+///
+/// 5. Bare or fenced JSON object (fallback):
 ///    ` ```json\n{"name": "sql_exec", "arguments": {...}}\n``` `
 ///
 /// Conservative: only fires when tool names match a sent tool and the parsed
@@ -104,7 +111,14 @@ fn extract_tool_calls_from_content(content: &str, tool_names: &[&str]) -> Vec<To
         results.extend(parse_gemma_tool_call(content, tool_names));
     }
 
-    // Format 4: fenced or bare JSON (only if none of the above matched).
+    // Format 4 (python_tools / xml_tools): Python named-kwarg calls in fenced
+    // code blocks or as bare lines. SmolLM3 and similar models emit calls like
+    // `sql_exec(query="SELECT 1", params=[])` inside python/tool_code blocks.
+    if results.is_empty() {
+        results.extend(parse_python_tool_calls(content, tool_names));
+    }
+
+    // Format 5: fenced or bare JSON (only if none of the above matched).
     if results.is_empty() {
         let candidates: Vec<&str> = {
             let mut c = Vec::new();
@@ -173,6 +187,122 @@ fn parse_llama_xml_function_block(inner: &str, tool_names: &[&str]) -> Option<To
     })
 }
 
+/// Parse Python-style named-kwarg tool calls from content (llama-cpp copy).
+///
+/// See the OpenAI provider for the full doc. This is a verbatim copy to keep
+/// both providers self-contained (no shared dep between plugin crates).
+fn parse_python_tool_calls(content: &str, tool_names: &[&str]) -> Vec<ToolCall> {
+    let mut results = Vec::new();
+    let mut candidates: Vec<&str> = Vec::new();
+    {
+        let mut s = content;
+        while let Some(open) = s.find("```") {
+            let after = &s[open + 3..];
+            let lang_end = after.find('\n').unwrap_or(after.len());
+            let lang = after[..lang_end].trim().to_lowercase();
+            let body_start = lang_end + 1;
+            if body_start >= after.len() {
+                break;
+            }
+            let body = &after[body_start..];
+            if let Some(close) = body.find("```") {
+                if matches!(lang.as_str(), "python" | "tool_code" | "tool_call" | "") {
+                    for line in body[..close].lines() {
+                        let t = line.trim();
+                        if !t.is_empty() {
+                            candidates.push(t);
+                        }
+                    }
+                }
+                s = &body[close + 3..];
+            } else {
+                break;
+            }
+        }
+    }
+    for line in content.lines() {
+        let t = line.trim();
+        if !t.is_empty() {
+            candidates.push(t);
+        }
+    }
+
+    for line in candidates {
+        let Some(paren) = line.find('(') else {
+            continue;
+        };
+        let name = line[..paren].trim();
+        if !tool_names.contains(&name) {
+            continue;
+        }
+        let Some(close) = line.rfind(')') else {
+            continue;
+        };
+        if close <= paren {
+            continue;
+        }
+        let args_str = &line[paren + 1..close];
+        if !args_str.contains('=') {
+            continue;
+        }
+
+        let mut args = serde_json::Map::new();
+        let mut depth: i32 = 0;
+        let mut token_start = 0;
+        let bytes = args_str.as_bytes();
+        let mut i = 0;
+        let mut tokens: Vec<&str> = Vec::new();
+        while i < bytes.len() {
+            match bytes[i] {
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth -= 1,
+                b',' if depth == 0 => {
+                    tokens.push(&args_str[token_start..i]);
+                    token_start = i + 1;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        tokens.push(&args_str[token_start..]);
+
+        for token in tokens {
+            let token = token.trim();
+            let Some(eq) = token.find('=') else { continue };
+            let key = token[..eq].trim().to_string();
+            if key.is_empty() || key.contains(' ') {
+                continue;
+            }
+            let raw_val = token[eq + 1..].trim();
+            let json_val: Value = if let Ok(v) = serde_json::from_str(raw_val) {
+                v
+            } else if (raw_val.starts_with('\'') && raw_val.ends_with('\''))
+                || (raw_val.starts_with('"') && raw_val.ends_with('"'))
+            {
+                let inner = &raw_val[1..raw_val.len() - 1];
+                Value::String(inner.to_string())
+            } else {
+                Value::String(raw_val.to_string())
+            };
+            args.insert(key, json_val);
+        }
+
+        if args.is_empty() {
+            continue;
+        }
+
+        let id = format!("call_{}", llama_uuid_hex());
+        results.push(ToolCall {
+            id,
+            name: name.to_string(),
+            args: Value::Object(args),
+        });
+        break;
+    }
+
+    results
+}
+
 /// Parse Gemma-4's native tool-call format:
 /// `<|tool_call>call:NAME{key:VALUE,...}<tool_call|>`
 ///
@@ -206,65 +336,76 @@ fn parse_gemma_tool_call(content: &str, tool_names: &[&str]) -> Vec<ToolCall> {
             .and_then(|s| s.strip_suffix('}'))
             .unwrap_or(args_blob);
 
-        // Parse key:value pairs. Values may be:
-        //   - quoted strings: <|"|>text<|"|>
-        //   - arrays: [<|"|>v1<|"|>,<|"|>v2<|"|>]
-        //   - bare numbers / true / false / null
-        let mut args = serde_json::Map::new();
-        let mut rem = args_blob;
-        while !rem.is_empty() {
-            rem = rem.trim_start_matches([',', ' ', '\n', '\t']);
-            if rem.is_empty() {
-                break;
-            }
-            // Key ends at ':'.
-            let Some(colon) = rem.find(':') else { break };
-            let key = rem[..colon].trim().to_string();
-            rem = &rem[colon + 1..];
-
-            let val_json: Value;
-            if rem.starts_with(QMARK) {
-                // Quoted string: find matching close QMARK.
-                let inner = &rem[QMARK.len()..];
-                let close = inner.find(QMARK).unwrap_or(inner.len());
-                let s = &inner[..close];
-                val_json = json!(s);
-                rem = &inner[close + QMARK.len()..];
-            } else if rem.starts_with('[') {
-                // Array: collect items up to ']'.
-                let Some(arr_end) = rem.find(']') else { break };
-                let arr_str = &rem[1..arr_end];
-                let mut items = Vec::new();
-                let mut a = arr_str;
-                while !a.is_empty() {
-                    a = a.trim_start_matches([',', ' ']);
-                    if a.is_empty() {
-                        break;
-                    }
-                    if a.starts_with(QMARK) {
-                        let inner = &a[QMARK.len()..];
-                        let close = inner.find(QMARK).unwrap_or(inner.len());
-                        items.push(json!(inner[..close].to_string()));
-                        a = &inner[close + QMARK.len()..];
-                    } else {
-                        // Bare value.
-                        let end = a.find([',', ']']).unwrap_or(a.len());
-                        let v: Value = serde_json::from_str(a[..end].trim()).unwrap_or(Value::Null);
-                        items.push(v);
-                        a = &a[end..];
-                    }
+        // Fast path: if the stripped blob is a valid JSON object (Gemma
+        // sometimes emits standard JSON inside its special-token format, e.g.
+        // `{{"content":"v","path":"p"}}` which yields `{"content":"v","path":"p"}`
+        // after one layer of brace stripping), parse it directly.
+        let args = if let Ok(Value::Object(map)) = serde_json::from_str::<Value>(args_blob.trim()) {
+            map
+        } else {
+            // Slow path: parse Gemma's key:value format.
+            // Values may be:
+            //   - quoted strings: <|"|>text<|"|>
+            //   - arrays: [<|"|>v1<|"|>,<|"|>v2<|"|>]
+            //   - bare numbers / true / false / null
+            let mut map = serde_json::Map::new();
+            let mut rem = args_blob;
+            while !rem.is_empty() {
+                rem = rem.trim_start_matches([',', ' ', '\n', '\t']);
+                if rem.is_empty() {
+                    break;
                 }
-                val_json = Value::Array(items);
-                rem = &rem[arr_end + 1..];
-            } else {
-                // Bare value (number, bool, null).
-                let end = rem.find(',').unwrap_or(rem.len());
-                val_json = serde_json::from_str(rem[..end].trim())
-                    .unwrap_or_else(|_| json!(rem[..end].trim()));
-                rem = &rem[end..];
+                // Key ends at ':'.
+                let Some(colon) = rem.find(':') else { break };
+                let key = rem[..colon].trim().to_string();
+                rem = &rem[colon + 1..];
+
+                let val_json: Value;
+                if rem.starts_with(QMARK) {
+                    // Quoted string: find matching close QMARK.
+                    let inner = &rem[QMARK.len()..];
+                    let close = inner.find(QMARK).unwrap_or(inner.len());
+                    let s = &inner[..close];
+                    val_json = json!(s);
+                    rem = &inner[close + QMARK.len()..];
+                } else if rem.starts_with('[') {
+                    // Array: collect items up to ']'.
+                    let Some(arr_end) = rem.find(']') else { break };
+                    let arr_str = &rem[1..arr_end];
+                    let mut items = Vec::new();
+                    let mut a = arr_str;
+                    while !a.is_empty() {
+                        a = a.trim_start_matches([',', ' ']);
+                        if a.is_empty() {
+                            break;
+                        }
+                        if a.starts_with(QMARK) {
+                            let inner = &a[QMARK.len()..];
+                            let close = inner.find(QMARK).unwrap_or(inner.len());
+                            items.push(json!(inner[..close].to_string()));
+                            a = &inner[close + QMARK.len()..];
+                        } else {
+                            // Bare value.
+                            let end = a.find([',', ']']).unwrap_or(a.len());
+                            let v: Value =
+                                serde_json::from_str(a[..end].trim()).unwrap_or(Value::Null);
+                            items.push(v);
+                            a = &a[end..];
+                        }
+                    }
+                    val_json = Value::Array(items);
+                    rem = &rem[arr_end + 1..];
+                } else {
+                    // Bare value (number, bool, null).
+                    let end = rem.find(',').unwrap_or(rem.len());
+                    val_json = serde_json::from_str(rem[..end].trim())
+                        .unwrap_or_else(|_| json!(rem[..end].trim()));
+                    rem = &rem[end..];
+                }
+                map.insert(key, val_json);
             }
-            args.insert(key, val_json);
-        }
+            map
+        };
 
         let id = format!("call_{}", llama_uuid_hex());
         results.push(ToolCall {
@@ -573,6 +714,35 @@ impl LlmProvider for LlamaCppProvider {
         if tool_calls.is_empty() && !req.tools.is_empty() {
             if let Some(ref text) = content {
                 if !text.is_empty() {
+                    // Debug mode: when PG_SYNAPSE_LOG_RAW_LLM=1 is set, append
+                    // the raw content to /tmp/pg_synapse_raw_llm.log so the
+                    // exact format each model emits is observable.
+                    if std::env::var("PG_SYNAPSE_LOG_RAW_LLM").as_deref() == Ok("1") {
+                        let snippet: String = text.chars().take(1200).collect();
+                        let line = format!(
+                            "RAW_LLM_NO_TOOLCALL model={} tools={} content={}\n",
+                            self.model,
+                            req.tools
+                                .iter()
+                                .map(|t| t.name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(","),
+                            snippet
+                        );
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("/tmp/pg_synapse_raw_llm.log")
+                            .and_then(|mut f| {
+                                use std::io::Write;
+                                f.write_all(line.as_bytes())
+                            });
+                        tracing::warn!(
+                            target: "pg_synapse_llama_cpp",
+                            "RAW_LLM_NO_TOOLCALL: {}",
+                            snippet
+                        );
+                    }
                     let names: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
                     let extracted = extract_tool_calls_from_content(text, &names);
                     if !extracted.is_empty() {

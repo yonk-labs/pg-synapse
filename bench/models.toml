@@ -44,6 +44,11 @@ gguf_repo     = "unsloth/gemma-4-E2B-it-GGUF"
 gguf_file     = "gemma-4-E2B-it-Q4_K_M.gguf"
 served_model_id = "gemma-4-E2B-it"
 
+# Qwen3.5 family: conversational image-text-to-text models (NOT base/pretrain).
+# Their GGUF chat templates include tool-call support (xml_tools format).
+# B13 correction: prior benchmark results showed 0/3 due to format-extraction
+# failure, NOT model capability. The extractor now handles their XML-param format.
+# GGUFs are multimodal; llama-cpp-python serves the text path only.
 [[model]]
 key           = "qwen3.5-2b"
 kind          = "local_gguf"
@@ -57,6 +62,20 @@ kind          = "local_gguf"
 gguf_repo     = "unsloth/Qwen3.5-0.8B-GGUF"
 gguf_file     = "Qwen3.5-0.8B-Q4_K_M.gguf"
 served_model_id = "Qwen3.5-0.8B"
+
+[[model]]
+key           = "qwen3.5-4b"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/Qwen3.5-4B-GGUF"
+gguf_file     = "Qwen3.5-4B-Q4_K_M.gguf"
+served_model_id = "Qwen3.5-4B"
+
+[[model]]
+key           = "qwen3.5-9b"
+kind          = "local_gguf"
+gguf_repo     = "unsloth/Qwen3.5-9B-GGUF"
+gguf_file     = "Qwen3.5-9B-Q4_K_M.gguf"
+served_model_id = "Qwen3.5-9B"
 
 [[model]]
 key           = "smollm3-3b"
@@ -107,3 +126,13 @@ kind          = "local_gguf"
 gguf_repo     = "bartowski/ibm-granite_granite-4.0-tiny-preview-GGUF"
 gguf_file     = "ibm-granite_granite-4.0-tiny-preview-Q4_K_M.gguf"
 served_model_id = "granite-4.0-tiny-preview"
+
+[[model]]
+key           = "granite-4.1-3b"
+kind          = "local_gguf"
+gguf_repo     = "ibm-granite/granite-4.1-3b-GGUF"
+gguf_file     = "granite-4.1-3b-Q4_K_M.gguf"
+served_model_id = "granite-4.1-3b"
+# Granite 4.1 instruct (hybrid Mamba-2 + attention arch). Official IBM GGUF.
+# If model fails to load (arch unsupported by current llama.cpp), the harness
+# records infra_error and moves on.

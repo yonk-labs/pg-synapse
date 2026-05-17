@@ -220,3 +220,84 @@ model level, not a parsing issue.
 No remaining failure across the 3 re-run models is attributable to lenient params
 deserialization. All outstanding failures are model-capability or model-formatting issues
 that cannot be resolved by deserializer changes.
+
+---
+
+## B13 Raw Payloads (Phase 1 capture, 2026-05-17)
+
+Environment: PG_SYNAPSE_LOG_RAW_LLM=1, scenario f1_find, tools=[grep,read_file,write_file].
+One representative call per model (the first RAW_LLM_NO_TOOLCALL entry captured).
+
+### qwen3.5-2b (Qwen3.5-2B conversational model)
+
+```
+<tool_call>
+<function=grep>
+<parameter=path>
+bench_qwen3_5_2b_f1_find/data
+</parameter>
+<parameter=pattern>
+THE_SECRET_TOKEN
+</parameter>
+</function>
+</tool_call>
+```
+
+Format: `<tool_call><function=NAME><parameter=KEY>value</parameter></function></tool_call>` (XML params).
+This was already handled by the B6 extractor. The grep and read_file calls extracted correctly.
+The final write_file step emits `<function=write_file></function>` (no parameters), which is a
+model-capability gap at 2B scale, not a parsing failure.
+
+**Prior claim "Qwen3.5 are base models" is WRONG.** Qwen3.5-2B is a conversational model with a
+tool-capable chat template. The B11 0/3 score was partly a methodology error and partly the
+final-step parameter gap. The correct diagnosis: the extractor worked for Qwen3.5 since B6; the
+remaining failures are model-correctness at 2B scale.
+
+### smollm3-3b (SmolLM3-3B)
+
+```
+<think>
+
+</think>
+To complete the task, you would first use the grep tool to search for the token THE_SECRET_TOKEN
+in all files under bench_smollm3_3b_f1_find/data/ recursively. This is done using
+`grep -r "THE_SECRET_TOKEN" /path/to/benchmark_directory`. Since I cannot execute commands
+directly here, I will describe the command and then provide a logical breakdown of how to
+implement it if you were doing this on your own.
+...
+```
+
+Format: pure prose describing shell commands. No structured tool-call format at any step.
+SmolLM3-3B CONFIRMED: cannot emit parseable tool calls in fs scenarios. This is a model capability
+limit, not a serving-stack or extractor issue. Verdict: NO.
+
+### gemma-4-E2B-it (Gemma-4-E2B-it)
+
+```
+<|tool_call>call:grep{path:<|"|>bench_gemma_4_E2B_it_f1_find/data<|"|>,pattern:<|"|>THE_SECRET_TOKEN<|"|>}<tool_call|>
+```
+
+(write_file step, the one that previously failed:)
+```
+<|tool_call>call:write_file{{"content":"b.txt:42","path":"bench_gemma_4_E2B_it_f1_find/found.txt"}}<tool_call|>
+```
+
+Format: `<|tool_call>call:NAME{...}<tool_call|>`. Standard steps use `key:<|"|>value<|"|>` format.
+The write_file step uses double-brace JSON `{{"key":"val"}}` inside the Gemma tokens.
+**B13 fix:** added a JSON fast-path in `parse_gemma_tool_call`/`parse_gemma_tool_call_openai`:
+after stripping one layer of `{}`, if the remainder is valid JSON, parse it directly instead of
+the key:value tokenizer. This fixed write_file extraction and moved gemma-4-E2B-it from 1/3 to
+3/3 fs, and gemma-4-E4B-it from 1/3 to 3/3 fs.
+
+## B13 Extractor Additions Summary
+
+1. **Gemma double-brace JSON fast-path** (both providers): when args blob after outer `{}` strip
+   is valid JSON, parse it directly. Handles `{{"key":"val",...}}` in `<|tool_call>` format.
+
+2. **python_tools extractor** (both providers): parses `tool_name(key="val", n=5)` in fenced
+   `python`/`tool_code`/`tool_call` blocks or bare lines. Named kwargs only (positional-only calls
+   rejected to avoid false positives). No measurable delta for tested models in this run, but
+   correct format coverage for kwarg-style output.
+
+3. **PG_SYNAPSE_LOG_RAW_LLM=1** debug flag (both providers): when set, appends raw content to
+   `/tmp/pg_synapse_raw_llm.log` at the point where `tool_calls` is empty and content is non-empty.
