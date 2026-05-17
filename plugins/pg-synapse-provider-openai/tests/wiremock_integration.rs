@@ -184,6 +184,68 @@ async fn complete_maps_429_to_rate_limited() {
 }
 
 #[tokio::test]
+async fn complete_429_parses_retry_after_header_into_ms() {
+    // Locks the PS-2a follow-up: a Retry-After header on a 429 must reach
+    // LlmError::RateLimited.retry_after_ms (RetryProvider already honors it).
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "2"))
+        .mount(&server)
+        .await;
+    let p = OpenAiProvider::new("gpt-test", server.uri());
+    let err = p
+        .complete(CompletionRequest {
+            messages: vec![user_msg("hi")],
+            tools: vec![],
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            params: serde_json::Value::Null,
+        })
+        .await
+        .unwrap_err();
+    match err {
+        LlmError::RateLimited {
+            provider,
+            retry_after_ms,
+        } => {
+            assert_eq!(provider, "openai");
+            assert_eq!(retry_after_ms, Some(2000), "2 seconds -> 2000ms");
+        }
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn complete_429_without_retry_after_header_is_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(429))
+        .mount(&server)
+        .await;
+    let p = OpenAiProvider::new("gpt-test", server.uri());
+    let err = p
+        .complete(CompletionRequest {
+            messages: vec![user_msg("hi")],
+            tools: vec![],
+            model: None,
+            temperature: None,
+            max_tokens: None,
+            params: serde_json::Value::Null,
+        })
+        .await
+        .unwrap_err();
+    match err {
+        LlmError::RateLimited {
+            retry_after_ms, ..
+        } => assert_eq!(retry_after_ms, None),
+        other => panic!("expected RateLimited, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn complete_maps_500_to_provider_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
