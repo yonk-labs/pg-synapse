@@ -30,38 +30,22 @@ One ordered list merging `BACKLOG.md` (original) and `next-backlog.md`
 
 ## The ordered master list
 
-### Wave 0 - finish what is in flight
+### Wave 0 - DONE
 
-1. **M-CLOSE-1: Refresh MODEL-COMPATIBILITY.md + finish B8 min-specs**
-   from the combined matrix data + the 10x pass-rate data (post
-   error-feedback fix). No new code; pure write-up. Closes B8.
-   STATUS: in-progress (data collected, write-up pending).
+M-CLOSE-1 (MODEL-COMPATIBILITY.md refresh + B8 min-specs), B18
+(tool-error feedback loop, 40%->0%), B19 (trace/governance kernel +
+SQL surface), P1/P2 (harness integrity), parity fidelity (zero-SQL
+lg_calc/oai_triage/adk_root), p1_pipeline (6-hop multi-tool
+zero-SQL scenario), http_get plugin registration. All committed.
 
-#### Wave 0 DONE (2026-05-17, this session):
-- **B18: Tool-error feedback loop.** `conversation.rs` + `react.rs`
-  executors now catch ToolErrors and feed them back to the model as
-  Tool-role messages instead of aborting. 40% failure -> 0% on 10x
-  empirical test. The single highest-leverage reliability change.
-- **B19: Trace/governance kernel + SQL surface.** `TraceLevel` enum
-  (off/error/info/debug/full), `ExecutionEvent`/`EventKind` types in
-  core. `synapse.agents.trace_level` column + CHECK constraint.
-  `synapse.agent_set_trace_level(name, level)` admin fn.
-  `synapse.purge_traces(older_than_days, agent_filter)` admin fn.
-  N2.2 freeze explicitly lifted for this surface by operator.
-- **P1: a1_ingest seed integrity fix.** DROP+recreate tables instead
-  of CREATE IF NOT EXISTS; eliminates stale-state false positives.
-- **Backlog: auto-fix memory/correction hints** added (v0.2, depends
-  on trace/governance).
+### Wave 1 - DONE
 
-### Wave 1 - foundational, unblocked by PS-8 (parallel-safe)
+PS-1 (ProviderCapabilities + pre-flight check, 7d19a49), PS-2a
+(RetryProvider jittered backoff, opt-in per G4, 81e363e). 156 core
+tests green. Minor follow-up: parse Retry-After header in OpenAI
+provider (retry layer works, provider sends None currently).
 
-2. **PS-1: Provider capability model + pre-flight verification.** No
-   `ProviderCapabilities` today. Highest unblock; PS-5 depends on it.
-3. **PS-2a: Reliability - jittered retry + Retry-After headers.**
-   Opt-in/feature-gated wrapper, never a silent core default (G4).
-   `retry_after_ms` is currently always None; fix the plumbing.
-
-### Wave 2 - build on Wave 1
+### Wave 2 - build on Wave 1 (NEXT)
 
 4. **PS-3: Canonical `ExecutionEvent` + wire the dead `synapse.traces`
    table.** Fills the already-decided D6 writer (do not redesign the
@@ -124,5 +108,6 @@ more provider plugins (not value until PS-1/PS-5 make it safe).
 
 ## Recommended next action
 
-Wave 0 item 1 (close MODEL-COMPATIBILITY + B8 from the matrix data),
-then Wave 1: PS-1 and PS-2a in parallel branches.
+Wave 2: PS-3 (wire synapse.traces writer using the existing
+ExecutionEvent types + TraceLevel filter) then PS-2b + PS-2c in
+parallel. PS-3 is the longest pole (PS-4 depends on it).
