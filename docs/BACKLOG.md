@@ -24,6 +24,8 @@ each item has a why and a rough size. Ordered by leverage.
 | `reflection` executor tuning | Exists; tune the critique loop + add a max-revisions GUC. | S | v0.1.x |
 | Per-agent loop budget GUCs | `max_iterations`/`cost_cap`/`timeout` are agent columns; add GUC defaults + a hard wall-clock kill. | S | v0.1.x |
 | Delegation recursion + cycle detection | Once `call_agent` ships: detect A->B->A cycles, not just depth. | S | follows delegation |
+| Trigger-fired agents (reactive) | A Postgres trigger calling `synapse.execute` on INSERT/UPDATE works today in the pgrx host, but synchronous: it runs the whole LLM loop inside the writing txn (blocks the writer, holds locks, recursion risk). Demonstrable now with a status-guard + `pg_trigger_depth()`; production-correct version needs the queued path below. Ship a `trigger-fires-triage` example showing the SAFE pattern. | S (demo) / M (safe) | v0.1.x demo, v0.2 safe |
+| Trigger -> enqueue -> worker pattern | The correct reactive design: trigger writes a queue row (or `NOTIFY`), an out-of-band worker runs `synapse.execute`. Decouples the write from LLM latency. Depends on the real background `execute_async` (bgworker) + `LISTEN/NOTIFY` (D8). | M | v0.2 |
 
 ## Benchmark / scenario follow-ups
 
