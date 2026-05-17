@@ -593,16 +593,32 @@ pub(crate) mod synapse {
     /// stuck-job reaper (v0.2) can detect and retry those.
     #[pg_extern(security_definer)]
     pub fn drain_queue(max_jobs: default!(i32, "10")) -> i32 {
-        // Claim up to max_jobs queued rows.
-        let claimed: Vec<(uuid::Uuid, String, String)> = Spi::connect(|client| {
+        // Atomic claim: a single UPDATE whose subquery does the
+        // FOR UPDATE SKIP LOCKED selection. An UPDATE is unambiguously a
+        // write, so this avoids the "SELECT FOR UPDATE not allowed in a
+        // non-volatile function" rejection that a standalone locking
+        // SELECT triggers in the SPI context. RETURNING gives us the
+        // claimed rows already marked 'running'.
+        let claimed: Vec<(uuid::Uuid, String, String)> = Spi::connect_mut(|client| {
+            // Data-modifying CTE: the UPDATE (with its FOR UPDATE SKIP
+            // LOCKED subquery) does the atomic claim; the outer SELECT
+            // over the CTE returns the claimed rows reliably as a
+            // readable tuptable.
             let table = client
-                .select(
-                    "SELECT job_id, agent, input \
-                     FROM synapse.agent_queue \
-                     WHERE status = 'queued' \
-                     ORDER BY enqueued_at \
-                     LIMIT $1 \
-                     FOR UPDATE SKIP LOCKED",
+                .update(
+                    "WITH claimed AS ( \
+                       UPDATE synapse.agent_queue \
+                       SET status='running', started_at=now() \
+                       WHERE job_id IN ( \
+                         SELECT job_id FROM synapse.agent_queue \
+                         WHERE status='queued' \
+                         ORDER BY enqueued_at \
+                         LIMIT $1 \
+                         FOR UPDATE SKIP LOCKED \
+                       ) \
+                       RETURNING job_id, agent, input \
+                     ) \
+                     SELECT job_id, agent, input FROM claimed",
                     None,
                     &[DatumWithOid::from(max_jobs)],
                 )
@@ -626,11 +642,12 @@ pub(crate) mod synapse {
         for (job_id, agent, input) in claimed {
             let job_str = job_id.to_string();
 
-            // Mark running + set started_at.
+            // Already marked 'running' by the atomic claim above; the
+            // legacy per-row mark is kept harmless for older callers.
             let upd_args: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(job_str.clone())];
             let _ = Spi::run_with_args(
                 "UPDATE synapse.agent_queue \
-                 SET status='running', started_at=now() \
+                 SET status='running', started_at=COALESCE(started_at, now()) \
                  WHERE job_id=$1::uuid",
                 &upd_args,
             );
@@ -725,6 +742,8 @@ pub(crate) mod synapse {
 DECLARE
   _res JSONB;
   _status TEXT;
+  _out TEXT;
+  _obj JSONB;
   _decision TEXT;
   _reason TEXT;
 BEGIN
@@ -733,15 +752,26 @@ BEGIN
   END IF;
   _res := synapse.execute({agent_lit}, ({input_expr})::text);
   _status := _res->>'status';
-  _decision := _res->'output'->>'decision';
+  -- The envelope output is the agent reply TEXT, not a JSON object.
+  -- Pull the first JSON object substring out of it and parse a decision.
+  _out := _res->>'output';
+  BEGIN
+    _obj := substring(_out from '\{{[\s\S]*\}}')::jsonb;
+    _decision := lower(_obj->>'decision');
+  EXCEPTION WHEN others THEN
+    _obj := NULL;
+    _decision := NULL;
+  END;
   IF _status IS DISTINCT FROM 'completed' THEN
-    _reason := COALESCE(_res->>'error', _res->>'output', 'agent did not complete');
+    _reason := COALESCE(_res->>'error', _out, 'agent did not complete');
     RAISE EXCEPTION 'synapse inline trigger rejected: %', _reason;
   END IF;
-  IF _decision = 'reject' THEN
+  IF _decision = 'reject'
+     OR (_decision IS NULL AND _out ~* '"decision"\s*:\s*"reject"') THEN
     _reason := COALESCE(
-      (_res->'output'->>'reason'),
-      (_res->>'output'),
+      _obj->>'reason',
+      substring(_out from '"reason"\s*:\s*"([^"]*)"'),
+      _out,
       'agent rejected row'
     );
     RAISE EXCEPTION 'synapse inline trigger rejected: %', _reason;
