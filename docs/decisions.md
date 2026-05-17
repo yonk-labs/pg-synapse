@@ -154,6 +154,57 @@ The operator specified additional constraints after M0 was scaffolded. These are
   6. Tears down.
 - Same script forms the basis of `make demo` and CI integration jobs.
 
+## D14 — Substrate boundary (ADR, PS-8)
+
+Status: accepted 2026-05-17. Supersedes nothing; formalizes the boundary
+that D1-D13 + N1-N6 + the design spec assume but never stated as a
+single rule.
+
+**Locked statement.** `pg-synapse` is a minimal agent-loop runtime
+substrate, nothing more. Its entire surface is: the six-trait kernel
+(`Executor`, `Tool`, `LlmProvider`, `EmbeddingProvider`,
+`MemoryProvider`, `Compressor`), the `Runtime` facade, the three
+reference executors, the two hosts (pgrx extension, sidecar), and the
+frozen `synapse.*` SQL surface. Anything opinionated, domain-specific,
+or product-shaped is a plugin crate or a product layer built ON the
+substrate, never merged into core. When a contributor asks "should
+capability X go in core", the default answer is no; the burden is on
+showing X is substrate, not product.
+
+**Do not borrow into core (explicit, non-exhaustive).** These are
+attractive in other agent frameworks and must stay out of
+`pg-synapse-core`:
+
+- graph / DAG orchestration engine (an `Executor` is the seam; a graph
+  is a plugin executor) - protects G3
+- server-style durable agent memory (a `MemoryProvider` plugin) -
+  protects G8
+- context compaction as a core default (a `Compressor` plugin crate,
+  `plugins/pg-synapse-compaction`) - protects G8
+- desktop / GUI / TUI shells (out of scope; psql is the surface)
+- actor-model runtime (the tokio + tower seam is the substrate)
+- unsandboxed code execution / CodeAct (only after a sandbox + rollback
+  design exists)
+- every LLM provider as a core dependency (providers are plugin crates)
+- prebuilt tower layers in core (recipes only) - protects G4
+- NL2SQL pipelines, semantic schema catalogs, output-guardrail
+  frameworks, model-fallback policy, tool-search/discovery indexes
+  (all product-facade or plugin, never core)
+
+**Why now.** Cheapest, highest-leverage anti-drift item. Every PS-stream
+item assumes this boundary; without the ADR the next contributor
+re-debates it and the kernel bloats. The adapter seam itself is already
+done (stable `Tool`/`Executor` traits).
+
+**Clean-room note.** This ADR and the companion matrix describe
+capability *categories* in generic terms only. They do not read,
+reference, name, or describe any private codebase; the category list is
+drawn from the project's own public design spec and backlog.
+
+**Companion artifact.** `docs/pg-synapse-boundary-matrix.md` maps each
+generic capability category to {core | plugin | product facade} with a
+one-line rationale. Referenced from `design.md` Section 3.
+
 ## Local repo status
 
 - The local git repository is ready (4 commits on `main`) with no remote configured.

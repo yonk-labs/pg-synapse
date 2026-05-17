@@ -53,6 +53,11 @@ Rust developers building agent loops today face a forced choice between adopting
 | Auto-discovery of project files | Filesystem semantics off | Paste into `agents.system_prompt` or `agents.soul` |
 | Pretty CLI / TUI | Out of scope | psql; observability via SQL |
 
+The substrate boundary that makes this Non-Goals table binding is
+formalized in ADR D14 (`decisions.md`), with a full capability
+placement table in `pg-synapse-boundary-matrix.md`. When unsure whether
+something belongs in core, consult that matrix.
+
 ## 4. Positioning
 
 ### Vs Rust agent-runtime landscape
