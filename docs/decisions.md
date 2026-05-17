@@ -154,7 +154,7 @@ The operator specified additional constraints after M0 was scaffolded. These are
   6. Tears down.
 - Same script forms the basis of `make demo` and CI integration jobs.
 
-## D14 — Substrate boundary (ADR, PS-8)
+## D14 - Substrate boundary (ADR, PS-8)
 
 Status: accepted 2026-05-17. Supersedes nothing; formalizes the boundary
 that D1-D13 + N1-N6 + the design spec assume but never stated as a
