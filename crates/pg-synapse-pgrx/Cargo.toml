@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-lede"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-lede", "tools-calc", "tools-clock", "tools-delegate"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -30,6 +30,12 @@ provider-anthropic   = ["dep:pg-synapse-provider-anthropic"]
 tools-fs = ["dep:pg-synapse-tools-fs"]
 # Bundle the lede compression tool plugin (lede_compress).
 tools-lede = ["dep:pg-synapse-tools-lede"]
+# Bundle the calculator tool plugin (calculator).
+tools-calc = ["dep:pg-synapse-tools-calc"]
+# Bundle the clock tool plugin (get_current_time).
+tools-clock = ["dep:pg-synapse-tools-clock"]
+# Bundle the delegation tool plugin (call_agent).
+tools-delegate = ["dep:pg-synapse-tools-delegate"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -42,6 +48,9 @@ pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llam
 pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.1.1", optional = true }
 pg-synapse-tools-fs        = { path = "../../plugins/pg-synapse-tools-fs", version = "0.1.1", optional = true }
 pg-synapse-tools-lede      = { path = "../../plugins/pg-synapse-tools-lede", version = "0.1.1", optional = true }
+pg-synapse-tools-calc      = { path = "../../plugins/pg-synapse-tools-calc", version = "0.1.1", optional = true }
+pg-synapse-tools-clock     = { path = "../../plugins/pg-synapse-tools-clock", version = "0.1.1", optional = true }
+pg-synapse-tools-delegate  = { path = "../../plugins/pg-synapse-tools-delegate", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

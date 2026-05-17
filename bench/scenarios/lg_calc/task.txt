@@ -1,0 +1,1 @@
+Compute (12 + 30) then multiply that by 7 using the calculator tool, then sql_exec INSERT the final number into lg.result as label 'answer'.

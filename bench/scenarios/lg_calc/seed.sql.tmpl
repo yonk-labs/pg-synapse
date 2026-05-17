@@ -1,0 +1,9 @@
+-- lg_calc seed: LangGraph calculator parity scenario.
+-- Creates a schema and result table for the agent to write into.
+
+CREATE SCHEMA IF NOT EXISTS lg;
+
+CREATE TABLE IF NOT EXISTS lg.result (
+    label TEXT NOT NULL,
+    value NUMERIC NOT NULL
+);

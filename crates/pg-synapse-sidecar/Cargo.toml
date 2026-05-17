@@ -19,6 +19,9 @@ pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai"
 pg-synapse-tools-sql     = { path = "../../plugins/pg-synapse-tools-sql",          version = "0.1.1" }
 pg-synapse-tools-fs      = { path = "../../plugins/pg-synapse-tools-fs",           version = "0.1.1" }
 pg-synapse-tools-lede    = { path = "../../plugins/pg-synapse-tools-lede",         version = "0.1.1" }
+pg-synapse-tools-calc    = { path = "../../plugins/pg-synapse-tools-calc",         version = "0.1.1" }
+pg-synapse-tools-clock   = { path = "../../plugins/pg-synapse-tools-clock",        version = "0.1.1" }
+pg-synapse-tools-delegate = { path = "../../plugins/pg-synapse-tools-delegate",   version = "0.1.1" }
 
 tokio        = { workspace = true }
 async-trait  = { workspace = true }

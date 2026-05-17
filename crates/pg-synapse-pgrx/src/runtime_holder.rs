@@ -11,6 +11,20 @@
 //! [`crate::spi_executor::SpiProfileSource`]) must execute on the backend
 //! thread that owns the transaction; a multi-thread tokio runtime would hand
 //! polling to a worker thread and break SPI.
+//!
+//! ## Delegate tool wiring (tools-delegate feature)
+//!
+//! `call_agent` needs an `Arc<Kernel>` to re-enter the runtime. This creates
+//! a bootstrapping cycle: the plugin must be registered BEFORE `build()`, but
+//! the kernel Arc only exists AFTER `build()`. We resolve it with a two-phase
+//! pattern:
+//!
+//! 1. During `build_kernel_from_db`, create `Arc<CallAgentTool>` (the shell)
+//!    and register it via `DelegateToolsPlugin`. Save the shell Arc in the
+//!    `DELEGATE_TOOL_PENDING` static.
+//! 2. In `kernel_handle`, after `Arc::new(built)` produces the final kernel
+//!    Arc, call `tool.inject(Arc::downgrade(&arc))` to wire the Weak handle.
+//!    Clear `DELEGATE_TOOL_PENDING` so subsequent rebuilds work cleanly.
 
 use std::sync::Arc;
 
@@ -20,8 +34,17 @@ use tokio::runtime::Runtime as TokioRuntime;
 
 use pg_synapse_core::Runtime as Kernel;
 
+#[cfg(feature = "tools-delegate")]
+use pg_synapse_tools_delegate::CallAgentTool;
+
 static TOKIO: OnceCell<TokioRuntime> = OnceCell::new();
 static KERNEL: OnceCell<Mutex<Option<Arc<Kernel>>>> = OnceCell::new();
+
+/// Holds the delegate tool shell between `build_kernel_from_db` (phase 1)
+/// and the `Arc::new(built)` moment in `kernel_handle` (phase 2). Protected
+/// by the same KERNEL Mutex so no extra synchronisation is needed.
+#[cfg(feature = "tools-delegate")]
+static DELEGATE_TOOL_PENDING: OnceCell<Mutex<Option<Arc<CallAgentTool>>>> = OnceCell::new();
 
 /// Build the shared tokio runtime. Called exactly once from `_PG_init`.
 pub fn initialize_tokio_runtime() {
@@ -33,6 +56,8 @@ pub fn initialize_tokio_runtime() {
             .expect("build tokio runtime"),
     );
     let _ = KERNEL.set(Mutex::new(None));
+    #[cfg(feature = "tools-delegate")]
+    let _ = DELEGATE_TOOL_PENDING.set(Mutex::new(None));
 }
 
 /// Borrow the shared tokio runtime.
@@ -48,7 +73,19 @@ pub fn kernel_handle() -> Result<Arc<Kernel>, String> {
     let mut guard = slot.lock();
     if guard.is_none() {
         let built = tokio().block_on(build_kernel_from_db())?;
-        *guard = Some(Arc::new(built));
+        let arc = Arc::new(built);
+
+        // Phase 2: inject the Weak handle into the pending delegate tool shell
+        // now that we have the final Arc<Kernel>.
+        #[cfg(feature = "tools-delegate")]
+        if let Some(pending_slot) = DELEGATE_TOOL_PENDING.get() {
+            let mut pending = pending_slot.lock();
+            if let Some(tool) = pending.take() {
+                tool.inject(Arc::downgrade(&arc));
+            }
+        }
+
+        *guard = Some(arc);
     }
     Ok(guard.as_ref().unwrap().clone())
 }
@@ -104,6 +141,28 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     // otherwise falls back to deterministic extractive compression.
     #[cfg(feature = "tools-lede")]
     let builder = builder.with_plugin(pg_synapse_tools_lede::LedeToolsPlugin::new());
+
+    // Calculator tool (add/sub/mul/div).
+    #[cfg(feature = "tools-calc")]
+    let builder = builder.with_plugin(pg_synapse_tools_calc::CalcToolsPlugin::new());
+
+    // Clock tool (get_current_time).
+    #[cfg(feature = "tools-clock")]
+    let builder = builder.with_plugin(pg_synapse_tools_clock::ClockToolsPlugin::new());
+
+    // Delegation tool (call_agent) -- two-phase wiring.
+    // Phase 1: create the shell, register it, park the ref in DELEGATE_TOOL_PENDING.
+    // Phase 2 happens in kernel_handle() after Arc::new(built) is available.
+    #[cfg(feature = "tools-delegate")]
+    let builder = {
+        let tool = Arc::new(CallAgentTool::empty());
+        if let Some(pending_slot) = DELEGATE_TOOL_PENDING.get() {
+            *pending_slot.lock() = Some(tool.clone());
+        }
+        builder.with_plugin(
+            pg_synapse_tools_delegate::DelegateToolsPlugin::with_tool(tool),
+        )
+    };
 
     builder
         .load_profiles_from(source)

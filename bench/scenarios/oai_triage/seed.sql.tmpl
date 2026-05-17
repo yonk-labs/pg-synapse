@@ -1,0 +1,66 @@
+-- oai_triage seed: OpenAI Agents SDK handoff/triage parity scenario.
+--
+-- Creates the output table and seeds two specialist sub-agent rows.
+-- The sub-agents reference 'bench_profile' which the harness creates AFTER
+-- the seed runs but BEFORE synapse.execute is called. The kernel is built
+-- lazily on first execute(), so the profile will exist by that time.
+--
+-- Implementation note: this scenario uses a single entry triage agent
+-- (created by the harness) that calls call_agent to delegate to specialist
+-- sub-agents seeded here. This mirrors the OpenAI SDK agent.as_tool() pattern.
+
+CREATE SCHEMA IF NOT EXISTS triage;
+
+CREATE TABLE IF NOT EXISTS triage.log (
+    answer TEXT NOT NULL
+);
+
+-- Seed the math specialist sub-agent.
+INSERT INTO synapse.agents (
+    name,
+    system_prompt,
+    executor_name,
+    llm_profile_main,
+    tools,
+    max_iterations,
+    timeout_ms
+) VALUES (
+    'math_specialist',
+    'You are a math expert. Answer the math question asked of you directly and concisely. Provide just the numeric answer and a brief explanation.',
+    'conversation',
+    'bench_profile',
+    ARRAY[]::text[],
+    10,
+    120000
+) ON CONFLICT (name) DO UPDATE
+    SET system_prompt = EXCLUDED.system_prompt,
+        executor_name = EXCLUDED.executor_name,
+        llm_profile_main = EXCLUDED.llm_profile_main,
+        tools = EXCLUDED.tools,
+        max_iterations = EXCLUDED.max_iterations,
+        timeout_ms = EXCLUDED.timeout_ms;
+
+-- Seed the history specialist sub-agent.
+INSERT INTO synapse.agents (
+    name,
+    system_prompt,
+    executor_name,
+    llm_profile_main,
+    tools,
+    max_iterations,
+    timeout_ms
+) VALUES (
+    'history_specialist',
+    'You are a history expert. Answer the history question asked of you directly and concisely.',
+    'conversation',
+    'bench_profile',
+    ARRAY[]::text[],
+    10,
+    120000
+) ON CONFLICT (name) DO UPDATE
+    SET system_prompt = EXCLUDED.system_prompt,
+        executor_name = EXCLUDED.executor_name,
+        llm_profile_main = EXCLUDED.llm_profile_main,
+        tools = EXCLUDED.tools,
+        max_iterations = EXCLUDED.max_iterations,
+        timeout_ms = EXCLUDED.timeout_ms;

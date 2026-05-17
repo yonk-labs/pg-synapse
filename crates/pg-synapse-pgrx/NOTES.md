@@ -365,3 +365,50 @@ fix. Investigation showed those models used a field name not in our alias set (t
 `missing field path` means the payload had none of: path/file/filename/filepath/file_path/filePath).
 Likely the model sent a bare string or an unrecognized field. Further alias extension may help
 but was not pursued in B12.
+
+## B-keystone: external-framework parity tools + scenarios
+
+### Three new tool plugins
+
+**`pg-synapse-tools-calc`** (calculator tool, add/sub/mul/div)
+Registered as feature `tools-calc`. Pure Rust, no unsafe. Serde aliases: `operation` for `op`, `x` for `a`, `y` for `b`. Division by zero returns `ToolError::Execution`.
+
+**`pg-synapse-tools-clock`** (get_current_time tool)
+Registered as feature `tools-clock`. Returns RFC 3339 timestamps. Supports UTC and fixed-offset (+HH:MM) timezones; IANA zone names fall back to UTC with a tracing warning. Uses `chrono` (workspace dep).
+
+**`pg-synapse-tools-delegate`** (call_agent tool)
+Registered as feature `tools-delegate`. Enables multi-agent delegation (OpenAI SDK handoff parity, ADK orchestrator parity). Depth guard via process-wide `AtomicU32`; max depth = 4. Returns sub-agent output as `ToolOutput::Text`.
+
+### Depth guard design choice
+
+The guard uses a process-wide `AtomicU32` (incremented on entry, decremented on exit even on error) rather than threading a `delegation_depth: u8` field through `ToolCtx`. Rationale: `Runtime::execute` starts a fresh `ExecutionContext` and does not forward any caller `ToolCtx`, so depth threading would require changes to `Runtime::execute`, `execute_inner`, `ExecutionContext`, and `Executor::execute`. The atomic is correct for pgrx (current-thread tokio, one request per backend at a time) and for the sidecar (nested awaits within one request are sequential). A concurrent-top-level-requests edge case exists in theory but not in practice for these hosts.
+
+### Arc<Runtime> circular-dependency resolution (two-phase wiring)
+
+`RuntimeBuilder` moves the `Registry` into `Arc` at `.build()` time; post-build insertion is not possible without interior mutability. The `DelegateToolsPlugin` pattern:
+
+1. Create `Arc<CallAgentTool::empty()>` (holds `OnceLock<Weak<Runtime>>`).
+2. Register it via `DelegateToolsPlugin::with_tool(tool.clone())` BEFORE `.build()`.
+3. After `.build()`, wrap the `Runtime` in `Arc`, then call `tool.inject(Arc::downgrade(&runtime_arc))`.
+
+pgrx host: the shell is stored in `DELEGATE_TOOL_PENDING` (a `OnceCell<Mutex<Option<Arc<CallAgentTool>>>>`) between `build_kernel_from_db` (phase 1) and `kernel_handle` (phase 2, where `Arc::new(built)` is created and the Weak is injected).
+
+sidecar: `build_runtime` is `async` and returns `Arc<Runtime>` directly, so phases 1 and 2 happen sequentially in the same function. The return type changed from `anyhow::Result<Runtime>` to `anyhow::Result<Arc<Runtime>>`.
+
+### Feature set for extension reinstall
+
+```
+pg17,embed-ort,provider-llama-cpp,provider-anthropic,tools-fs,tools-lede,tools-calc,tools-clock,tools-delegate
+```
+
+### Three external-framework benchmark scenarios
+
+`lg_calc`: LangGraph calculator parity. Two chained calculator calls, result stored in `lg.result`. Assert: `value = 294` (12+30)*7.
+
+`oai_triage`: OpenAI Agents SDK handoff/triage parity. Entry triage agent uses `call_agent` to delegate to `math_specialist` sub-agent (seeded in seed.sql.tmpl with `bench_profile`, which exists by execute time). Assert: `answer LIKE '%72%'` (18 * 4 = 72).
+
+`adk_root`: Google ADK root_agent + tool parity. Agent calls `get_current_time`, checks the iso8601 field, inserts true/false into `adk.probe`. Assert: `has_time = true`.
+
+### oai_triage sub-agent seeding note
+
+Sub-agent rows (`math_specialist`, `history_specialist`) are inserted in `seed.sql.tmpl` referencing `llm_profile_main = 'bench_profile'`. The seed runs before the harness calls `llm_profile_set`, but the kernel is built lazily on first `synapse.execute()` (after the profile exists). This is safe.

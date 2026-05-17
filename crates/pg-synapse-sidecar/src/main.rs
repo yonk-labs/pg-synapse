@@ -25,6 +25,9 @@ use anyhow::Context;
 use clap::Parser;
 use pg_synapse_core::Runtime;
 use pg_synapse_provider_openai::OpenAiProviderFactory;
+use pg_synapse_tools_calc::CalcToolsPlugin;
+use pg_synapse_tools_clock::ClockToolsPlugin;
+use pg_synapse_tools_delegate::{CallAgentTool, DelegateToolsPlugin};
 use pg_synapse_tools_fs::FsToolsPlugin;
 use pg_synapse_tools_lede::LedeToolsPlugin;
 use pg_synapse_tools_sql::SqlToolsPlugin;
@@ -60,7 +63,16 @@ pub struct Cli {
 /// Build (or rebuild) the kernel Runtime from the live database. Called once
 /// at startup and again after any admin mutation so freshly registered
 /// agents and profiles are visible without a process restart.
-pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Runtime> {
+///
+/// The delegate tool (call_agent) uses the two-phase wiring pattern:
+/// 1. A `CallAgentTool` shell is created and registered via `DelegateToolsPlugin`
+///    before `build()` is called.
+/// 2. After `build()`, the Runtime is wrapped in `Arc` and the shell is
+///    injected with `Arc::downgrade(&runtime_arc)`.
+///
+/// The final `Arc<Runtime>` is returned so the caller can store it; the caller
+/// must also keep the Arc alive so the Weak inside the delegate tool stays valid.
+pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Arc<Runtime>> {
     let executor = Arc::new(SqlxSqlExecutor::new(pool.clone()));
     let source = SqlxProfileSource::new(pool.clone());
 
@@ -70,6 +82,10 @@ pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Runtime> {
     if let Err(e) = std::fs::create_dir_all(&fs_root) {
         warn!("could not create fs_tools root {fs_root}: {e}");
     }
+
+    // Phase 1: create the delegate tool shell before build.
+    let delegate_tool = Arc::new(CallAgentTool::empty());
+    let delegate_ref = delegate_tool.clone();
 
     let mut builder = Runtime::builder()
         .with_plugin(OpenAiProviderFactory)
@@ -88,11 +104,26 @@ pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Runtime> {
     // otherwise falls back to deterministic extractive compression.
     builder = builder.with_plugin(LedeToolsPlugin::new());
 
-    builder
+    // Calculator tool (add/sub/mul/div).
+    builder = builder.with_plugin(CalcToolsPlugin::new());
+
+    // Clock tool (get_current_time).
+    builder = builder.with_plugin(ClockToolsPlugin::new());
+
+    // Delegation tool (call_agent) -- phase 1: register the shell.
+    builder = builder.with_plugin(DelegateToolsPlugin::with_tool(delegate_tool));
+
+    let runtime = builder
         .load_profiles_from(source)
         .build()
         .await
-        .context("building kernel Runtime")
+        .context("building kernel Runtime")?;
+
+    // Phase 2: wrap in Arc, then inject Weak into the delegate tool.
+    let runtime_arc = Arc::new(runtime);
+    delegate_ref.inject(Arc::downgrade(&runtime_arc));
+
+    Ok(runtime_arc)
 }
 
 /// Shared application state threaded into every axum handler via [`axum::extract::State`].
@@ -118,7 +149,7 @@ impl AppState {
     /// rebuild leaves the previous runtime in place.
     pub async fn rebuild_runtime(&self) -> anyhow::Result<()> {
         let rebuilt = build_runtime(&self.pool).await?;
-        *self.runtime.write().await = Arc::new(rebuilt);
+        *self.runtime.write().await = rebuilt;
         Ok(())
     }
 }
@@ -141,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
     let runtime = build_runtime(&pool).await?;
 
     let state = Arc::new(AppState {
-        runtime: tokio::sync::RwLock::new(Arc::new(runtime)),
+        runtime: tokio::sync::RwLock::new(runtime),
         pool,
         admin_token: cli.admin_token,
     });
