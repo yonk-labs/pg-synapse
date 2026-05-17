@@ -1,0 +1,1 @@
+Read all customer feedback items from the feedback.items table. For each item, classify the sentiment as positive, negative, or neutral and write a one-line gist. Insert a digest row for each item into feedback.digest. Then call lede_compress on the concatenated gists with a token budget of 60 to produce an executive brief, and report the brief.

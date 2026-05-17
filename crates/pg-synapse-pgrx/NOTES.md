@@ -292,6 +292,55 @@ unit tests were added to `plugins/pg-synapse-tools-fs/tests/fs.rs`.
 5. `infra_error` field added to every JSONL row. Consumers (MODEL-COMPATIBILITY.md,
    min-specs.md) exclude infra-error rows from model verdicts.
 
+## v0.1.1 A2: pg-synapse-tools-lede + a2_distill scenario
+
+### A2.1 Plugin (pg-synapse-tools-lede)
+
+`lede_compress` is a documented shim tool. Two code paths:
+
+1. **lede CLI on PATH:** spawns `lede --max-tokens <n>`, feeds `text` on stdin,
+   captures stdout. Wrapped in `ToolError::Execution` on non-zero exit. This is
+   the only subprocess in the crate; `#![forbid(unsafe_code)]` holds.
+
+2. **Extractive shim (no lede CLI):** splits text on `. ! ?` boundaries,
+   scores each sentence by length-normalized keyword salience (words >4 chars
+   with frequency >1 in the full text), selects greedily in score order until
+   the approximate token budget (words * 1.3) is reached, returns sentences in
+   original order.
+
+Returns `ToolOutput::Json({ "brief", "source": "lede-cli"|"extractive-shim",
+"input_chars", "brief_chars" })`.
+
+Arg aliases: `content`/`input` -> `text`; `budget`/`limit`/`max` -> `max_tokens`.
+
+### A2.2 Host wiring
+
+- Feature flag: `tools-lede = ["dep:pg-synapse-tools-lede"]` added to pgrx features.
+- `tools-lede` added to pgrx `default` feature list.
+- `runtime_holder.rs`: `#[cfg(feature = "tools-lede")]` block registers
+  `LedeToolsPlugin::new()` after the `tools-fs` block.
+- Sidecar `main.rs`: `LedeToolsPlugin::new()` registered unconditionally next
+  to `FsToolsPlugin` in `build_runtime`.
+- `pg-synapse-sidecar/Cargo.toml`: `pg-synapse-tools-lede` added as a direct dep.
+
+**Install command used for A2:**
+```
+ORT_DYLIB_PATH=... cargo pgrx install --pg-config .../pg_config \
+  --features pg17,embed-ort,provider-llama-cpp,provider-anthropic,tools-fs,tools-lede \
+  --no-default-features
+```
+
+### A2.3 Scenario (bench/scenarios/a2_distill)
+
+8 deterministic mixed-sentiment feedback items in `feedback.items`. Agent must:
+classify sentiment, write gist, insert 8 rows into `feedback.digest`, then call
+`lede_compress` on concatenated gists.
+
+Assertion grades loosely: all 8 rows present, all sentiments in
+(positive/negative/neutral), and at least 6/8 match the known-good map (items
+1,2,5,6 -> positive; 3,4,7 -> negative; 8 -> neutral). The >=6/8 threshold
+measures agent loop correctness without requiring sentiment perfection.
+
 **Authoritative fs leaderboard (B12, 2026-05-16):**
 
 | model | fs pass | fs tool-emit | verdict |

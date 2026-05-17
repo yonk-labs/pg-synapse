@@ -26,6 +26,7 @@ use clap::Parser;
 use pg_synapse_core::Runtime;
 use pg_synapse_provider_openai::OpenAiProviderFactory;
 use pg_synapse_tools_fs::FsToolsPlugin;
+use pg_synapse_tools_lede::LedeToolsPlugin;
 use pg_synapse_tools_sql::SqlToolsPlugin;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -82,6 +83,10 @@ pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Runtime> {
             warn!("FsToolsPlugin init failed, fs tools disabled: {e}");
         }
     }
+
+    // Lede compression tool (lede_compress). Shim: uses lede CLI if on PATH,
+    // otherwise falls back to deterministic extractive compression.
+    builder = builder.with_plugin(LedeToolsPlugin::new());
 
     builder
         .load_profiles_from(source)

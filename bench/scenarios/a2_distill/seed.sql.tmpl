@@ -1,0 +1,28 @@
+-- a2_distill seed: feedback schema with 8 mixed-sentiment customer comments.
+-- Deterministic, no randomness.
+
+CREATE SCHEMA IF NOT EXISTS feedback;
+
+CREATE TABLE IF NOT EXISTS feedback.items (
+    id   INT PRIMARY KEY,
+    body TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feedback.digest (
+    id        INT PRIMARY KEY,
+    sentiment TEXT NOT NULL,
+    gist      TEXT NOT NULL
+);
+
+TRUNCATE feedback.items;
+TRUNCATE feedback.digest;
+
+INSERT INTO feedback.items (id, body) VALUES
+    (1, 'The onboarding experience was smooth and the documentation is excellent. I had everything running in under an hour.'),
+    (2, 'Performance has been rock solid for three months. We have not had a single outage.'),
+    (3, 'The API is confusing and the error messages give no useful context. Debugging takes forever.'),
+    (4, 'Billing support took two weeks to respond to a simple invoice question. Very frustrating.'),
+    (5, 'The dashboard is clean and the charts load quickly. Navigation feels intuitive.'),
+    (6, 'We migrated from a competitor and the import process worked without any data loss.'),
+    (7, 'The search feature returns irrelevant results and there is no way to filter by date.'),
+    (8, 'Overall the product meets our basic needs. Nothing stands out as exceptional or broken.');

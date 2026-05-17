@@ -100,6 +100,11 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
         }
     };
 
+    // Lede compression tool (lede_compress). Shim: uses lede CLI if on PATH,
+    // otherwise falls back to deterministic extractive compression.
+    #[cfg(feature = "tools-lede")]
+    let builder = builder.with_plugin(pg_synapse_tools_lede::LedeToolsPlugin::new());
+
     builder
         .load_profiles_from(source)
         .build()

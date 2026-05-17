@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-lede"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -28,6 +28,8 @@ provider-llama-cpp   = ["dep:pg-synapse-provider-llama-cpp"]
 provider-anthropic   = ["dep:pg-synapse-provider-anthropic"]
 # Bundle the sandboxed filesystem tools plugin (read_file, write_file, edit_file, list_files, grep).
 tools-fs = ["dep:pg-synapse-tools-fs"]
+# Bundle the lede compression tool plugin (lede_compress).
+tools-lede = ["dep:pg-synapse-tools-lede"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -39,6 +41,7 @@ pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort",
 pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llama-cpp", version = "0.1.1", optional = true }
 pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.1.1", optional = true }
 pg-synapse-tools-fs        = { path = "../../plugins/pg-synapse-tools-fs", version = "0.1.1", optional = true }
+pg-synapse-tools-lede      = { path = "../../plugins/pg-synapse-tools-lede", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }
