@@ -1,0 +1,8 @@
+### run_n: vllm-qwen3-coder x p1_pipeline, N=3, start=14:27:15Z
+iter 1: PASS  status=completed  good_sql_exec=0  mode=ok  err=
+iter 2: PASS  status=completed  good_sql_exec=0  mode=ok  err=
+iter 3: PASS  status=completed  good_sql_exec=0  mode=ok  err=
+
+### SUMMARY  pass=3  fail=0  (N=3)
+  mode[ok] = 3
+### done 14:28:22Z

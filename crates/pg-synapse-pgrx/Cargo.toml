@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-lede", "tools-calc", "tools-clock", "tools-delegate"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -34,6 +34,8 @@ tools-lede = ["dep:pg-synapse-tools-lede"]
 tools-calc = ["dep:pg-synapse-tools-calc"]
 # Bundle the clock tool plugin (get_current_time).
 tools-clock = ["dep:pg-synapse-tools-clock"]
+# Bundle the HTTP tools plugin (http_get, http_post, http_head).
+tools-http = ["dep:pg-synapse-tools-http"]
 # Bundle the delegation tool plugin (call_agent).
 tools-delegate = ["dep:pg-synapse-tools-delegate"]
 
@@ -42,7 +44,7 @@ pgrx       = "=0.18.0"
 pg-synapse-core            = { path = "../pg-synapse-core", version = "0.1.1" }
 pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.1.1" }
 pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql", version = "0.1.1" }
-pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.1.1" }
+pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.1.1", optional = true }
 pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.1.1", optional = true }
 pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llama-cpp", version = "0.1.1", optional = true }
 pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.1.1", optional = true }

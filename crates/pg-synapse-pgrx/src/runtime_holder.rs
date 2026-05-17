@@ -142,6 +142,10 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     #[cfg(feature = "tools-lede")]
     let builder = builder.with_plugin(pg_synapse_tools_lede::LedeToolsPlugin::new());
 
+    // HTTP tools (http_get, http_post, http_head).
+    #[cfg(feature = "tools-http")]
+    let builder = builder.with_plugin(pg_synapse_tools_http::HttpToolsPlugin);
+
     // Calculator tool (add/sub/mul/div).
     #[cfg(feature = "tools-calc")]
     let builder = builder.with_plugin(pg_synapse_tools_calc::CalcToolsPlugin::new());

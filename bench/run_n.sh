@@ -39,11 +39,21 @@ for i in $(seq 1 "$N"); do
   PSQL -d "$DB" -c "CREATE EXTENSION IF NOT EXISTS pg_synapse_pgrx;" >/dev/null 2>&1
   sed 's/{{SCALE}}/1/g' "$SCEN_DIR/seed.sql.tmpl" | PSQL -d "$DB" -f - >/dev/null 2>&1
 
+  # fs seeding (before agent creation so FSDIR is available for prompt substitution)
+  FS_SANDBOX_ROOT="/tmp/pg_synapse_fs"
+  FSDIR_RELPATH="$DB"
+  FS_RUN_DIR="${FS_SANDBOX_ROOT}/${FSDIR_RELPATH}"
+  if [[ -f "$SCEN_DIR/seed_fs.sh" ]]; then
+    rm -rf "$FS_RUN_DIR"; mkdir -p "$FS_RUN_DIR"
+    FS_ROOT="$FS_RUN_DIR" SCALE=1 bash "$SCEN_DIR/seed_fs.sh" 2>/dev/null || true
+  fi
+
   S="$(mktemp /tmp/rn_s_XXXX.sql)"
-  python3 - "$SCEN_DIR/system_prompt.txt" "$PROV" "$MODEL_ID" "$BASE_URL" "$TOOLS" "$MAX_ITER" "$TIMEOUT_MS" > "$S" <<'PY'
+  python3 - "$SCEN_DIR/system_prompt.txt" "$PROV" "$MODEL_ID" "$BASE_URL" "$TOOLS" "$MAX_ITER" "$TIMEOUT_MS" "$FSDIR_RELPATH" > "$S" <<'PY'
 import sys
 sp_file, prov, mid, url, tools, mi, tmo = sys.argv[1:8]
-sp = open(sp_file).read()
+fsdir = sys.argv[8] if len(sys.argv) > 8 else ''
+sp = open(sp_file).read().replace('{{FSDIR}}', fsdir)
 arr = "ARRAY[" + ",".join("'%s'" % t.strip() for t in tools.split(",")) + "]"
 print("SELECT synapse.llm_profile_set('bench_profile','%s','%s','%s',NULL,'{}'::jsonb);" % (prov,mid,url))
 print("SELECT synapse.agent_create('bench_agent',$SP$%s$SP$,'conversation','bench_profile',%s,%s,%s);" % (sp,arr,mi,tmo))
@@ -51,6 +61,7 @@ PY
   PSQL -d "$DB" -f "$S" >/dev/null 2>&1; rm -f "$S"
 
   TASK="$(sed 's/{{SCALE}}/1/g' "$SCEN_DIR/task.txt")"
+  TASK="${TASK//\{\{FSDIR\}\}/$FSDIR_RELPATH}"
   T="$(mktemp /tmp/rn_t_XXXX.sql)"
   python3 - "$TASK" "$TIMEOUT_MS" > "$T" <<'PY'
 import sys
@@ -71,7 +82,21 @@ for l in sys.stdin:
  if l.startswith('{'):
   try: print(json.loads(l).get('error','')[:160]); break
   except: pass" 2>/dev/null || echo '')"
-  ASSERT="$(PSQL -d "$DB" -Atc "$(cat "$SCEN_DIR/assert.sql")" 2>/dev/null || echo 'false')"
+  # Assert: SQL scenarios use assert.sql, fs scenarios use assert_fs.sh.
+  if [[ "$KIND" == "fs" && -f "$SCEN_DIR/assert_fs.sh" ]]; then
+    FS_SANDBOX_ROOT="/tmp/pg_synapse_fs"
+    FSDIR_RELPATH="$DB"
+    FS_RUN_DIR="${FS_SANDBOX_ROOT}/${FSDIR_RELPATH}"
+    if FS_ROOT="$FS_RUN_DIR" bash "$SCEN_DIR/assert_fs.sh" > /dev/null 2>&1; then
+      ASSERT="t"
+    else
+      ASSERT="false"
+    fi
+  elif [[ -f "$SCEN_DIR/assert.sql" ]]; then
+    ASSERT="$(PSQL -d "$DB" -Atc "$(cat "$SCEN_DIR/assert.sql")" 2>/dev/null || echo 'false')"
+  else
+    ASSERT="false"
+  fi
   GOOD_EXEC="$(PSQL -d "$DB" -Atc "SELECT count(*) FROM synapse.messages WHERE role='tool' AND tool_name='sql_exec' AND tool_output::text LIKE '%rows_affected%';" 2>/dev/null || echo 0)"
 
   if [[ "$ASSERT" == "t" ]]; then
