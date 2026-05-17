@@ -14,13 +14,22 @@ Tables:
   feedback.digest(id INT, sentiment TEXT, gist TEXT)
     Starts empty. You will populate it.
 
-Allowed sentiment labels: positive, negative, neutral.
+Allowed sentiment labels: exactly one of positive, negative, neutral (lowercase).
 
 Steps to complete:
+
 1. Call sql_query to fetch all rows from feedback.items.
-2. For each item, decide its sentiment (positive/negative/neutral) and write a one-line gist summarizing it.
-3. Call sql_exec to INSERT each row into feedback.digest using:
-     query: "INSERT INTO feedback.digest (id, sentiment, gist) VALUES ($1, $2, $3)"
-     params: [<id>, "<sentiment>", "<gist>"]
-4. After all 8 rows are inserted, concatenate the gists into one string and call lede_compress with a max_tokens budget of 60 to produce an executive brief.
+
+2. For each item, decide its sentiment (positive, negative, or neutral) and write a one-sentence gist.
+
+3. For each item, call sql_exec to INSERT one row into feedback.digest. The INSERT must:
+   - Use exactly this SQL: INSERT INTO feedback.digest (id, sentiment, gist) VALUES ($1, $2, $3)
+   - Bind params as: [$1=id (integer), $2=sentiment (string), $3=gist (string)]
+   - Include all three columns in the column list exactly once (never repeat a column name in the same INSERT).
+   - Never inline literal values into the SQL string; always use $1, $2, $3 placeholders.
+
+4. After all 8 rows are inserted, concatenate all gists into one string (separated by spaces) and call lede_compress with that string and max_tokens=60 to produce the executive brief.
+
 5. Report the brief returned by lede_compress.
+
+Important: insert each feedback item as a separate sql_exec call. Do not batch multiple rows into one INSERT statement.

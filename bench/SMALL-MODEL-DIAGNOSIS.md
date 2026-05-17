@@ -301,3 +301,77 @@ the key:value tokenizer. This fixed write_file extraction and moved gemma-4-E2B-
 
 3. **PG_SYNAPSE_LOG_RAW_LLM=1** debug flag (both providers): when set, appends raw content to
    `/tmp/pg_synapse_raw_llm.log` at the point where `tool_calls` is empty and content is non-empty.
+   Extended in B16 to also log every successfully-parsed tool call from the `tool_calls` array
+   (RAW_TOOL_CALL lines), so the raw args are visible when a later deserialization error follows.
+
+---
+
+## B16 Raw Query-Arg Payloads (2026-05-17)
+
+### Capture method
+
+Added unconditional file-append logging to `SqlQueryTool::run` and `SqlExecTool::run` writing
+every `input` JSON to `/tmp/pg_synapse_tool_args.log`. Ran one scenario per model, collected
+the output, then removed the diagnostic code. Added `RAW_TOOL_CALL` logging to the llama-cpp
+provider's `tool_calls` parse path (gated behind `PG_SYNAPSE_LOG_RAW_LLM=1`).
+
+### qwen3.5-9b (Qwen3.5-9B-Q4_K_M), a3_triage, seed fix applied
+
+First run (before seed fix): error on `sql_query`, confirming the `offset` reserved-word bug
+was preventing the tickets table from being populated, causing the first tool call to fail.
+
+After seed fix (rename `offset` to `arch` in DO block):
+
+```
+TOOL_INPUT sql_query args={"params":[],"query":"SELECT t.id, t.subject, t.body, c.tier FROM support.tickets t JOIN support.customers c ON c.id = t.customer_id WHERE t.category IS NULL"}
+TOOL_INPUT sql_exec args={}
+```
+
+**Finding:** qwen3.5-9b sends the correct `query` key for `sql_query` (no alias mismatch).
+For `sql_exec` it sends `{}` (empty object, no fields at all). The model knows the tool
+name but generates no parameters. This is NOT a key-name mismatch; it is a model-reasoning
+failure at the parameter-generation step. Confirmed across both a2_distill and a3_triage.
+
+Same pattern for a2_distill:
+
+```
+TOOL_INPUT sql_query args={"query":"SELECT id, body FROM feedback.items"}
+TOOL_INPUT sql_exec args={}
+```
+
+### gemma-4-E4B-it, a3_triage (captured for reference)
+
+```
+TOOL_INPUT sql_query args={"params":[],"query":"SELECT t.id, t.subject, t.body, c.tier FROM support.tickets t JOIN support.customers c ON c.id = t.customer_id WHERE t.category IS NULL"}
+TOOL_INPUT sql_exec args={"params":["api","urgent",true,1],"query":"UPDATE support.tickets SET category = $1, priority = $2, escalated = $3, handled_at = now() WHERE id = $4"}
+TOOL_INPUT sql_exec args={"params":[1,"Ticket 1 was categorized as api, ..."],"query":"INSERT INTO support.audit (ticket_id, action) VALUES ($1, $2)"}
+... (4 tickets, 8 sql_exec calls total)
+```
+
+gemma-4-E4B-it uses the correct `query` key and passes all parameters correctly. It PASSES
+a3_triage after the seed fix. The previous failure (before seed fix) was caused by the empty
+tickets table, not by any tool-call formatting issue.
+
+### Root-cause summary
+
+| Failure type | Root cause | Fix |
+|---|---|---|
+| `missing field query` on `sql_exec` (qwen3.5-9b) | Model generates empty `{}` args, not a key-name mismatch | Model-reasoning limit; cannot be fixed by aliases |
+| `syntax error: offset` in seed | `offset` is reserved in Postgres | Renamed to `arch` in a3_triage seed.sql.tmpl |
+| `column specified more than once` (vllm-qwen3-coder) | Model emits duplicate column in INSERT | Added explicit note to a2_distill prompt |
+| `missing field query` on `sql_exec` (gemma-4-E4B-it) | Seed failed silently (offset bug), agent ran against empty DB | Fixed by seed fix above |
+
+### Phase 2: aliases added
+
+Added `#[serde(alias = ...)]` to `SqlQueryArgs.query` covering: sql, q, statement, stmt,
+command, sql_query, sql_statement, querystring, select. These aliases were absent before B16.
+
+`SqlExecArgs.query` already had `statement`; extended with: sql, q, stmt, command, sql_exec,
+sql_statement, sql_query, querystring.
+
+The captured payloads show neither qwen3.5-9b nor gemma-4-E4B-it actually use a wrong key name.
+The aliases are still correct hygiene for other models and future scenarios.
+
+4 unit tests prove each alias deserializes: `query_args_accept_sql_alias`,
+`query_args_accept_statement_and_q_aliases`, `exec_args_accept_sql_and_command_aliases`,
+`canonical_query_key_still_wins`.

@@ -13,18 +13,40 @@ Allowed values:
 - category: api, billing, howto, other
 - priority: low, normal, high, urgent
 
-Escalation rule (exact):
-  escalated = true  ONLY when customer tier = "enterprise" AND priority = "urgent"
-  escalated = false for every other combination (including enterprise+high, pro+urgent, free+urgent, etc.)
+Escalation rule (exact, both directions):
+  escalated = true   ONLY when customer tier = 'enterprise' AND priority = 'urgent'
+  escalated = false  for ALL other combinations, including:
+    - enterprise + high (not urgent, so false)
+    - pro + urgent (not enterprise, so false)
+    - free + urgent (not enterprise, so false)
+    - any tier + low or normal (always false)
 
 Per-ticket workflow:
-1. sql_query the open tickets joined to customer tier (WHERE category IS NULL).
+1. sql_query the open tickets joined to customer tier (WHERE category IS NULL):
+   SELECT t.id, t.subject, t.body, c.tier
+   FROM support.tickets t JOIN support.customers c ON c.id = t.customer_id
+   WHERE t.category IS NULL
+
 2. For each ticket, decide category and priority based on the subject and body content.
-3. Apply the escalation rule precisely.
-4. sql_exec UPDATE the ticket (category, priority, escalated, handled_at = now()).
-5. sql_exec INSERT one row into support.audit with the ticket_id and a one-sentence description of the decision.
+
+3. Apply the escalation rule precisely: escalated = (tier = 'enterprise' AND priority = 'urgent').
+
+4. sql_exec UPDATE that ticket with category, priority, escalated, and handled_at = now():
+   UPDATE support.tickets
+   SET category = $1, priority = $2, escalated = $3, handled_at = now()
+   WHERE id = $4
+   params: [$1=category, $2=priority, $3=escalated (true or false), $4=ticket_id]
+
+5. sql_exec INSERT exactly one row into support.audit for that ticket:
+   INSERT INTO support.audit (ticket_id, action) VALUES ($1, $2)
+   params: [$1=ticket_id, $2=one-sentence description of the triage decision]
+
+Repeat steps 2-5 for every open ticket. Every ticket must receive exactly one audit row, no more, no less.
 
 After all tickets are handled, sql_query a count grouped by category and report it.
 
-Parameterized binding is required: always use $1, $2, ... placeholders with a params array. Never inline literal values into the SQL string.
-Every triaged ticket must have exactly one audit row in support.audit.
+Critical requirements:
+- Always include handled_at = now() in the UPDATE. Do not leave it NULL.
+- Every triaged ticket must have exactly one row in support.audit. Do not insert zero or multiple audit rows per ticket.
+- Use $1, $2, ... placeholders in all SQL. Never inline literal values into the SQL string.
+- Apply the escalation rule exactly as stated above.

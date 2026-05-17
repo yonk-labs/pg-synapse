@@ -40,7 +40,7 @@ INSERT INTO support.customers (id, email, tier) VALUES
 ON CONFLICT DO NOTHING;
 
 -- Seed SCALE*4 tickets cycling through four archetypes.
--- Archetype definitions (offset 0-3):
+-- Archetype definitions (arch 0-3):
 --   0: enterprise customer, api outage (clearly urgent api problem)
 --   1: pro customer, billing dispute (urgent billing claim)
 --   2: free customer, how-to question (low-urgency how-to)
@@ -49,7 +49,7 @@ DO $$
 DECLARE
     i       INT;
     top     INT := {{SCALE}} * 4;
-    offset  INT;
+    arch    INT;
     cust    INT[] := ARRAY[1, 2, 3, 1];
     subjs   TEXT[] := ARRAY[
         'Production API returning 500 errors non-stop',
@@ -66,14 +66,14 @@ DECLARE
     ticket_id INT;
 BEGIN
     FOR i IN 1..top LOOP
-        offset := (i - 1) % 4;
+        arch := (i - 1) % 4;
         ticket_id := i;
         INSERT INTO support.tickets (id, customer_id, subject, body, category, priority, escalated, handled_at)
         VALUES (
             ticket_id,
-            cust[offset + 1],
-            subjs[offset + 1],
-            bodies[offset + 1],
+            cust[arch + 1],
+            subjs[arch + 1],
+            bodies[arch + 1],
             NULL,
             NULL,
             NULL,

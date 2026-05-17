@@ -704,6 +704,19 @@ impl LlmProvider for LlamaCppProvider {
                     .unwrap_or("{}");
                 let args: Value =
                     serde_json::from_str(args_str).unwrap_or_else(|_| json!({ "_raw": args_str }));
+                // B16: when PG_SYNAPSE_LOG_RAW_LLM=1, log every parsed tool call
+                // so the raw args are observable when a deserialization error follows.
+                if std::env::var("PG_SYNAPSE_LOG_RAW_LLM").as_deref() == Ok("1") {
+                    let log_line = format!("RAW_TOOL_CALL tool={} args={}\n", name, args_str);
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/tmp/pg_synapse_raw_llm.log")
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            f.write_all(log_line.as_bytes())
+                        });
+                }
                 tool_calls.push(ToolCall { id, name, args });
             }
         }

@@ -89,7 +89,20 @@ pub trait SqlExecutor: Send + Sync {
 /// Arguments accepted by [`SqlQueryTool`].
 #[derive(JsonSchema, Deserialize)]
 struct SqlQueryArgs {
-    /// SQL SELECT statement with `$1, $2, ...` placeholders.
+    /// SQL SELECT statement with `$1, $2, ...` placeholders. Many models
+    /// emit a different key for this; accept the common variants so a
+    /// well-formed tool call is not rejected on a naming nit.
+    #[serde(
+        alias = "sql",
+        alias = "q",
+        alias = "statement",
+        alias = "stmt",
+        alias = "command",
+        alias = "sql_query",
+        alias = "sql_statement",
+        alias = "querystring",
+        alias = "select"
+    )]
     query: String,
     /// Positional bind parameters as a JSON array. Pass `[]` if none.
     #[serde(default, deserialize_with = "deserialize_lenient_params")]
@@ -133,9 +146,19 @@ impl Tool for SqlQueryTool {
 #[derive(JsonSchema, Deserialize)]
 struct SqlExecArgs {
     /// SQL statement (INSERT / UPDATE / DELETE) with `$1, $2, ...`
-    /// placeholders. Accepts the legacy field name `statement` as an alias so
-    /// callers can use the same `query` key as `sql_query`.
-    #[serde(alias = "statement")]
+    /// placeholders. Models name this key inconsistently; accept the
+    /// common variants so a well-formed write is not rejected on a name.
+    #[serde(
+        alias = "statement",
+        alias = "sql",
+        alias = "q",
+        alias = "stmt",
+        alias = "command",
+        alias = "sql_exec",
+        alias = "sql_statement",
+        alias = "sql_query",
+        alias = "querystring"
+    )]
     query: String,
     /// Positional bind parameters as a JSON array. Pass `[]` if none.
     #[serde(default, deserialize_with = "deserialize_lenient_params")]
@@ -450,5 +473,40 @@ mod tests {
         let p = parse_exec_params(r#"{"query":"SELECT 1","params":5}"#);
         assert_eq!(p.len(), 1);
         assert_eq!(p[0], serde_json::json!(5));
+    }
+
+    // --- query-arg alias tests (B16): models name the SQL key many ways ---
+
+    #[test]
+    fn query_args_accept_sql_alias() {
+        let a: SqlQueryArgs = serde_json::from_str(r#"{"sql":"SELECT 1","params":[]}"#).unwrap();
+        assert_eq!(a.query, "SELECT 1");
+    }
+
+    #[test]
+    fn query_args_accept_statement_and_q_aliases() {
+        let a: SqlQueryArgs = serde_json::from_str(r#"{"statement":"SELECT 2"}"#).unwrap();
+        assert_eq!(a.query, "SELECT 2");
+        let b: SqlQueryArgs = serde_json::from_str(r#"{"q":"SELECT 3"}"#).unwrap();
+        assert_eq!(b.query, "SELECT 3");
+    }
+
+    #[test]
+    fn exec_args_accept_sql_and_command_aliases() {
+        let a: SqlExecArgs =
+            serde_json::from_str(r#"{"sql":"INSERT INTO t VALUES ($1)","params":["x"]}"#).unwrap();
+        assert_eq!(a.query, "INSERT INTO t VALUES ($1)");
+        assert_eq!(a.params.len(), 1);
+        let b: SqlExecArgs = serde_json::from_str(r#"{"command":"DELETE FROM t"}"#).unwrap();
+        assert_eq!(b.query, "DELETE FROM t");
+    }
+
+    #[test]
+    fn canonical_query_key_still_wins() {
+        // The documented `query` key must keep working unchanged.
+        let a: SqlQueryArgs =
+            serde_json::from_str(r#"{"query":"SELECT 9","params":[1,2]}"#).unwrap();
+        assert_eq!(a.query, "SELECT 9");
+        assert_eq!(a.params.len(), 2);
     }
 }

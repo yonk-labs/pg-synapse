@@ -159,9 +159,9 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
         if let Some(pending_slot) = DELEGATE_TOOL_PENDING.get() {
             *pending_slot.lock() = Some(tool.clone());
         }
-        builder.with_plugin(
-            pg_synapse_tools_delegate::DelegateToolsPlugin::with_tool(tool),
-        )
+        builder.with_plugin(pg_synapse_tools_delegate::DelegateToolsPlugin::with_tool(
+            tool,
+        ))
     };
 
     builder
