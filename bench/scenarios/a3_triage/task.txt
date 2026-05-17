@@ -1,0 +1,24 @@
+Triage every support ticket where category IS NULL. For each open ticket:
+
+1. Use sql_query to fetch the ticket joined to its customer tier:
+   query: "SELECT t.id, t.subject, t.body, c.tier FROM support.tickets t JOIN support.customers c ON c.id = t.customer_id WHERE t.category IS NULL"
+   params: []
+
+2. For each ticket returned, decide:
+   - category: exactly one of (api, billing, howto, other)
+   - priority: exactly one of (low, normal, high, urgent)
+   - escalated: true ONLY if the customer tier is "enterprise" AND priority is "urgent"; false for everything else
+
+3. Use sql_exec to update the ticket:
+   query: "UPDATE support.tickets SET category = $1, priority = $2, escalated = $3, handled_at = now() WHERE id = $4"
+   params: ["<category>", "<priority>", <true|false>, <ticket_id>]
+
+4. Use sql_exec to insert one audit row describing the decision:
+   query: "INSERT INTO support.audit (ticket_id, action) VALUES ($1, $2)"
+   params: [<ticket_id>, "<one sentence describing category, priority, and escalation decision>"]
+
+After all tickets are triaged, use sql_query to report a count grouped by category:
+   query: "SELECT category, count(*) FROM support.tickets GROUP BY category ORDER BY category"
+   params: []
+
+Report the final counts. Use $1, $2, ... parameterized binding with a params array for every sql_exec call. Never inline literal values into the SQL string.

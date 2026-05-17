@@ -1,0 +1,84 @@
+-- a3_triage seed.
+-- SCALE controls ticket count: SCALE*4 tickets (default SCALE=1 => 4 tickets).
+-- Rows are fully deterministic so assert.sql is stable.
+-- Escalation truth-table (SCALE=1):
+--   ticket 1: alice (enterprise) + urgent api outage     => escalated MUST be true
+--   ticket 2: bob   (pro)        + urgent billing charge => escalated MUST be false
+--   ticket 3: carol (free)       + low-urgency howto     => escalated MUST be false
+--   ticket 4: alice (enterprise) + normal-priority other => escalated MUST be false
+
+CREATE SCHEMA IF NOT EXISTS support;
+
+CREATE TABLE IF NOT EXISTS support.customers (
+    id    INT PRIMARY KEY,
+    email TEXT NOT NULL,
+    tier  TEXT NOT NULL CHECK (tier IN ('free', 'pro', 'enterprise'))
+);
+
+CREATE TABLE IF NOT EXISTS support.tickets (
+    id          INT PRIMARY KEY,
+    customer_id INT REFERENCES support.customers(id),
+    subject     TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    category    TEXT,
+    priority    TEXT,
+    escalated   BOOLEAN,
+    handled_at  TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS support.audit (
+    ticket_id INT,
+    action    TEXT,
+    at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Fixed customer rows (deterministic ids).
+INSERT INTO support.customers (id, email, tier) VALUES
+    (1, 'alice@enterprise-corp.com', 'enterprise'),
+    (2, 'bob@prouser.io',            'pro'),
+    (3, 'carol@freemail.net',        'free')
+ON CONFLICT DO NOTHING;
+
+-- Seed SCALE*4 tickets cycling through four archetypes.
+-- Archetype definitions (offset 0-3):
+--   0: enterprise customer, api outage (clearly urgent api problem)
+--   1: pro customer, billing dispute (urgent billing claim)
+--   2: free customer, how-to question (low-urgency how-to)
+--   3: enterprise customer, general feedback (normal-urgency other)
+DO $$
+DECLARE
+    i       INT;
+    top     INT := {{SCALE}} * 4;
+    offset  INT;
+    cust    INT[] := ARRAY[1, 2, 3, 1];
+    subjs   TEXT[] := ARRAY[
+        'Production API returning 500 errors non-stop',
+        'Charged twice for the same subscription this month',
+        'How do I download my data as a CSV export?',
+        'Suggestion about the new dashboard layout'
+    ];
+    bodies  TEXT[] := ARRAY[
+        'Every request to our production API endpoint has been failing with HTTP 500 for the past hour. Our entire integration is broken and we are losing revenue. This is a critical outage that needs immediate resolution.',
+        'I noticed my credit card was billed twice for my pro subscription this month. I need this investigated and the duplicate charge refunded right away.',
+        'I would like to export all my records to a CSV file for reporting purposes. I cannot find the export option anywhere in the settings panel. Could you point me to it?',
+        'The new dashboard layout puts the navigation on the right side which feels unusual. Not a blocker, just wanted to share feedback in case it helps the team.'
+    ];
+    ticket_id INT;
+BEGIN
+    FOR i IN 1..top LOOP
+        offset := (i - 1) % 4;
+        ticket_id := i;
+        INSERT INTO support.tickets (id, customer_id, subject, body, category, priority, escalated, handled_at)
+        VALUES (
+            ticket_id,
+            cust[offset + 1],
+            subjs[offset + 1],
+            bodies[offset + 1],
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        )
+        ON CONFLICT DO NOTHING;
+    END LOOP;
+END $$;
