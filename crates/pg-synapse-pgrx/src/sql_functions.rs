@@ -140,6 +140,26 @@ pub(crate) fn log_execution(
         )
         .map_err(|e| e.to_string())?;
     }
+
+    // D6: fill the already-decided `synapse.traces` writer (do not redesign
+    // the schema). D8: persist + pollable only, no live push. Events are
+    // persisted only at trace_level >= debug; `seq` is the event's ordinal
+    // within the run.
+    if trace_level.should_persist_events() {
+        for (seq, ev) in o.events.iter().enumerate() {
+            let ev_args: Vec<DatumWithOid<'_>> = vec![
+                DatumWithOid::from(exec_id.clone()),
+                DatumWithOid::from(seq as i32),
+                DatumWithOid::from(ev.kind.as_str().to_string()),
+                DatumWithOid::from(JsonB(ev.payload.clone())),
+            ];
+            Spi::run_with_args(
+                "INSERT INTO synapse.traces (execution_id, seq, event, payload) VALUES ($1::uuid, $2, $3, $4)",
+                &ev_args,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }
 

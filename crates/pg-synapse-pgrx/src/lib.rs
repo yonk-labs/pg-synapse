@@ -477,9 +477,16 @@ mod tests {
             cost_usd: Some(0.123456),
             duration_ms: 10,
             status: OutcomeStatus::Completed,
+            events: vec![],
         };
-        crate::sql_functions::log_execution(&outcome, "numeric_agent", "hi", Some("tester"))
-            .expect("log_execution must succeed");
+        crate::sql_functions::log_execution(
+            &outcome,
+            "numeric_agent",
+            "hi",
+            Some("tester"),
+            pg_synapse_core::types::TraceLevel::Full,
+        )
+        .expect("log_execution must succeed");
 
         let arg: pgrx::datum::DatumWithOid<'_> = pgrx::datum::DatumWithOid::from(eid.to_string());
         let cost: Option<f64> = Spi::connect(|c| {

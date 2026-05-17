@@ -19,8 +19,8 @@ use crate::error::{ExecutorError, ToolError};
 use crate::llm::LlmProvider;
 use crate::tool::Tool;
 use crate::types::{
-    CompletionRequest, CompletionResponse, ExecutionContext, ExecutorOutcome, Message,
-    OutcomeStatus, Role, ToolCall, ToolCtx, ToolDefinition, ToolOutput,
+    CompletionRequest, CompletionResponse, EventKind, ExecutionContext, ExecutionEvent,
+    ExecutorOutcome, Message, OutcomeStatus, Role, ToolCall, ToolCtx, ToolDefinition, ToolOutput,
 };
 
 /// Result of one LLM turn.
@@ -40,6 +40,7 @@ pub(crate) struct LoopHarness<'a> {
     tokens_out: u32,
     messages: Vec<Message>,
     issued_tool_calls: Vec<ToolCall>,
+    events: Vec<ExecutionEvent>,
     seq: u32,
     started_at: Instant,
     prepend_system: Option<String>,
@@ -56,6 +57,7 @@ impl<'a> LoopHarness<'a> {
             tokens_out: 0,
             messages: Vec::new(),
             issued_tool_calls: Vec::new(),
+            events: Vec::new(),
             seq: 0,
             started_at: Instant::now(),
             prepend_system: None,
@@ -117,7 +119,30 @@ impl<'a> LoopHarness<'a> {
         provider: Arc<dyn LlmProvider>,
     ) -> Result<TurnResult, ExecutorError> {
         let req = self.build_request(provider.model_name());
+        let mut req_payload = serde_json::json!({
+            "iteration": self.iteration,
+            "model": provider.model_name(),
+            "messages": req.messages.len(),
+            "tools": req.tools.len(),
+        });
+        if self.ctx.trace_level.should_persist_raw_payloads() {
+            req_payload["raw_messages"] = serde_json::to_value(&req.messages).unwrap_or_default();
+        }
+        self.record_event(EventKind::LlmRequest, req_payload);
         let resp = provider.complete(req).await?;
+        let mut resp_payload = serde_json::json!({
+            "iteration": self.iteration,
+            "tokens_in": resp.usage.tokens_in,
+            "tokens_out": resp.usage.tokens_out,
+            "tool_calls": resp.tool_calls.len(),
+            "has_text": resp.content.as_deref().is_some_and(|c| !c.is_empty()),
+        });
+        if self.ctx.trace_level.should_persist_raw_payloads() {
+            resp_payload["raw_content"] = serde_json::to_value(&resp.content).unwrap_or_default();
+            resp_payload["raw_tool_calls"] =
+                serde_json::to_value(&resp.tool_calls).unwrap_or_default();
+        }
+        self.record_event(EventKind::LlmResponse, resp_payload);
         self.record_usage(&resp);
         self.record_assistant_response(&resp);
         if !resp.tool_calls.is_empty() {
@@ -155,9 +180,27 @@ impl<'a> LoopHarness<'a> {
             agent_name: Some(self.ctx.agent_name.clone()),
         };
 
+        let mut start_payload = serde_json::json!({ "tool": tc.name, "call_id": tc.id });
+        if self.ctx.trace_level.should_persist_raw_payloads() {
+            start_payload["args"] = tc.args.clone();
+        }
+        self.record_event(EventKind::ToolStart, start_payload);
+
         let result = tool.run(tc.args.clone(), &tool_ctx).await;
         match result {
-            Ok(output) => Ok(self.push_tool_result(tc, &output)),
+            Ok(output) => {
+                let mut end_payload =
+                    serde_json::json!({ "tool": tc.name, "call_id": tc.id, "ok": true });
+                if self.ctx.trace_level.should_persist_raw_payloads() {
+                    end_payload["output"] = match &output {
+                        ToolOutput::Text(s) => serde_json::Value::String(s.clone()),
+                        ToolOutput::Json(v) => v.clone(),
+                        ToolOutput::Empty => serde_json::Value::Null,
+                    };
+                }
+                self.record_event(EventKind::ToolEnd, end_payload);
+                Ok(self.push_tool_result(tc, &output))
+            }
             Err(e) => Err(ExecutorError::Tool(e)),
         }
     }
@@ -178,8 +221,16 @@ impl<'a> LoopHarness<'a> {
 
     /// Check the iteration cap. Returns an error if `iteration` has passed
     /// `ctx.max_iterations`.
-    pub(crate) fn check_iteration_cap(&self) -> Result<(), ExecutorError> {
+    pub(crate) fn check_iteration_cap(&mut self) -> Result<(), ExecutorError> {
         if self.iteration > self.ctx.max_iterations {
+            self.record_event(
+                EventKind::IterationCapCheck,
+                serde_json::json!({
+                    "iteration": self.iteration,
+                    "max": self.ctx.max_iterations,
+                    "tripped": true,
+                }),
+            );
             return Err(ExecutorError::MaxIterationsReached(self.ctx.max_iterations));
         }
         Ok(())
@@ -207,7 +258,21 @@ impl<'a> LoopHarness<'a> {
             cost_usd,
             duration_ms,
             status,
+            events: self.events,
         }
+    }
+
+    /// Record a structured trace event. Events are always collected in memory
+    /// (cheap; a handful per run) and gated for persistence by `trace_level`
+    /// in the host's `log_execution`, mirroring how messages are handled.
+    fn record_event(&mut self, kind: EventKind, payload: serde_json::Value) {
+        self.events.push(ExecutionEvent { kind, payload });
+    }
+
+    /// Borrow the recorded trace events.
+    #[allow(dead_code)] // used by tests + the traces writer via the outcome
+    pub(crate) fn events(&self) -> &[ExecutionEvent] {
+        &self.events
     }
 
     /// Borrow the recorded message log.
@@ -335,6 +400,14 @@ impl<'a> LoopHarness<'a> {
         msg.content = Some(text.clone());
         msg.tool_output = Some(serde_json::json!({ "error": text }));
         self.append(msg);
+        self.record_event(
+            EventKind::ToolError,
+            serde_json::json!({
+                "tool": tc.name,
+                "call_id": tc.id,
+                "error": err.to_string(),
+            }),
+        );
     }
 
     fn push_message(
@@ -608,6 +681,85 @@ mod tests {
         assert_eq!(msgs[2].role, Role::System);
         assert_eq!(msgs[3].role, Role::User);
         assert_eq!(msgs[3].seq, 3);
+    }
+
+    #[tokio::test]
+    async fn records_execution_events_for_llm_and_tool() {
+        use crate::types::EventKind;
+        let mock = MockLlmProvider::new("m");
+        mock.push_text("hi back");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let mut reg = ToolRegistry::new();
+        reg.add(MockTool::new("echo", ToolOutput::text("ok")));
+        let ctx = ctx_with(llm, reg, 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let _ = h.one_llm_turn().await.unwrap();
+        let tc = ToolCall {
+            id: "c1".into(),
+            name: "echo".into(),
+            args: serde_json::json!({}),
+        };
+        let _ = h.dispatch_tool_call(&tc).await.unwrap();
+
+        let kinds: Vec<EventKind> = h.events().iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                EventKind::LlmRequest,
+                EventKind::LlmResponse,
+                EventKind::ToolStart,
+                EventKind::ToolEnd,
+            ]
+        );
+        // Tool events carry the call identity so a SQL consumer can join them.
+        let start = h
+            .events()
+            .iter()
+            .find(|e| e.kind == EventKind::ToolStart)
+            .unwrap();
+        assert_eq!(start.payload["tool"], "echo");
+        assert_eq!(start.payload["call_id"], "c1");
+    }
+
+    #[tokio::test]
+    async fn records_tool_error_event() {
+        use crate::types::EventKind;
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlmProvider::new("m"));
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        let tc = ToolCall {
+            id: "c9".into(),
+            name: "bad".into(),
+            args: serde_json::json!({}),
+        };
+        h.push_tool_error(&tc, &ToolError::NotFound { name: "bad".into() });
+        let ev = h.events().last().unwrap();
+        assert_eq!(ev.kind, EventKind::ToolError);
+        assert_eq!(ev.payload["tool"], "bad");
+        assert!(
+            ev.payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn finalize_carries_recorded_events() {
+        use crate::types::EventKind;
+        let mock = MockLlmProvider::new("m");
+        mock.push_text("done");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let _ = h.one_llm_turn().await.unwrap();
+        let out = h.finalize("done".into(), OutcomeStatus::Completed);
+        assert!(
+            out.events.iter().any(|e| e.kind == EventKind::LlmResponse),
+            "events must survive into the outcome for the traces writer"
+        );
     }
 
     #[tokio::test]

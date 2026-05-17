@@ -60,7 +60,7 @@ impl std::fmt::Display for TraceLevel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionEvent {
     pub kind: EventKind,
     pub payload: serde_json::Value,
@@ -77,6 +77,23 @@ pub enum EventKind {
     RetryAttempt,
     CostCapCheck,
     IterationCapCheck,
+}
+
+impl EventKind {
+    /// Canonical unquoted spelling for the `synapse.traces.event` TEXT column.
+    /// Kept in lockstep with the serde `snake_case` rename.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::LlmRequest => "llm_request",
+            Self::LlmResponse => "llm_response",
+            Self::ToolStart => "tool_start",
+            Self::ToolEnd => "tool_end",
+            Self::ToolError => "tool_error",
+            Self::RetryAttempt => "retry_attempt",
+            Self::CostCapCheck => "cost_cap_check",
+            Self::IterationCapCheck => "iteration_cap_check",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +146,33 @@ mod tests {
     #[test]
     fn parse_unknown_errors() {
         assert!("verbose".parse::<TraceLevel>().is_err());
+    }
+
+    #[test]
+    fn event_kind_as_str_is_snake_case_and_stable() {
+        // The `synapse.traces.event` column is plain TEXT; `as_str` is the
+        // canonical, unquoted spelling persisted there. It must match the
+        // serde `snake_case` rename so JSON and SQL stay consistent.
+        assert_eq!(EventKind::LlmRequest.as_str(), "llm_request");
+        assert_eq!(EventKind::LlmResponse.as_str(), "llm_response");
+        assert_eq!(EventKind::ToolStart.as_str(), "tool_start");
+        assert_eq!(EventKind::ToolEnd.as_str(), "tool_end");
+        assert_eq!(EventKind::ToolError.as_str(), "tool_error");
+        assert_eq!(EventKind::RetryAttempt.as_str(), "retry_attempt");
+        assert_eq!(EventKind::CostCapCheck.as_str(), "cost_cap_check");
+        assert_eq!(EventKind::IterationCapCheck.as_str(), "iteration_cap_check");
+        for k in [
+            EventKind::LlmRequest,
+            EventKind::LlmResponse,
+            EventKind::ToolStart,
+            EventKind::ToolEnd,
+            EventKind::ToolError,
+            EventKind::RetryAttempt,
+            EventKind::CostCapCheck,
+            EventKind::IterationCapCheck,
+        ] {
+            let json = serde_json::to_value(k).unwrap();
+            assert_eq!(json, serde_json::Value::String(k.as_str().to_string()));
+        }
     }
 }

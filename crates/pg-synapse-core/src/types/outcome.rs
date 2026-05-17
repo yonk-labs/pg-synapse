@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::llm::ToolCall;
 use super::message::Message;
+use super::trace::ExecutionEvent;
 
 /// Result envelope from one successful executor run.
 ///
@@ -29,6 +30,12 @@ pub struct ExecutorOutcome {
     pub duration_ms: u64,
     /// Why the run terminated.
     pub status: OutcomeStatus,
+    /// Structured trace events emitted by the loop harness, in order. Persisted
+    /// to `synapse.traces` only when the agent's `trace_level` is `debug` or
+    /// `full` (see [`crate::types::TraceLevel::should_persist_events`]).
+    /// `#[serde(default)]` keeps older serialized outcomes deserializable.
+    #[serde(default)]
+    pub events: Vec<ExecutionEvent>,
 }
 
 /// Reason a run ended.
@@ -70,6 +77,7 @@ mod tests {
             cost_usd: Some(0.01),
             duration_ms: 42,
             status: OutcomeStatus::Completed,
+            events: vec![],
         };
         let s = serde_json::to_string(&o).unwrap();
         let back: ExecutorOutcome = serde_json::from_str(&s).unwrap();
