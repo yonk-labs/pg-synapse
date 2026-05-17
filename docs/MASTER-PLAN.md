@@ -45,17 +45,22 @@ PS-1 (ProviderCapabilities + pre-flight check, 7d19a49), PS-2a
 tests green. Minor follow-up: parse Retry-After header in OpenAI
 provider (retry layer works, provider sends None currently).
 
-### Wave 2 - build on Wave 1 (NEXT)
+### Wave 2 - DONE
 
-4. **PS-3: Canonical `ExecutionEvent` + wire the dead `synapse.traces`
-   table.** Fills the already-decided D6 writer (do not redesign the
-   schema). Persist + pollable only; no push (D8). PS-4 depends on it.
-5. **PS-2b: Compaction plugin (`plugins/pg-synapse-compaction`).** The
-   `DefaultCompressor` as a plugin crate, not core (G8).
-6. **PS-2c: Recovery wrapper (overflow -> compact -> retry).** Opt-in
-   composable wrapper (G4). Uses PS-2b.
+4. **PS-3** (ExecutionEvent recorded in LoopHarness + carried via
+   ExecutorOutcome.events + persisted to synapse.traces gated by
+   trace_level>=debug, 40f01c9). D6/D8 honored; PS-4 unblocked.
+5. **PS-2b** (`plugins/pg-synapse-compaction` DefaultCompressor,
+   deterministic LLM-free, G8/D14, 2b7213c).
+6. **PS-2c** (`RecoveryProvider` overflow->compact->retry, opt-in G4,
+   depends only on the Compressor trait, d50d05e).
 
-### Wave 3 - build on Wave 2
+Minor follow-up CLOSED: OpenAI Retry-After parsing was already shipped
+in PS-1 (7d19a49); added regression coverage (60a1bdc). Workspace
+build repaired: a pre-existing B19 trace_level drift left sidecar +
+doctests + several test bins non-compiling on main (f5f812a).
+
+### Wave 3 - build on Wave 2 (NEXT)
 
 7. **PS-4: Redacted diagnostics export bundle.** Needs PS-3. No
    `synapse.execution_export` SQL (N2.2): build the kernel capability,
@@ -108,6 +113,8 @@ more provider plugins (not value until PS-1/PS-5 make it safe).
 
 ## Recommended next action
 
-Wave 2: PS-3 (wire synapse.traces writer using the existing
-ExecutionEvent types + TraceLevel filter) then PS-2b + PS-2c in
-parallel. PS-3 is the longest pole (PS-4 depends on it).
+Wave 3: PS-4 (redacted diagnostics export bundle) now that PS-3 lands
+the trace writer + ExecutorOutcome.events; then PS-5 (cassette /
+record-replay conformance, needs PS-1). Opportunistic: fix the flaky
+`pg-synapse-tools-delegate::depth_decremented_on_sub_agent_failure`
+(see BACKLOG) -- nondeterministic, ~1/5 fail, independent of Wave 2.

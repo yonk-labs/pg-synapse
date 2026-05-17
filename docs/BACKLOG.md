@@ -39,6 +39,12 @@ each item has a why and a rough size. Ordered by leverage.
 | Scale dimension in RESULTS.md | Record SCALE per row; chart pass-rate + latency vs scale per model. | with the matrix |
 | `MODEL-COMPATIBILITY.md` refresh | Fold agent-scenario results in once a1/a3 are trustworthy. | after diagnosis |
 
+## Known flaky tests (fix opportunistically)
+
+| Test | Symptom | Note |
+|---|---|---|
+| `pg-synapse-tools-delegate::tests::depth_decremented_on_sub_agent_failure` | ~1/5 fail, identical code between runs (`assert left==right` at lib.rs:340); passes 100% in isolation, flakes under concurrent full-suite runs | Concurrency/ordering issue in the test's delegation-depth accounting (shared atomic/global or async timing). Independent of Wave 2; surfaced 2026-05-17 when the B19 build repair (f5f812a) un-blocked the full `cargo test --workspace`. Stabilize the test (isolate the depth counter / make the assertion order-independent), do not paper over with retries. |
+
 ## Known NOs (skip in matrices, documented in MODEL-COMPATIBILITY.md)
 
 smollm3-3b, qwen3.5-0.8b, qwen3.5-2b, llama-3.2-3b, granite-4.0-h-1b,
