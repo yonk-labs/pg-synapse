@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS synapse.agents (
   max_iterations    INT  NOT NULL DEFAULT 10,
   timeout_ms        BIGINT NOT NULL DEFAULT 60000,
   cost_cap_usd      NUMERIC(12,6),
+  trace_level       TEXT CHECK (trace_level IN ('off','error','info','debug','full')),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );

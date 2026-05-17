@@ -1,16 +1,20 @@
 -- a1_ingest seed: create empty target tables.
 -- {{SCALE}} is accepted but not used (fixture size is fixed).
+-- TRUNCATE ensures no stale data from a prior run contaminates the assert.
 
 CREATE SCHEMA IF NOT EXISTS ingest;
 
-CREATE TABLE IF NOT EXISTS ingest.customers (
+DROP TABLE IF EXISTS ingest.orders;
+DROP TABLE IF EXISTS ingest.customers;
+
+CREATE TABLE ingest.customers (
     id      INT PRIMARY KEY,
     name    TEXT NOT NULL,
     email   TEXT NOT NULL,
     country TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS ingest.orders (
+CREATE TABLE ingest.orders (
     order_id    INT PRIMARY KEY,
     customer_id INT NOT NULL,
     amount      NUMERIC NOT NULL,

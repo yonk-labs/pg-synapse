@@ -27,6 +27,7 @@ each item has a why and a rough size. Ordered by leverage.
 | Delegation recursion + cycle detection | Once `call_agent` ships: detect A->B->A cycles, not just depth. | S | follows delegation |
 | Reactive triggers (queue + inline modes) | Designed in `docs/reactive-triggers.md`. Dual-mode: queue (async, write commits, agent cannot rollback) vs inline (sync in-txn, agent reject -> RAISE -> triggering write rolls back). `synapse.agent_queue` + `enqueue`/`drain_queue`/`attach_agent_trigger`. | M | spec'd, queued (task T1, after keystone) |
 | Self-draining queue worker | v0.2 upgrade of the above: Postgres bgworker + `LISTEN/NOTIFY` so the queue drains with no external scheduler (v0.1 drain is operator-driven via pg_cron). Depends on real background `execute_async` (D8). | M | v0.2 |
+| Auto-fix memory / correction hints | When the executor feeds a tool error back and the model self-corrects, capture the error-to-fix pattern (e.g., "column specified twice" -> fixed column list) in a per-agent correction memory (`synapse.correction_hints` or similar). Inject accumulated hints into the system prompt or as few-shot examples on subsequent runs so the model avoids repeating known mistakes. Think: agent-scoped "lessons learned" that compound over runs, not just within one run. | M | v0.2, depends on #3 trace/governance |
 
 ## Benchmark / scenario follow-ups
 

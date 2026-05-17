@@ -90,6 +90,7 @@ mod tests {
     use crate::types::OutcomeStatus;
     use async_trait::async_trait;
     use std::sync::Arc;
+    use crate::types::TraceLevel;
     use std::task::{Context, Poll};
     use std::time::Duration;
     use tower::ServiceExt;
@@ -115,6 +116,7 @@ mod tests {
             timeout: Duration::from_millis(500),
             cost_cap_usd: None,
             caller_role: None,
+            trace_level: TraceLevel::default(),
         }
     }
 

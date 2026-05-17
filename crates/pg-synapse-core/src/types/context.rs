@@ -10,6 +10,7 @@ use crate::embedding::EmbeddingProvider;
 use crate::llm::LlmProvider;
 use crate::memory::MemoryProvider;
 use crate::tool::ToolRegistry;
+use crate::types::trace::TraceLevel;
 
 /// Everything an executor needs for one run.
 ///
@@ -72,6 +73,9 @@ pub struct ExecutionContext {
 
     /// Postgres role that invoked the agent (for `executions.caller_role`).
     pub caller_role: Option<String>,
+
+    /// Trace verbosity for this run (resolved from agent override or global GUC).
+    pub trace_level: TraceLevel,
 }
 
 impl ExecutionContext {
@@ -101,6 +105,7 @@ impl ExecutionContext {
             timeout: self.timeout,
             cost_cap_usd: self.cost_cap_usd,
             caller_role: self.caller_role.clone(),
+            trace_level: self.trace_level,
         }
     }
 }
@@ -130,6 +135,7 @@ mod tests {
             timeout: Duration::from_millis(1000),
             cost_cap_usd: Some(0.10),
             caller_role: Some("pg_synapse_user".into()),
+            trace_level: TraceLevel::default(),
         }
     }
 

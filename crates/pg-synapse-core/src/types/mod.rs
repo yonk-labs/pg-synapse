@@ -15,6 +15,7 @@ pub mod message;
 pub mod outcome;
 pub mod profile;
 pub mod tool;
+pub mod trace;
 
 pub use compression::{Compressed, CompressionBudget};
 pub use context::ExecutionContext;
@@ -27,3 +28,4 @@ pub use message::{Message, Role};
 pub use outcome::{ExecutorOutcome, OutcomeStatus};
 pub use profile::{AgentRow, EmbeddingProfileRow, LlmProfileRow};
 pub use tool::{ToolCtx, ToolOutput, ToolSchema};
+pub use trace::{EventKind, ExecutionEvent, TraceLevel};

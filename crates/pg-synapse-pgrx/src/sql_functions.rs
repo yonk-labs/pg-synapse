@@ -216,6 +216,58 @@ pub(crate) mod synapse {
         rebuild_kernel();
     }
 
+    /// Set or clear the per-agent trace level. NULL inherits the global GUC.
+    #[pg_extern(security_definer)]
+    pub fn agent_set_trace_level(name: &str, level: Option<&str>) {
+        if let Some(l) = level {
+            let valid = ["off", "error", "info", "debug", "full"];
+            if !valid.contains(&l) {
+                pgrx::error!("invalid trace level '{}'; use one of: off, error, info, debug, full", l);
+            }
+        }
+        let args: Vec<DatumWithOid<'_>> = vec![
+            match level {
+                Some(l) => DatumWithOid::from(l.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+            DatumWithOid::from(name.to_string()),
+        ];
+        Spi::run_with_args(
+            "UPDATE synapse.agents SET trace_level = $1, updated_at = now() WHERE name = $2",
+            &args,
+        )
+        .unwrap();
+        rebuild_kernel();
+    }
+
+    /// Delete executions (and their cascade-deleted messages/traces) older
+    /// than the given interval. Returns the number of rows purged.
+    #[pg_extern(security_definer)]
+    pub fn purge_traces(older_than_days: i32, agent_filter: Option<&str>) -> i64 {
+        let (sql, args): (String, Vec<DatumWithOid<'_>>) = match agent_filter {
+            Some(a) => (
+                format!(
+                    "DELETE FROM synapse.executions WHERE started_at < now() - interval '{} days' AND agent_name = $1",
+                    older_than_days
+                ),
+                vec![DatumWithOid::from(a.to_string())],
+            ),
+            None => (
+                format!(
+                    "DELETE FROM synapse.executions WHERE started_at < now() - interval '{} days'",
+                    older_than_days
+                ),
+                vec![],
+            ),
+        };
+        Spi::connect_mut(|mut client| {
+            client
+                .update(&sql, None, &args)
+                .map(|t| t.len() as i64)
+                .unwrap_or(0)
+        })
+    }
+
     /// Delete an agent row.
     #[pg_extern(security_definer)]
     pub fn agent_drop(name: &str) {

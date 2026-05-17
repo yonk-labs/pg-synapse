@@ -182,6 +182,11 @@ impl Runtime {
             timeout: std::time::Duration::from_millis(agent.timeout_ms),
             cost_cap_usd: agent.cost_cap_usd,
             caller_role,
+            trace_level: agent
+                .trace_level
+                .as_deref()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_default(),
         };
 
         executor.execute(ctx).await.map_err(RuntimeError::from)
@@ -424,6 +429,7 @@ mod tests {
             max_iterations: 5,
             timeout_ms: 30_000,
             cost_cap_usd: None,
+            trace_level: None,
         }
     }
 

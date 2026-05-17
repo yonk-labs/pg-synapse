@@ -71,6 +71,8 @@ pub struct AgentRow {
     pub timeout_ms: u64,
     /// Per-execution USD cost cap. None means no cap.
     pub cost_cap_usd: Option<f64>,
+    /// Per-agent trace-level override. None means inherit the global GUC.
+    pub trace_level: Option<String>,
 }
 
 #[cfg(test)]
@@ -123,6 +125,7 @@ mod tests {
             max_iterations: 8,
             timeout_ms: 60_000,
             cost_cap_usd: Some(0.50),
+            trace_level: None,
         };
         let s = serde_json::to_string(&a).unwrap();
         let back: AgentRow = serde_json::from_str(&s).unwrap();

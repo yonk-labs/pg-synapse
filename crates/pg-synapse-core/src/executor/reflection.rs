@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::testing::MockLlmProvider;
     use crate::tool::ToolRegistry;
-    use crate::types::Usage;
+    use crate::types::{TraceLevel, Usage};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -141,6 +141,7 @@ mod tests {
             timeout: Duration::from_millis(2000),
             cost_cap_usd,
             caller_role: None,
+            trace_level: TraceLevel::default(),
         }
     }
 

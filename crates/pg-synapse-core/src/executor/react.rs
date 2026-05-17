@@ -49,7 +49,13 @@ impl Executor for ReActExecutor {
                 }
                 Ok(TurnResult::ToolCalls(calls)) => {
                     for tc in &calls {
-                        harness.dispatch_tool_call(tc).await?;
+                        match harness.dispatch_tool_call(tc).await {
+                            Ok(_) => {}
+                            Err(ExecutorError::Tool(te)) => {
+                                harness.push_tool_error(tc, &te);
+                            }
+                            Err(other) => return Err(other),
+                        }
                     }
                 }
                 Err(e) => return Err(e),
@@ -67,6 +73,7 @@ mod tests {
     use crate::tool::ToolRegistry;
     use crate::types::{Role, ToolOutput, Usage};
     use std::sync::Arc;
+    use crate::types::TraceLevel;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -94,6 +101,7 @@ mod tests {
             timeout: Duration::from_millis(1000),
             cost_cap_usd,
             caller_role: None,
+            trace_level: TraceLevel::default(),
         }
     }
 
@@ -185,17 +193,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_tool_returns_typed_error() {
+    async fn unknown_tool_is_fed_back_not_fatal() {
         let mock = MockLlmProvider::new("m");
         mock.push_tool_call("c1", "ghost", serde_json::json!({}));
+        mock.push_text("recovered");
         let llm: Arc<dyn LlmProvider> = Arc::new(mock);
         let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
 
-        let err = ReActExecutor.execute(ctx).await.unwrap_err();
-        match err {
-            ExecutorError::Tool(ToolError::NotFound { name }) => assert_eq!(name, "ghost"),
-            other => panic!("unexpected: {other:?}"),
-        }
+        let outcome = ReActExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::Completed);
+        let fed_back = outcome.messages.iter().any(|m| {
+            m.role == Role::Tool
+                && m.content.as_deref().is_some_and(|c| c.contains("not found"))
+        });
+        assert!(fed_back, "NotFound error should be fed back as a tool message");
     }
 
     #[tokio::test]

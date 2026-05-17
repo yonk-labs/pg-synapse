@@ -30,13 +30,28 @@ One ordered list merging `BACKLOG.md` (original) and `next-backlog.md`
 
 ## The ordered master list
 
-### Wave 0 - finish what is in flight (cheap, data already exists)
+### Wave 0 - finish what is in flight
 
 1. **M-CLOSE-1: Refresh MODEL-COMPATIBILITY.md + finish B8 min-specs**
-   from the just-completed combined matrix (6 agents x 7 WORKS-tier
-   models) and the measured latency/RAM in results.jsonl. No new code;
-   pure write-up. Closes the open B8 task and the original backlog
-   "MODEL-COMPATIBILITY refresh" + "scale dimension" items.
+   from the combined matrix data + the 10x pass-rate data (post
+   error-feedback fix). No new code; pure write-up. Closes B8.
+   STATUS: in-progress (data collected, write-up pending).
+
+#### Wave 0 DONE (2026-05-17, this session):
+- **B18: Tool-error feedback loop.** `conversation.rs` + `react.rs`
+  executors now catch ToolErrors and feed them back to the model as
+  Tool-role messages instead of aborting. 40% failure -> 0% on 10x
+  empirical test. The single highest-leverage reliability change.
+- **B19: Trace/governance kernel + SQL surface.** `TraceLevel` enum
+  (off/error/info/debug/full), `ExecutionEvent`/`EventKind` types in
+  core. `synapse.agents.trace_level` column + CHECK constraint.
+  `synapse.agent_set_trace_level(name, level)` admin fn.
+  `synapse.purge_traces(older_than_days, agent_filter)` admin fn.
+  N2.2 freeze explicitly lifted for this surface by operator.
+- **P1: a1_ingest seed integrity fix.** DROP+recreate tables instead
+  of CREATE IF NOT EXISTS; eliminates stale-state false positives.
+- **Backlog: auto-fix memory/correction hints** added (v0.2, depends
+  on trace/governance).
 
 ### Wave 1 - foundational, unblocked by PS-8 (parallel-safe)
 

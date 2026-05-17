@@ -55,7 +55,18 @@ impl Executor for ConversationExecutor {
                 }
                 Ok(TurnResult::ToolCalls(calls)) => {
                     for tc in &calls {
-                        harness.dispatch_tool_call(tc).await?;
+                        // A failed tool call is fed back to the model as a
+                        // Tool-role error message rather than aborting the
+                        // run. The model then sees the failure and can retry
+                        // with corrected arguments on the next turn; the
+                        // iteration cap bounds the recovery attempts.
+                        match harness.dispatch_tool_call(tc).await {
+                            Ok(_) => {}
+                            Err(ExecutorError::Tool(te)) => {
+                                harness.push_tool_error(tc, &te);
+                            }
+                            Err(other) => return Err(other),
+                        }
                     }
                 }
                 Err(e) => return Err(e),
@@ -77,8 +88,9 @@ mod tests {
     use crate::llm::LlmProvider;
     use crate::testing::{MockLlmProvider, MockTool};
     use crate::tool::ToolRegistry;
-    use crate::types::{ToolOutput, Usage};
+    use crate::types::{ToolOutput, ToolSchema, Usage};
     use std::sync::Arc;
+    use crate::types::TraceLevel;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -106,6 +118,7 @@ mod tests {
             timeout: Duration::from_millis(1000),
             cost_cap_usd,
             caller_role: None,
+            trace_level: TraceLevel::default(),
         }
     }
 
@@ -142,20 +155,102 @@ mod tests {
         assert_eq!(outcome.status, OutcomeStatus::MaxIterations);
     }
 
+    /// A tool that fails its first `fail_times` invocations with an
+    /// `Execution` error, then succeeds. Models the real-world case where a
+    /// model emits a malformed argument once, then corrects it after seeing
+    /// the error fed back.
+    struct FlakyTool {
+        name: String,
+        schema: ToolSchema,
+        calls: std::sync::atomic::AtomicUsize,
+        fail_times: usize,
+    }
+
+    impl FlakyTool {
+        fn new(name: &str, fail_times: usize) -> Self {
+            Self {
+                name: name.into(),
+                schema: ToolSchema::default(),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                fail_times,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::Tool for FlakyTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn schema(&self) -> &ToolSchema {
+            &self.schema
+        }
+        async fn run(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &crate::types::ToolCtx,
+        ) -> Result<ToolOutput, ToolError> {
+            let n = self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n < self.fail_times {
+                Err(ToolError::Execution {
+                    name: self.name.clone(),
+                    reason: "column \"x\" specified more than once".into(),
+                })
+            } else {
+                Ok(ToolOutput::text("ok"))
+            }
+        }
+    }
+
     #[tokio::test]
-    async fn unknown_tool_surfaces_typed_error() {
+    async fn tool_error_is_fed_back_then_model_recovers() {
+        // Turn 1: model calls a tool that fails once.
+        // Turn 2: model (having seen the error) calls again; tool succeeds.
+        // Turn 3: model emits final text.
+        let mock = MockLlmProvider::new("m");
+        mock.push_tool_call("c1", "flaky", serde_json::json!({"bad": true}));
+        mock.push_tool_call("c2", "flaky", serde_json::json!({"good": true}));
+        mock.push_text("recovered and done");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let mut reg = ToolRegistry::new();
+        reg.add(FlakyTool::new("flaky", 1));
+        let ctx = ctx_with(llm, reg, 10, None);
+
+        let outcome = ConversationExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::Completed);
+        assert_eq!(outcome.output, "recovered and done");
+        // The failed call must appear as a Tool-role error message so the
+        // model could see it, not abort the run.
+        let err_msg = outcome.messages.iter().find(|m| {
+            m.role == crate::types::Role::Tool
+                && m.content.as_deref().is_some_and(|c| c.contains("ERROR:"))
+        });
+        assert!(
+            err_msg.is_some(),
+            "expected a Tool-role error message in the trace"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_is_fed_back_not_fatal() {
+        // An unknown tool no longer aborts the run: the NotFound error is
+        // fed back and the model can choose a different action.
         let mock = MockLlmProvider::new("m");
         mock.push_tool_call("c1", "missing", serde_json::json!({}));
+        mock.push_text("ok, I will not use that tool");
         let llm: Arc<dyn LlmProvider> = Arc::new(mock);
         let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
 
-        let err = ConversationExecutor.execute(ctx).await.unwrap_err();
-        match err {
-            ExecutorError::Tool(ToolError::NotFound { name }) => {
-                assert_eq!(name, "missing");
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
+        let outcome = ConversationExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::Completed);
+        assert_eq!(outcome.output, "ok, I will not use that tool");
+        let fed_back = outcome.messages.iter().any(|m| {
+            m.role == crate::types::Role::Tool
+                && m.content.as_deref().is_some_and(|c| c.contains("not found"))
+        });
+        assert!(fed_back, "NotFound error should be fed back as a tool message");
     }
 
     #[tokio::test]

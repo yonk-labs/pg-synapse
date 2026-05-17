@@ -384,7 +384,7 @@ impl ProfileSource for SpiProfileSource {
         Spi::connect(|client| -> Result<Vec<AgentRow>, RuntimeError> {
             let table = client
                 .select(
-                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms, cost_cap_usd FROM synapse.agents",
+                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms, cost_cap_usd, trace_level FROM synapse.agents",
                     None,
                     &[],
                 )
@@ -423,6 +423,7 @@ impl ProfileSource for SpiProfileSource {
                         .ok()
                         .flatten()
                         .and_then(|n| f64::try_from(n).ok()),
+                    trace_level: row.get::<String>(13).ok().flatten(),
                 };
                 crate::schema_guc::apply_guc_fallbacks(&mut agent);
                 out.push(agent);

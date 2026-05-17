@@ -320,6 +320,23 @@ impl<'a> LoopHarness<'a> {
         snapshot
     }
 
+    /// Append a Tool-role message representing a *failed* tool call.
+    ///
+    /// Feeding the error back into the message log (instead of aborting the
+    /// run) lets the next LLM turn observe what went wrong and self-correct
+    /// the offending argument. The iteration cap still bounds how many
+    /// recovery attempts the model gets.
+    pub(crate) fn push_tool_error(&mut self, tc: &ToolCall, err: &ToolError) {
+        let mut msg = self.new_message(Role::Tool);
+        msg.tool_call_id = Some(tc.id.clone());
+        msg.tool_name = Some(tc.name.clone());
+        msg.tool_input = Some(tc.args.clone());
+        let text = format!("ERROR: {err}");
+        msg.content = Some(text.clone());
+        msg.tool_output = Some(serde_json::json!({ "error": text }));
+        self.append(msg);
+    }
+
     fn push_message(
         &mut self,
         role: Role,
@@ -360,6 +377,7 @@ mod tests {
     use crate::tool::ToolRegistry;
     use crate::types::{ToolOutput, Usage};
     use std::sync::Arc;
+    use crate::types::TraceLevel;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -387,6 +405,7 @@ mod tests {
             timeout: Duration::from_millis(1000),
             cost_cap_usd,
             caller_role: Some("pg_synapse_user".into()),
+            trace_level: TraceLevel::default(),
         }
     }
 
