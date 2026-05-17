@@ -459,6 +459,22 @@ for MKEY in "${MODEL_KEYS[@]}"; do
                 fi
                 rm -f "$RENDERED_SEED"
             fi
+            # Optional fs seeding for cross-toolset sql scenarios.
+            # If seed_fs.sh exists alongside the sql seed, run it so the agent
+            # can read files from the sandbox in addition to querying Postgres.
+            SEED_FS_SQL="$SCENARIO_DIR/seed_fs.sh"
+            if [[ -f "$SEED_FS_SQL" ]]; then
+                rm -rf "$FS_RUN_DIR"
+                mkdir -p "$FS_RUN_DIR"
+                if ! FS_ROOT="$FS_RUN_DIR" SCALE="$OPT_SCALE" bash "$SEED_FS_SQL"; then
+                    ERROR="seed_fs.sh failed"
+                    warn "  $ERROR for $MKEY/$SCENARIO"
+                    drop_db "$DB"
+                    record_result "$(python3 -c "import json; print(json.dumps({'model':'$MKEY','scenario':'$SCENARIO','scale':$OPT_SCALE,'kind':'$SCENARIO_KIND','task_passed':False,'tool_emitted':False,'tokens_in':0,'tokens_out':0,'latency_ms':0,'iterations':0,'error':'$ERROR','run_date':'$RUN_DATE'}))")"
+                    continue
+                fi
+                log "  FS seed (sql+fs) done: $FS_RUN_DIR"
+            fi
         else
             # KIND=fs: prepare a fresh per-run sandbox dir and run seed_fs.sh.
             rm -rf "$FS_RUN_DIR"
@@ -517,8 +533,10 @@ PYEOF
         SYSTEM_PROMPT="$(cat "$SCENARIO_DIR/system_prompt.txt")"
         TASK="$(cat "$SCENARIO_DIR/task.txt")"
 
-        # For fs scenarios, substitute {{FSDIR}} with the relative sandbox subdir.
-        if [[ "$SCENARIO_KIND" == "fs" ]]; then
+        # Substitute {{FSDIR}} for fs scenarios and for sql scenarios that also
+        # have a seed_fs.sh (cross-toolset: Postgres tables plus file fixtures).
+        if [[ "$SCENARIO_KIND" == "fs" ]] || \
+           [[ "$SCENARIO_KIND" == "sql" && -f "$SCENARIO_DIR/seed_fs.sh" ]]; then
             SYSTEM_PROMPT="${SYSTEM_PROMPT//\{\{FSDIR\}\}/$FSDIR_RELPATH}"
             TASK="${TASK//\{\{FSDIR\}\}/$FSDIR_RELPATH}"
         fi

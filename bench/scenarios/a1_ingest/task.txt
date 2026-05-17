@@ -1,0 +1,12 @@
+Two fixture files have been placed in the sandbox:
+
+  {{FSDIR}}/incoming/customers.csv
+  {{FSDIR}}/incoming/orders.json
+
+Your job is to load both files into Postgres.
+
+Step 1: Read {{FSDIR}}/incoming/customers.csv with read_file. The first line is a header (skip it). Insert each of the remaining rows into ingest.customers using sql_exec.
+
+Step 2: Read {{FSDIR}}/incoming/orders.json with read_file. It is a JSON array of objects. Insert each object into ingest.orders using sql_exec.
+
+Step 3: Query both tables with sql_query and report the final row counts.

@@ -1,0 +1,18 @@
+-- a1_ingest seed: create empty target tables.
+-- {{SCALE}} is accepted but not used (fixture size is fixed).
+
+CREATE SCHEMA IF NOT EXISTS ingest;
+
+CREATE TABLE IF NOT EXISTS ingest.customers (
+    id      INT PRIMARY KEY,
+    name    TEXT NOT NULL,
+    email   TEXT NOT NULL,
+    country TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ingest.orders (
+    order_id    INT PRIMARY KEY,
+    customer_id INT NOT NULL,
+    amount      NUMERIC NOT NULL,
+    status      TEXT NOT NULL
+);
