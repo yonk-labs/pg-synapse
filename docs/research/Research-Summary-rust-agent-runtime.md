@@ -105,7 +105,7 @@ There is no Rust crate that:
 
 When `/brainstorming` runs:
 - The conversation must reference only the Research-Report and the cited public sources
-- No reference to any private codebase, no comparisons "but downstream-product does X differently"
+- No reference to any private codebase, no comparisons to any private downstream product
 - Convergent design on the patterns listed in the Research-Report is fine and defensible — these are public-knowledge primitives
 - The new repo's first commit should include `docs/RESEARCH.md` citing the four intermediate research files in this directory as the design provenance
 

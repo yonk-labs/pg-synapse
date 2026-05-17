@@ -108,7 +108,7 @@ doctests + several test bins non-compiling on main (f5f812a).
 `synapse.plugin_*`/`provider_verify`/`execution_export` SQL (N2.2 until
 v0.2; tracked inside PS-1/4/7), real-time push (D8), OpenAPI gen + CI
 freshness, plugin-owned migrations, memory plugin / NL2SQL / semantic
-catalog / workflow engine / CodeAct (downstream-product product modules per D14),
+catalog / workflow engine / CodeAct (downstream product modules per D14),
 more provider plugins (not value until PS-1/PS-5 make it safe).
 
 ## Recommended next action

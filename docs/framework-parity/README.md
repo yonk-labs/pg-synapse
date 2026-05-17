@@ -28,7 +28,7 @@ section grounded in the live fetch.
 | Capability | Why not |
 |---|---|
 | LangGraph explicit Graph API (`StateGraph`, nodes, conditional edges, Functional `@entrypoint`/`@task`) | Deliberate design difference, not a gap. pg_synapse's `Executor` trait is the alternative to a user-built node graph; the loop lives inside the executor. A custom `GraphExecutor` plugin is the forward path if graph semantics are wanted. |
-| LangGraph checkpointing / `thread_id` mid-run resume | Genuine future feature. The quickstart page itself does not cover it; LangGraph's separate `langgraph-checkpoint-postgres` does. pg_synapse logs run state but cannot pause/resume mid-loop. Needs a new resumable Executor + a `synapse.checkpoints` table (column sketch in `langgraph.md`). This is the downstream-product-relevant gap. |
+| LangGraph checkpointing / `thread_id` mid-run resume | Genuine future feature. The quickstart page itself does not cover it; LangGraph's separate `langgraph-checkpoint-postgres` does. pg_synapse logs run state but cannot pause/resume mid-loop. Needs a new resumable Executor + a `synapse.checkpoints` table (column sketch in `langgraph.md`). This is the product-layer-relevant gap. |
 | `adk create` CLI scaffold | Different surface, same outcome. pg_synapse scaffolds via SQL, not a project CLI. |
 | Google A2A protocol (cross-service agent-to-agent) | Genuine unbuilt capability. pg_synapse ships an MCP client (agent-to-tool) but no A2A (agent-to-agent wire protocol). A future `pg-synapse-a2a` plugin (client + server, the way the MCP client is a plugin) maps onto a gateway-level intercept/governance model. v0.2+ design direction, not a quickstart-sized example. |
 

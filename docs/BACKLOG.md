@@ -20,7 +20,7 @@ each item has a why and a rough size. Ordered by leverage.
 
 | Item | Why | Size | Status |
 |---|---|---|---|
-| Resumable `CheckpointExecutor` + `synapse.checkpoints` table | LangGraph `thread_id` mid-run pause/resume parity. The downstream-product-relevant gap: persist loop state, resume on a new turn. Column sketch in `framework-parity/langgraph.md`. | M | v0.2, specified |
+| Resumable `CheckpointExecutor` + `synapse.checkpoints` table | LangGraph `thread_id` mid-run pause/resume parity. The product-layer-relevant gap: persist loop state, resume on a new turn. Column sketch in `framework-parity/langgraph.md`. | M | v0.2, specified |
 | `plan-and-solve` executor | Decompose-then-execute loop; better for the harder multi-step scenarios (a1_ingest, a3_triage) where react/conversation under-plan. | M | v0.2 |
 | `reflection` executor tuning | Exists; tune the critique loop + add a max-revisions GUC. | S | v0.1.x |
 | Per-agent loop budget GUCs | `max_iterations`/`cost_cap`/`timeout` are agent columns; add GUC defaults + a hard wall-clock kill. | S | v0.1.x |

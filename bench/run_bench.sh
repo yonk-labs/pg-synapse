@@ -15,7 +15,7 @@
 #   bench/results.jsonl   append-only JSON lines (one per model+scenario run)
 #   bench/RESULTS.md      leaderboard regenerated after every run
 #
-# IP firewall: never reads [redacted-path]* or [redacted-path]/.
+# Clean-room: reads only this repo's own files; no external or private sources.
 # Secret rule: .openai key extracted at runtime via sed; never echoed or logged.
 # EM-dash rule: no em-dashes in this file.
 
