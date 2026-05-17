@@ -6,6 +6,7 @@ Cargo.lock
 .vscode/
 *.swp
 docs/_drafts/
+skill-output/
 
 # Secrets and local credentials (never commit)
 .openai
