@@ -299,6 +299,7 @@ fn ctx(llm: Arc<dyn LlmProvider>, input: &str) -> ExecutionContext {
         timeout: Duration::from_millis(500),
         cost_cap_usd: None,
         caller_role: None,
+        trace_level: pg_synapse_core::types::TraceLevel::default(),
     }
 }
 

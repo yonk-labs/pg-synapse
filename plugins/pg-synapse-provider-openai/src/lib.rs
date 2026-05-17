@@ -44,6 +44,7 @@
 //!         max_iterations: 4,
 //!         timeout_ms: 30_000,
 //!         cost_cap_usd: None,
+//!         trace_level: None,
 //!     });
 //!
 //! let _runtime = Runtime::builder()

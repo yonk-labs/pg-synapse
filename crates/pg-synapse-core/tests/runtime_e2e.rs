@@ -55,6 +55,7 @@ fn agent(name: &str, llm: &str, tools: Vec<String>) -> AgentRow {
         max_iterations: 5,
         timeout_ms: 30_000,
         cost_cap_usd: None,
+        trace_level: None,
     }
 }
 
@@ -136,6 +137,12 @@ async fn runtime_executes_conversation_end_to_end() {
 #[tokio::test]
 async fn runtime_routes_tool_calls() {
     let mock = Arc::new(MockLlmProvider::new("mock-model"));
+    // A tool-using agent requires a tool-capable provider (PS-1 pre-flight
+    // gate). A real deployment pairs tools with a tool_use provider.
+    mock.set_capabilities(pg_synapse_core::ProviderCapabilities {
+        tool_use: true,
+        ..Default::default()
+    });
     mock.push_tool_call("c1", "echo", serde_json::json!({"x": 1}));
     mock.push_text("final answer");
 
@@ -258,11 +265,18 @@ async fn runtime_embed_works() {
 
 #[tokio::test]
 async fn runtime_filters_tools_by_agent_allow_list() {
-    // Two tools registered; agent only allows one. The other must not be
-    // reachable via the executor (mock LLM tries calling the disallowed tool;
-    // executor surfaces NotFound).
+    // Two tools registered; agent only allows one. The disallowed tool must
+    // not be reachable: the executor sees it as NotFound and (per B18's
+    // tool-error feedback loop) feeds that back rather than aborting, so the
+    // model gets a turn to recover. The allow-list still did its job: the
+    // blocked tool never ran.
     let mock = Arc::new(MockLlmProvider::new("m"));
+    mock.set_capabilities(pg_synapse_core::ProviderCapabilities {
+        tool_use: true,
+        ..Default::default()
+    });
     mock.push_tool_call("c1", "blocked", serde_json::json!({}));
+    mock.push_text("understood, not using that tool");
 
     let runtime = Runtime::builder()
         .with_plugin(MockLlmFactory::new("mock", mock))
@@ -274,13 +288,25 @@ async fn runtime_filters_tools_by_agent_allow_list() {
         .await
         .unwrap();
 
-    let err = runtime.execute("restricted", "do it").await.unwrap_err();
-    match err {
-        RuntimeError::Executor(pg_synapse_core::ExecutorError::Tool(ToolError::NotFound {
-            name,
-        })) => assert_eq!(name, "blocked"),
-        other => panic!("expected ToolError::NotFound, got {other:?}"),
-    }
+    let outcome = runtime.execute("restricted", "do it").await.unwrap();
+    assert_eq!(outcome.status, OutcomeStatus::Completed);
+    // The blocked tool was rejected as not-found and fed back to the model.
+    let fed_back = outcome.messages.iter().any(|m| {
+        m.role == pg_synapse_core::types::Role::Tool
+            && m.content
+                .as_deref()
+                .is_some_and(|c| c.contains("not found") && c.contains("blocked"))
+    });
+    assert!(
+        fed_back,
+        "disallowed tool must surface a NotFound fed back as a tool message; got {:?}",
+        outcome.messages
+    );
+    // It must never have executed (no echo output from "blocked").
+    assert!(
+        outcome.tool_calls.iter().all(|tc| tc.name != "allowed"),
+        "the allowed tool was never called in this scenario"
+    );
 }
 
 #[tokio::test]

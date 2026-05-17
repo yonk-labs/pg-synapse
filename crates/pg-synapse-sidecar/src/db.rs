@@ -161,6 +161,11 @@ impl ProfileSource for SqlxProfileSource {
                     max_iterations: max_iter as u32,
                     timeout_ms: timeout as u64,
                     cost_cap_usd: cost_cap,
+                    // The sidecar agents query does not yet SELECT
+                    // trace_level; per-agent trace governance is pgrx-host
+                    // only for now (v0.2 sidecar follow-up). None preserves
+                    // pre-B19 sidecar behavior (no per-agent trace level).
+                    trace_level: None,
                 })
             })
             .collect()
