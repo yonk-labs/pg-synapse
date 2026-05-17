@@ -24,14 +24,14 @@ each item has a why and a rough size. Ordered by leverage.
 | `reflection` executor tuning | Exists; tune the critique loop + add a max-revisions GUC. | S | v0.1.x |
 | Per-agent loop budget GUCs | `max_iterations`/`cost_cap`/`timeout` are agent columns; add GUC defaults + a hard wall-clock kill. | S | v0.1.x |
 | Delegation recursion + cycle detection | Once `call_agent` ships: detect A->B->A cycles, not just depth. | S | follows delegation |
-| Trigger-fired agents (reactive) | A Postgres trigger calling `synapse.execute` on INSERT/UPDATE works today in the pgrx host, but synchronous: it runs the whole LLM loop inside the writing txn (blocks the writer, holds locks, recursion risk). Demonstrable now with a status-guard + `pg_trigger_depth()`; production-correct version needs the queued path below. Ship a `trigger-fires-triage` example showing the SAFE pattern. | S (demo) / M (safe) | v0.1.x demo, v0.2 safe |
-| Trigger -> enqueue -> worker pattern | The correct reactive design: trigger writes a queue row (or `NOTIFY`), an out-of-band worker runs `synapse.execute`. Decouples the write from LLM latency. Depends on the real background `execute_async` (bgworker) + `LISTEN/NOTIFY` (D8). | M | v0.2 |
+| Reactive triggers (queue + inline modes) | Designed in `docs/reactive-triggers.md`. Dual-mode: queue (async, write commits, agent cannot rollback) vs inline (sync in-txn, agent reject -> RAISE -> triggering write rolls back). `synapse.agent_queue` + `enqueue`/`drain_queue`/`attach_agent_trigger`. | M | spec'd, queued (task T1, after keystone) |
+| Self-draining queue worker | v0.2 upgrade of the above: Postgres bgworker + `LISTEN/NOTIFY` so the queue drains with no external scheduler (v0.1 drain is operator-driven via pg_cron). Depends on real background `execute_async` (D8). | M | v0.2 |
 
 ## Benchmark / scenario follow-ups
 
 | Item | Why | Status |
 |---|---|---|
-| Diagnose a1_ingest / a3_triage 0-pass-on-strong-models | gpt-5-mini + vllm-qwen3-coder fail while emitting tool calls => assertion-strictness or scenario bug, not model verdict. Gate before any rundown. | next |
+| Diagnose a1_ingest / a3_triage 0-pass-on-strong-models | DIAGNOSED (B15): root cause was a hardcoded max_iterations=10 confound. Fixed (scenario MAX_ITER, default 25). a1_ingest now PASSes strong models. a3_triage still fails -> prompt tightening + query-alias gap = task B16. | done (a1); B16 (a3) |
 | Build external parity scenarios `lg_calc`, `oai_triage`, `adk_root`, `adk_orchestrator` | "3 from external" test set. Needs delegation+calc+clock tools. | keystone wave |
 | Full correctness + scale matrix | All built agents x all WORKS/PARTIAL serving models, SCALE=1 and a scaled run; skip the known-NO models. | after keystone + diagnosis |
 | Scale dimension in RESULTS.md | Record SCALE per row; chart pass-rate + latency vs scale per model. | with the matrix |
