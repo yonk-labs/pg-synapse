@@ -105,7 +105,7 @@ pub use error::{
     RuntimeError, ToolError,
 };
 pub use executor::Executor;
-pub use llm::{LlmProvider, LlmProviderFactory};
+pub use llm::{LlmProvider, LlmProviderFactory, ProviderCapabilities};
 pub use memory::MemoryProvider;
 pub use plugin::{Plugin, Registry};
 pub use runtime::{ProfileSource, Runtime, RuntimeBuilder};

@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 
 use pg_synapse_core::LlmProvider;
 use pg_synapse_core::error::LlmError;
+use pg_synapse_core::llm::ProviderCapabilities;
 use pg_synapse_core::types::{
     CompletionChunk, CompletionRequest, CompletionResponse, Role, ToolCall, Usage,
 };
@@ -752,9 +753,11 @@ impl OpenAiProvider {
             .map_err(|e| LlmError::Network(e.to_string()))?;
         let status = resp.status();
         if !status.is_success() {
+            let retry_after = parse_retry_after(&resp);
             return Err(map_http_error(
                 status,
                 resp.text().await.unwrap_or_default(),
+                retry_after,
             ));
         }
         let body: Value = resp.json().await.map_err(|e| LlmError::Provider {
@@ -775,12 +778,31 @@ impl OpenAiProvider {
     }
 }
 
-fn map_http_error(status: reqwest::StatusCode, body: String) -> LlmError {
+/// Parse the `Retry-After` header value into milliseconds.
+///
+/// The header value is a decimal number of seconds (per RFC 7231 / OpenAI).
+/// HTTP-date values are not handled; those are uncommon from LLM APIs.
+fn parse_retry_after(resp: &reqwest::Response) -> Option<u64> {
+    let val = resp.headers().get("retry-after")?.to_str().ok()?;
+    // Accept both integer ("2") and decimal ("1.5") seconds.
+    let secs: f64 = val.trim().parse().ok()?;
+    if secs > 0.0 {
+        Some((secs * 1000.0).round() as u64)
+    } else {
+        None
+    }
+}
+
+fn map_http_error(
+    status: reqwest::StatusCode,
+    body: String,
+    retry_after_ms: Option<u64>,
+) -> LlmError {
     match status.as_u16() {
         401 | 403 => LlmError::Auth("openai".into()),
         429 => LlmError::RateLimited {
             provider: "openai".into(),
-            retry_after_ms: None,
+            retry_after_ms,
         },
         _ => LlmError::Provider {
             provider: "openai".into(),
@@ -814,8 +836,9 @@ impl LlmProvider for OpenAiProvider {
 
         let status = resp.status();
         if !status.is_success() {
+            let retry_after = parse_retry_after(&resp);
             let body = resp.text().await.unwrap_or_default();
-            return Err(map_http_error(status, body));
+            return Err(map_http_error(status, body, retry_after));
         }
 
         let body: Value = resp.json().await.map_err(|e| LlmError::Provider {
@@ -969,6 +992,17 @@ impl LlmProvider for OpenAiProvider {
 
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            tool_use: true,
+            streaming: true,
+            json_mode: true,
+            vision: false,
+            max_context_tokens: None,
+            max_output_tokens: None,
+        }
     }
 }
 

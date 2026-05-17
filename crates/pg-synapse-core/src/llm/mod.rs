@@ -1,12 +1,32 @@
-//! The [`LlmProvider`] trait and [`LlmProviderFactory`] for building one from a
-//! profile row.
+//! The [`LlmProvider`] trait, [`LlmProviderFactory`] for building one from a
+//! profile row, and [`ProviderCapabilities`] for pre-flight introspection.
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::error::{LlmError, ProviderError};
 use crate::types::{CompletionChunk, CompletionRequest, CompletionResponse, LlmProfileRow};
+
+/// Declares what an LLM provider supports so the runtime can reject
+/// mismatches (e.g. tool-using agent on a provider without tool_use) before
+/// spending tokens.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderCapabilities {
+    /// Provider can handle tool-use request/response cycles.
+    pub tool_use: bool,
+    /// Provider supports streaming completions.
+    pub streaming: bool,
+    /// Provider supports constrained JSON output mode.
+    pub json_mode: bool,
+    /// Provider supports vision (image) inputs.
+    pub vision: bool,
+    /// Maximum context window in tokens, if known.
+    pub max_context_tokens: Option<u32>,
+    /// Maximum output tokens per completion, if known.
+    pub max_output_tokens: Option<u32>,
+}
 
 /// A backend that turns a [`CompletionRequest`] into a [`CompletionResponse`].
 ///
@@ -43,6 +63,13 @@ pub trait LlmProvider: Send + Sync {
     /// Default model name for this provider (used for trace rows when the
     /// request leaves `model` unset).
     fn model_name(&self) -> &str;
+
+    /// Advertise what this provider supports. The default returns all
+    /// capabilities as false/None so existing implementations compile
+    /// without changes; override to report accurate values.
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
+    }
 }
 
 /// Factory that turns one [`LlmProfileRow`] into an `Arc<dyn LlmProvider>`.

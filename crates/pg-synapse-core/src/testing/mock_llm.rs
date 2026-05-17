@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use crate::error::LlmError;
-use crate::llm::LlmProvider;
+use crate::llm::{LlmProvider, ProviderCapabilities};
 use crate::types::{CompletionChunk, CompletionRequest, CompletionResponse, ToolCall, Usage};
 
 /// One scripted response in a [`MockLlmProvider`]'s queue.
@@ -66,15 +66,26 @@ pub enum MockResponse {
 pub struct MockLlmProvider {
     queue: Mutex<VecDeque<MockResponse>>,
     model: String,
+    capabilities: Mutex<ProviderCapabilities>,
 }
 
 impl MockLlmProvider {
     /// Construct a mock that reports the given `model` name.
+    ///
+    /// The default capabilities are all-false (matching the trait default).
+    /// Use [`MockLlmProvider::with_capabilities`] to override.
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             queue: Mutex::new(VecDeque::new()),
             model: model.into(),
+            capabilities: Mutex::new(ProviderCapabilities::default()),
         }
+    }
+
+    /// Replace the capabilities this mock advertises.
+    pub fn set_capabilities(&self, caps: ProviderCapabilities) -> &Self {
+        *self.capabilities.lock().unwrap() = caps;
+        self
     }
 
     /// Enqueue a text response.
@@ -199,6 +210,10 @@ impl LlmProvider for MockLlmProvider {
 
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.capabilities.lock().unwrap().clone()
     }
 }
 

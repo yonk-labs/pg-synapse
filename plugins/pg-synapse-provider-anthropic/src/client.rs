@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 
 use pg_synapse_core::LlmProvider;
 use pg_synapse_core::error::LlmError;
+use pg_synapse_core::llm::ProviderCapabilities;
 use pg_synapse_core::types::{
     CompletionChunk, CompletionRequest, CompletionResponse, Role, ToolCall, Usage,
 };
@@ -424,6 +425,17 @@ impl LlmProvider for AnthropicProvider {
 
     fn model_name(&self) -> &str {
         &self.model
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            tool_use: true,
+            streaming: true,
+            json_mode: true,
+            vision: true,
+            max_context_tokens: None,
+            max_output_tokens: None,
+        }
     }
 }
 

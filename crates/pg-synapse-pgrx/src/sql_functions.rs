@@ -408,6 +408,29 @@ pub(crate) mod synapse {
 
     // ---- v0.1.1 N2.2: remaining SQL surface ----
 
+    /// Return the capabilities of the named LLM profile's provider as JSONB.
+    /// Lets operators verify what a profile supports before assigning it to
+    /// an agent. Returns `{"error": "..."}` when the profile is not found.
+    #[pg_extern(security_definer)]
+    pub fn provider_capabilities(profile_name: &str) -> JsonB {
+        let kernel = match kernel_handle() {
+            Ok(k) => k,
+            Err(e) => {
+                return JsonB(json!({ "error": e }));
+            }
+        };
+        match kernel.provider_capabilities(profile_name) {
+            Some(caps) => {
+                // ProviderCapabilities derives Serialize, so this is safe.
+                let v = serde_json::to_value(caps).unwrap_or(json!({}));
+                JsonB(v)
+            }
+            None => JsonB(json!({
+                "error": format!("LLM profile '{}' not registered", profile_name),
+            })),
+        }
+    }
+
     /// List every registered agent. Returns a JSONB array of objects
     /// `{name, executor_name, llm_profile_main, tools}`. A JSONB array (not a
     /// `TABLE`) keeps the pgrx 0.18 surface simple and is consistent with

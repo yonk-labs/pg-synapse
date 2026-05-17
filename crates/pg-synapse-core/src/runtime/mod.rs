@@ -164,6 +164,17 @@ impl Runtime {
 
         let tools = self.resolve_tools(&agent.tools);
 
+        // Pre-flight: reject early if the agent needs tool_use but the
+        // provider does not support it. Avoids wasting a full LLM call on
+        // an executor loop that will fail on the first tool-call response.
+        if !agent.tools.is_empty() && !llm.capabilities().tool_use {
+            return Err(RuntimeError::Config(format!(
+                "agent '{}' has tools but its LLM provider ('{}') does not support tool_use",
+                agent_name,
+                llm.model_name(),
+            )));
+        }
+
         let ctx = ExecutionContext {
             execution_id: Uuid::new_v4(),
             agent_name: agent.name.clone(),
@@ -277,6 +288,17 @@ impl Runtime {
     /// True when the runtime knows about the named agent.
     pub fn has_agent(&self, name: &str) -> bool {
         self.agents.contains_key(name)
+    }
+
+    /// Return the capabilities advertised by the named LLM profile's
+    /// provider, or `None` if the profile is not registered.
+    pub fn provider_capabilities(
+        &self,
+        profile_name: &str,
+    ) -> Option<crate::llm::ProviderCapabilities> {
+        self.llm_providers
+            .get(profile_name)
+            .map(|p| p.capabilities())
     }
 
     fn resolve_llm(&self, name: Option<&str>) -> Result<Arc<dyn LlmProvider>, RuntimeError> {
@@ -691,5 +713,111 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, serde_json::json!({"x": 1}));
+    }
+
+    #[tokio::test]
+    async fn preflight_rejects_tools_without_tool_use_capability() {
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.push_text("ignored");
+        // Default capabilities: tool_use = false.
+
+        let mut a = agent("a1", "default");
+        a.tools = vec!["some_tool".into()];
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        let err = runtime.execute("a1", "hi").await.unwrap_err();
+        match err {
+            RuntimeError::Config(msg) => {
+                assert!(msg.contains("tool_use"), "msg: {msg}");
+                assert!(msg.contains("a1"), "msg should mention agent name: {msg}");
+            }
+            other => panic!("expected Config, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn preflight_passes_when_capabilities_match() {
+        use crate::llm::ProviderCapabilities;
+
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.set_capabilities(ProviderCapabilities {
+            tool_use: true,
+            ..Default::default()
+        });
+        mock.push_text("ok");
+
+        let mut a = agent("a1", "default");
+        a.tools = vec!["some_tool".into()];
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        // Should not error on the pre-flight check. It will reach the
+        // executor, which runs through the conversation loop. The tool
+        // "some_tool" is not registered so the executor will not find it, but
+        // the mock provider returns a text response so the loop completes.
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+        assert_eq!(outcome.output, "ok");
+    }
+
+    #[tokio::test]
+    async fn preflight_passes_for_toolless_agent_on_no_tool_use_provider() {
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.push_text("fine");
+        // Default capabilities: tool_use = false, but agent has no tools.
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(agent("a1", "default"))
+            .build()
+            .await
+            .unwrap();
+
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+        assert_eq!(outcome.output, "fine");
+    }
+
+    #[tokio::test]
+    async fn provider_capabilities_returns_none_for_unknown_profile() {
+        let runtime = Runtime::builder().build().await.unwrap();
+        assert!(runtime.provider_capabilities("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_capabilities_returns_caps_for_known_profile() {
+        use crate::llm::ProviderCapabilities;
+
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.set_capabilities(ProviderCapabilities {
+            tool_use: true,
+            vision: true,
+            ..Default::default()
+        });
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .build()
+            .await
+            .unwrap();
+
+        let caps = runtime.provider_capabilities("default").unwrap();
+        assert!(caps.tool_use);
+        assert!(caps.vision);
+        assert!(!caps.streaming);
+        assert!(!caps.json_mode);
     }
 }
