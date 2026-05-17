@@ -56,6 +56,16 @@ GRANT EXECUTE ON FUNCTION synapse.execute_async(text, text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.execution_status(uuid) TO synapse_user;
 GRANT EXECUTE ON FUNCTION synapse.execution_status(uuid) TO synapse_admin;
 
+-- Reactive triggers surface (T1, ADR D14 / operator approval 2026-05-17).
+-- enqueue: both roles (writers need to enqueue rows from trigger context).
+GRANT EXECUTE ON FUNCTION synapse.enqueue(text, text, text) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.enqueue(text, text, text) TO synapse_admin;
+-- drain_queue: admin only (runs agent execution, potentially expensive).
+GRANT EXECUTE ON FUNCTION synapse.drain_queue(integer) TO synapse_admin;
+-- attach/detach: admin only (creates DDL objects in the database).
+GRANT EXECUTE ON FUNCTION synapse.attach_agent_trigger(text, text, text, text, text, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.detach_agent_trigger(text) TO synapse_admin;
+
 -- synapse.secrets is never directly readable by synapse_user. schema.sql
 -- grants table DML only to synapse_admin; synapse_user got SELECT only on
 -- executions / messages / traces. Re-assert the prohibition defensively:

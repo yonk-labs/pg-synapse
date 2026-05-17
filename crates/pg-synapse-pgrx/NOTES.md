@@ -366,6 +366,83 @@ fix. Investigation showed those models used a field name not in our alias set (t
 Likely the model sent a bare string or an unrecognized field. Further alias extension may help
 but was not pursued in B12.
 
+## T1: reactive triggers (ADR D14 / operator approval 2026-05-17)
+
+T1 adds `synapse.agent_queue` and four new SQL functions. The `synapse.*`
+surface additions are explicitly approved by ADR D14 and the operator decision
+recorded 2026-05-17, which override the N2.2 next-backlog deferral.
+
+### Schema
+
+`synapse.agent_queue` added to `schema.sql` (8 original tables + 1 = 9 total).
+Columns: `job_id uuid pk`, `agent text`, `input text`, `status text check (...)`,
+`result jsonb`, `error text`, `source text`, `enqueued_at`, `started_at`,
+`finished_at`. Grants: `synapse_user` gets SELECT; `synapse_admin` gets full DML
+via the existing `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES` clause.
+
+### Functions
+
+**`synapse.enqueue(agent, input, source) -> uuid`**: Plain INSERT into
+`synapse.agent_queue`. No LLM call. Returns the new `job_id`. Granted to both
+`synapse_user` and `synapse_admin` because writers (including trigger functions
+running in the writer's session) need enqueue access.
+
+**`synapse.drain_queue(max_jobs int) -> int`**: Claims up to `max_jobs` queued
+rows with `FOR UPDATE SKIP LOCKED` (concurrency-safe), marks each `running`,
+calls the existing `execute()` function in-process (no SPI round-trip for the
+kernel call), writes `done`/`error` + result/finished_at. Returns count
+processed. Admin-only (runs agent execution). v0.1 drain model: operator-driven
+via pg_cron or sidecar poller. A true bgworker drain is v0.2 (design spec D8).
+
+**`synapse.attach_agent_trigger(target_table, agent, mode, events, when_sql, input_expr)`**:
+Generates a per-table PL/pgSQL trigger function + AFTER row-level trigger via SPI.
+Identifier safety: the table name used in the trigger body is a PL/pgSQL string
+literal (SQL-quoted via `replace('\'', "''")`) not an identifier. The trigger name
+and function name are built from a safe underscored form of the table name. The
+DROP and CREATE TRIGGER statements use `format(%I, %s::regclass)` via Postgres
+`format()` to handle identifier quoting safely.
+
+Queue-mode body: `PERFORM synapse.enqueue(agent_lit, (input_expr)::text, 'trigger:table')`.
+
+Inline-mode body: calls `synapse.execute`, checks `status != 'completed'` or
+`output->>'decision' = 'reject'`, and `RAISE EXCEPTION` with the reason. This
+rolls back the triggering statement (and everything in its transaction) because
+RAISE in a trigger function aborts the statement.
+
+Recursion guard: `IF pg_trigger_depth() > 1 THEN RETURN NEW; END IF;` in both
+modes. An agent's `sql_exec` writing back to the same table increments trigger
+depth to 2, so the guard skips the enqueue/execute path. This prevents infinite
+recursion without requiring per-trigger state.
+
+**`synapse.detach_agent_trigger(target_table) -> void`**: Drops the trigger and
+trigger function by the same derived names. Uses `format(%I, %s::regclass)` for
+the DROP TRIGGER statement. Idempotent (IF EXISTS).
+
+### Grant model
+
+`enqueue`: both roles (trigger functions run in the session of the DML caller,
+who may hold only `synapse_user`).
+`drain_queue`, `attach_agent_trigger`, `detach_agent_trigger`: `synapse_admin`
+only (DDL creation + LLM execution).
+
+### pg_test suite (5 new tests)
+
+All 5 tests run without a live LLM:
+1. `enqueue_inserts_queued_row`: plain INSERT assertion.
+2. `drain_queue_on_empty_returns_zero`: drain on empty queue = 0.
+3. `attach_and_detach_agent_trigger_round_trip`: pg_trigger + pg_proc introspection.
+4. `queue_mode_trigger_enqueues_on_insert`: INSERT fires trigger, queue row appears.
+5. `inline_mode_raise_rolls_back_insert`: simulated raise via stub trigger function.
+6. `trigger_depth_guard_prevents_double_enqueue`: one INSERT = one queue row.
+
+All 36 pg_tests pass (31 existing + 5 new).
+
+### Feature install command (unchanged from B-keystone)
+
+```
+pg17,embed-ort,provider-llama-cpp,provider-anthropic,tools-fs,tools-lede,tools-calc,tools-clock,tools-delegate
+```
+
 ## B-keystone: external-framework parity tools + scenarios
 
 ### Three new tool plugins

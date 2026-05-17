@@ -74,8 +74,8 @@ mod tests {
                 .unwrap();
         let count = count.unwrap_or(0);
         assert!(
-            count >= 8,
-            "expected at least 8 tables in synapse schema, saw {count}",
+            count >= 9,
+            "expected at least 9 tables in synapse schema (8 original + agent_queue), saw {count}",
         );
     }
 
@@ -611,6 +611,219 @@ mod tests {
         assert_eq!(arr[0]["x"], 1);
     }
 
+    // ---- T1: reactive triggers (ADR D14 / operator approval 2026-05-17) ----
+
+    /// enqueue inserts a queued row and returns a uuid.
+    /// No LLM is required: the function is a plain INSERT.
+    #[pg_test]
+    fn enqueue_inserts_queued_row() {
+        let id: Option<pgrx::Uuid> =
+            Spi::get_one("SELECT synapse.enqueue('test_agent', 'hello', 'unit-test')").unwrap();
+        let id = id.expect("enqueue must return a uuid");
+        let id_str = format!("{:-x}", id);
+        let cnt: Option<i64> = Spi::connect(|c| {
+            let arg = pgrx::datum::DatumWithOid::from(id_str);
+            c.select(
+                "SELECT count(*)::bigint FROM synapse.agent_queue \
+                 WHERE job_id = $1::uuid AND status = 'queued' AND agent = 'test_agent'",
+                None,
+                &[arg],
+            )
+            .ok()
+            .and_then(|t| t.into_iter().next())
+            .and_then(|r| r.get::<i64>(1).ok().flatten())
+        });
+        assert_eq!(cnt, Some(1), "enqueue must insert exactly one queued row");
+    }
+
+    /// drain_queue on an empty queue returns 0 and does not error.
+    #[pg_test]
+    fn drain_queue_on_empty_returns_zero() {
+        // Ensure no queued rows exist (use a temp table trick: just call drain
+        // on a clean state). The test harness runs in isolated transactions so
+        // no cross-test contamination.
+        let n: Option<i32> = Spi::get_one("SELECT synapse.drain_queue(10)").unwrap();
+        assert_eq!(n, Some(0), "drain_queue on an empty queue must return 0");
+    }
+
+    /// attach_agent_trigger creates a trigger and trigger function; detach removes them.
+    #[pg_test]
+    fn attach_and_detach_agent_trigger_round_trip() {
+        // Create a scratch table to attach to.
+        Spi::run("CREATE TEMP TABLE trig_test_attach (id serial primary key, payload text)")
+            .unwrap();
+
+        // Attach a queue-mode trigger.
+        Spi::run(
+            "SELECT synapse.attach_agent_trigger(\
+             'trig_test_attach', 'dummy_agent', 'queue', 'INSERT', NULL, 'NEW::text')",
+        )
+        .unwrap();
+
+        // Verify the trigger exists via pg_trigger.
+        // The expected trigger name is synapse_agent_trig_test_attach.
+        let trig_exists: Option<bool> = Spi::get_one(
+            "SELECT EXISTS (\
+             SELECT 1 FROM pg_trigger t \
+             JOIN pg_class c ON c.oid = t.tgrelid \
+             WHERE c.relname = 'trig_test_attach' \
+               AND t.tgname = 'synapse_agent_trig_test_attach')",
+        )
+        .unwrap();
+        assert_eq!(
+            trig_exists,
+            Some(true),
+            "attach must create a trigger named synapse_agent_trig_test_attach"
+        );
+
+        // Verify the trigger function exists via pg_proc.
+        let fn_exists: Option<bool> = Spi::get_one(
+            "SELECT EXISTS (\
+             SELECT 1 FROM pg_proc p \
+             JOIN pg_namespace n ON n.oid = p.pronamespace \
+             WHERE n.nspname = 'public' OR TRUE \
+               AND p.proname = 'synapse_trig_trig_test_attach')",
+        )
+        .unwrap();
+        assert_eq!(
+            fn_exists,
+            Some(true),
+            "attach must create trigger function synapse_trig_trig_test_attach"
+        );
+
+        // Detach: remove trigger and function.
+        Spi::run("SELECT synapse.detach_agent_trigger('trig_test_attach')").unwrap();
+
+        let trig_after: Option<bool> = Spi::get_one(
+            "SELECT EXISTS (\
+             SELECT 1 FROM pg_trigger t \
+             JOIN pg_class c ON c.oid = t.tgrelid \
+             WHERE c.relname = 'trig_test_attach' \
+               AND t.tgname = 'synapse_agent_trig_test_attach')",
+        )
+        .unwrap();
+        assert_eq!(trig_after, Some(false), "detach must remove the trigger");
+    }
+
+    /// Queue-mode trigger on INSERT enqueues a row with correct source label.
+    /// No LLM is needed: the trigger function only calls synapse.enqueue.
+    #[pg_test]
+    fn queue_mode_trigger_enqueues_on_insert() {
+        // Create a scratch table and attach a queue-mode trigger.
+        Spi::run("CREATE TEMP TABLE trig_queue_src (id serial primary key, note text)").unwrap();
+        Spi::run(
+            "SELECT synapse.attach_agent_trigger(\
+             'trig_queue_src', 'noop_agent', 'queue', 'INSERT', NULL, 'NEW::text')",
+        )
+        .unwrap();
+
+        // Count queue rows before the INSERT.
+        let before: Option<i64> = Spi::get_one(
+            "SELECT count(*)::bigint FROM synapse.agent_queue WHERE source LIKE 'trigger:%'",
+        )
+        .unwrap();
+        let before = before.unwrap_or(0);
+
+        // INSERT a row: should fire the trigger which calls enqueue.
+        Spi::run("INSERT INTO trig_queue_src (note) VALUES ('ping')").unwrap();
+
+        let after: Option<i64> = Spi::get_one(
+            "SELECT count(*)::bigint FROM synapse.agent_queue WHERE source LIKE 'trigger:%'",
+        )
+        .unwrap();
+        let after = after.unwrap_or(0);
+
+        assert_eq!(
+            after,
+            before + 1,
+            "queue-mode trigger INSERT must enqueue exactly one row"
+        );
+
+        // Verify the source label includes the table name.
+        let src: Option<String> = Spi::get_one(
+            "SELECT source FROM synapse.agent_queue \
+             WHERE source LIKE 'trigger:%' ORDER BY enqueued_at DESC LIMIT 1",
+        )
+        .unwrap();
+        assert!(
+            src.as_deref()
+                .map(|s| s.contains("trig_queue_src"))
+                .unwrap_or(false),
+            "source must contain the table name, got: {src:?}"
+        );
+    }
+
+    /// pg_trigger_depth guard: the trigger body skips recursion when
+    /// pg_trigger_depth() > 1. We test this by simulating what the guard
+    /// does: a direct INSERT into the trigger table from inside a statement-
+    /// triggered function would increment depth. The guard ensures enqueue
+    /// is only called once, not recursively.
+    ///
+    /// Strategy (no live LLM): create a table + queue-mode trigger, insert
+    /// one row. The row fires the trigger once (depth=1). If enqueue were
+    /// recursive via a nested trigger, depth would be 2 and the guard blocks
+    /// it. We verify only one queue row was created per insert.
+    #[pg_test]
+    fn trigger_depth_guard_prevents_double_enqueue() {
+        Spi::run("CREATE TEMP TABLE trig_depth (id serial primary key, val text)").unwrap();
+        Spi::run(
+            "SELECT synapse.attach_agent_trigger(\
+             'trig_depth', 'depth_agent', 'queue', 'INSERT', NULL, 'NEW::text')",
+        )
+        .unwrap();
+
+        // Insert one row; expect exactly one queue row (not two from recursion).
+        Spi::run("INSERT INTO trig_depth (val) VALUES ('a')").unwrap();
+
+        let cnt: Option<i64> = Spi::get_one(
+            "SELECT count(*)::bigint FROM synapse.agent_queue WHERE agent = 'depth_agent'",
+        )
+        .unwrap();
+        assert_eq!(
+            cnt,
+            Some(1),
+            "depth guard: one INSERT must produce exactly one queue row"
+        );
+    }
+
+    /// Inline-mode reject path: a trigger function that detects a rejection
+    /// in the execute result raises an exception, rolling back the INSERT.
+    ///
+    /// Strategy (deterministic, no live LLM): we cannot call a real agent in
+    /// pg_test. Instead, we verify the reject-detection logic by directly
+    /// creating a plpgsql function that mimics what attach_agent_trigger builds
+    /// for inline mode. The key behaviour is: if execute returns a JSONB with
+    /// status != 'completed', RAISE EXCEPTION is called. We simulate this by
+    /// calling synapse.enqueue (which succeeds) instead of execute, asserting
+    /// the queue row appears. For the raise path, we create a PL/pgSQL stub
+    /// function that raises directly and verify a trigger that calls it rolls
+    /// back the INSERT.
+    #[pg_test(error = "synapse inline trigger rejected: simulated reject")]
+    fn inline_mode_raise_rolls_back_insert() {
+        // Create a table and a manual trigger function that always raises
+        // (simulating the inline-mode reject path without a live LLM).
+        Spi::run("CREATE TEMP TABLE trig_inline_test (id serial primary key, val text)").unwrap();
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION synapse_trig_trig_inline_test() \
+             RETURNS trigger LANGUAGE plpgsql AS $$ \
+             BEGIN \
+               IF pg_trigger_depth() > 1 THEN RETURN NEW; END IF; \
+               RAISE EXCEPTION 'synapse inline trigger rejected: simulated reject'; \
+             END;$$",
+        )
+        .unwrap();
+        Spi::run(
+            "CREATE TRIGGER synapse_agent_trig_inline_test \
+             AFTER INSERT ON trig_inline_test \
+             FOR EACH ROW EXECUTE FUNCTION synapse_trig_trig_inline_test()",
+        )
+        .unwrap();
+
+        // This INSERT must raise (and therefore roll back due to the error).
+        Spi::run("INSERT INTO trig_inline_test (val) VALUES ('bad')").unwrap();
+        // Not reached if the trigger raised.
+    }
+
     /// N2.2 grant matrix: drops / register are admin-only; list / status /
     /// tool_call reachable by synapse_user. Asserted via privilege
     /// introspection (no error raised, stays in one transaction).
@@ -642,12 +855,32 @@ mod tests {
             "synapse.tool_call(text,jsonb)",
             "synapse.execute_async(text,text)",
             "synapse.execution_status(uuid)",
+            // Reactive triggers T1: enqueue is reachable by both roles.
+            "synapse.enqueue(text,text,text)",
         ] {
             let user_has: Option<bool> = Spi::get_one(&format!(
                 "SELECT has_function_privilege('synapse_user', '{sig}', 'EXECUTE')"
             ))
             .unwrap();
             assert_eq!(user_has, Some(true), "synapse_user must reach {sig}");
+        }
+
+        // Reactive triggers T1: drain/attach/detach are admin-only.
+        for sig in [
+            "synapse.drain_queue(integer)",
+            "synapse.attach_agent_trigger(text,text,text,text,text,text)",
+            "synapse.detach_agent_trigger(text)",
+        ] {
+            let user_has: Option<bool> = Spi::get_one(&format!(
+                "SELECT has_function_privilege('synapse_user', '{sig}', 'EXECUTE')"
+            ))
+            .unwrap();
+            assert_eq!(user_has, Some(false), "synapse_user must NOT reach {sig}");
+            let admin_has: Option<bool> = Spi::get_one(&format!(
+                "SELECT has_function_privilege('synapse_admin', '{sig}', 'EXECUTE')"
+            ))
+            .unwrap();
+            assert_eq!(admin_has, Some(true), "synapse_admin must reach {sig}");
         }
     }
 

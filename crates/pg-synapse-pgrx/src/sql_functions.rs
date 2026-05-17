@@ -554,6 +554,297 @@ pub(crate) mod synapse {
         }
     }
 
+    // ---- Reactive triggers: T1 (ADR D14 / operator approval 2026-05-17) ----
+    //
+    // The synapse.* surface additions below are explicitly approved by ADR D14 and
+    // the operator decision recorded 2026-05-17. They override the next-backlog
+    // item N2.2 deferral for reactive triggers.
+
+    /// Insert a job row into synapse.agent_queue and return the job_id.
+    /// This is the fire-and-forget enqueue path: the INSERT commits with the
+    /// calling transaction and the LLM never blocks the writer.
+    #[pg_extern(security_definer)]
+    pub fn enqueue(agent: &str, input: &str, source: default!(Option<&str>, "NULL")) -> pgrx::Uuid {
+        let job_id = uuid::Uuid::new_v4();
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(job_id.to_string()),
+            DatumWithOid::from(agent.to_string()),
+            DatumWithOid::from(input.to_string()),
+            match source {
+                Some(s) => DatumWithOid::from(s.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+        ];
+        Spi::run_with_args(
+            "INSERT INTO synapse.agent_queue (job_id, agent, input, source) \
+             VALUES ($1::uuid, $2, $3, $4)",
+            &args,
+        )
+        .unwrap_or_else(|e| pgrx::error!("enqueue: {e}"));
+        pgrx::Uuid::from_bytes(*job_id.as_bytes())
+    }
+
+    /// Claim up to `max_jobs` queued rows, run each agent synchronously, and
+    /// write the result back. Returns the number of jobs processed.
+    ///
+    /// Concurrency-safe: uses `FOR UPDATE SKIP LOCKED` so multiple concurrent
+    /// drain callers each pick a disjoint set. Idempotent: a job that was
+    /// marked 'running' by a crashed caller is left in 'running'; a future
+    /// stuck-job reaper (v0.2) can detect and retry those.
+    #[pg_extern(security_definer)]
+    pub fn drain_queue(max_jobs: default!(i32, "10")) -> i32 {
+        // Claim up to max_jobs queued rows.
+        let claimed: Vec<(uuid::Uuid, String, String)> = Spi::connect(|client| {
+            let table = client
+                .select(
+                    "SELECT job_id, agent, input \
+                     FROM synapse.agent_queue \
+                     WHERE status = 'queued' \
+                     ORDER BY enqueued_at \
+                     LIMIT $1 \
+                     FOR UPDATE SKIP LOCKED",
+                    None,
+                    &[DatumWithOid::from(max_jobs)],
+                )
+                .map_err(|e| e.to_string())?;
+            let mut rows = Vec::new();
+            for row in table {
+                let id_str: Option<String> = row.get(1).ok().flatten();
+                let agent: Option<String> = row.get(2).ok().flatten();
+                let input: Option<String> = row.get(3).ok().flatten();
+                if let (Some(id_s), Some(a), Some(i)) = (id_str, agent, input) {
+                    if let Ok(uid) = uuid::Uuid::parse_str(&id_s) {
+                        rows.push((uid, a, i));
+                    }
+                }
+            }
+            Ok::<_, String>(rows)
+        })
+        .unwrap_or_default();
+
+        let mut processed = 0i32;
+        for (job_id, agent, input) in claimed {
+            let job_str = job_id.to_string();
+
+            // Mark running + set started_at.
+            let upd_args: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(job_str.clone())];
+            let _ = Spi::run_with_args(
+                "UPDATE synapse.agent_queue \
+                 SET status='running', started_at=now() \
+                 WHERE job_id=$1::uuid",
+                &upd_args,
+            );
+
+            // Re-use the existing execute path (calls into the kernel).
+            let result_jsonb = execute(&agent, &input);
+
+            // Determine done vs error from the returned envelope.
+            let (new_status, result_val, error_val) = {
+                let v = &result_jsonb.0;
+                if v.get("error").is_some() {
+                    let err_str = v
+                        .get("error")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("unknown error")
+                        .to_string();
+                    ("error", None::<serde_json::Value>, Some(err_str))
+                } else {
+                    ("done", Some(v.clone()), None)
+                }
+            };
+
+            let fin_args: Vec<DatumWithOid<'_>> = vec![
+                DatumWithOid::from(new_status.to_string()),
+                match result_val {
+                    Some(ref rv) => DatumWithOid::from(JsonB(rv.clone())),
+                    None => DatumWithOid::null::<JsonB>(),
+                },
+                match error_val {
+                    Some(ref ev) => DatumWithOid::from(ev.clone()),
+                    None => DatumWithOid::null::<String>(),
+                },
+                DatumWithOid::from(job_str),
+            ];
+            let _ = Spi::run_with_args(
+                "UPDATE synapse.agent_queue \
+                 SET status=$1, result=$2, error=$3, finished_at=now() \
+                 WHERE job_id=$4::uuid",
+                &fin_args,
+            );
+            processed += 1;
+        }
+        processed
+    }
+
+    /// Generate a row-level AFTER trigger and trigger function on `target_table`
+    /// that fires an agent on each qualifying row.
+    ///
+    /// mode = 'queue'  (default): calls synapse.enqueue (async, never blocks
+    ///                 the writer, the triggering INSERT/UPDATE always commits).
+    /// mode = 'inline': calls synapse.execute synchronously inside the writing
+    ///                 transaction. If the agent errors or returns
+    ///                 `{"decision":"reject"}`, the trigger RAISEs and the
+    ///                 triggering write rolls back.
+    ///
+    /// Recursion guard: `pg_trigger_depth() > 1` skips the trigger body so an
+    /// agent's sql_exec writing back to the same table does not re-fire
+    /// endlessly (ADR D14, operator approval 2026-05-17).
+    ///
+    /// Identifier safety: table name, function name, and trigger name are
+    /// injected via `format(%I)` in the generated SQL, not via string concat.
+    #[pg_extern(security_definer)]
+    pub fn attach_agent_trigger(
+        target_table: &str,
+        agent: &str,
+        mode: default!(&str, "'queue'"),
+        events: default!(&str, "'INSERT'"),
+        when_sql: default!(Option<&str>, "NULL"),
+        input_expr: default!(&str, "'NEW::text'"),
+    ) {
+        // Derive stable function/trigger names from the table name.
+        // Use underscores to create a valid identifier from "schema.table".
+        let safe_name = target_table.replace('.', "_").replace('"', "");
+        let fn_name = format!("synapse_trig_{safe_name}");
+        let trig_name = format!("synapse_agent_{safe_name}");
+
+        let when_clause = match when_sql {
+            Some(w) => format!("WHEN ({w})"),
+            None => String::new(),
+        };
+
+        // Pre-compute the SQL-quoted agent literal to avoid format! nesting.
+        let agent_lit = format!("'{}'", agent.replace('\'', "''"));
+        let table_lit = target_table.replace('\'', "''");
+
+        let body = match mode {
+            "inline" => {
+                // Inline mode: call execute synchronously. Raise on error or
+                // reject decision so the triggering statement rolls back.
+                format!(
+                    r#"
+DECLARE
+  _res JSONB;
+  _status TEXT;
+  _decision TEXT;
+  _reason TEXT;
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+  _res := synapse.execute({agent_lit}, ({input_expr})::text);
+  _status := _res->>'status';
+  _decision := _res->'output'->>'decision';
+  IF _status IS DISTINCT FROM 'completed' THEN
+    _reason := COALESCE(_res->>'error', _res->>'output', 'agent did not complete');
+    RAISE EXCEPTION 'synapse inline trigger rejected: %', _reason;
+  END IF;
+  IF _decision = 'reject' THEN
+    _reason := COALESCE(
+      (_res->'output'->>'reason'),
+      (_res->>'output'),
+      'agent rejected row'
+    );
+    RAISE EXCEPTION 'synapse inline trigger rejected: %', _reason;
+  END IF;
+  RETURN NEW;
+END;"#,
+                    agent_lit = agent_lit,
+                    input_expr = input_expr,
+                )
+            }
+            _ => {
+                // Queue mode (default): fire-and-forget enqueue.
+                format!(
+                    r#"
+BEGIN
+  IF pg_trigger_depth() > 1 THEN
+    RETURN NEW;
+  END IF;
+  PERFORM synapse.enqueue(
+    {agent_lit},
+    ({input_expr})::text,
+    'trigger:{table_lit}'
+  );
+  RETURN NEW;
+END;"#,
+                    agent_lit = agent_lit,
+                    input_expr = input_expr,
+                    table_lit = table_lit,
+                )
+            }
+        };
+
+        // Build and execute the trigger function + trigger via SPI.
+        // Identifiers (fn_name, trig_name, target_table) go through %I in
+        // format() inside the SQL so Postgres quotes them safely.
+        let create_fn_sql = format!(
+            "CREATE OR REPLACE FUNCTION {fn_name}() \
+             RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $trig_body${body}$trig_body$",
+        );
+
+        Spi::run(&create_fn_sql)
+            .unwrap_or_else(|e| pgrx::error!("attach_agent_trigger create function: {e}"));
+
+        // Drop any existing trigger with this name on the table first (idempotent).
+        let drop_sql = "SELECT format('DROP TRIGGER IF EXISTS %I ON %s', $1, $2::regclass)";
+        if let Ok(Some(drop_stmt)) = Spi::get_one_with_args::<String>(
+            drop_sql,
+            &[
+                DatumWithOid::from(trig_name.clone()),
+                DatumWithOid::from(target_table.to_string()),
+            ],
+        ) {
+            let _ = Spi::run(&drop_stmt);
+        }
+
+        let create_trig_sql = format!(
+            "SELECT format('CREATE TRIGGER %I AFTER {events} ON %s \
+             FOR EACH ROW {when_clause} EXECUTE FUNCTION {fn_name}()', $1, $2::regclass)",
+            events = events,
+            when_clause = when_clause,
+            fn_name = fn_name,
+        );
+        let trig_stmt: Option<String> = Spi::get_one_with_args(
+            &create_trig_sql,
+            &[
+                DatumWithOid::from(trig_name.clone()),
+                DatumWithOid::from(target_table.to_string()),
+            ],
+        )
+        .unwrap_or_else(|e| pgrx::error!("attach_agent_trigger format trigger: {e}"));
+
+        if let Some(stmt) = trig_stmt {
+            Spi::run(&stmt)
+                .unwrap_or_else(|e| pgrx::error!("attach_agent_trigger create trigger: {e}"));
+        }
+    }
+
+    /// Remove the trigger and trigger function previously created by
+    /// `synapse.attach_agent_trigger` for `target_table`.
+    #[pg_extern(security_definer)]
+    pub fn detach_agent_trigger(target_table: &str) {
+        let safe_name = target_table.replace('.', "_").replace('"', "");
+        let fn_name = format!("synapse_trig_{safe_name}");
+        let trig_name = format!("synapse_agent_{safe_name}");
+
+        // Drop trigger.
+        let drop_trig_sql = "SELECT format('DROP TRIGGER IF EXISTS %I ON %s', $1, $2::regclass)";
+        if let Ok(Some(drop_stmt)) = Spi::get_one_with_args::<String>(
+            drop_trig_sql,
+            &[
+                DatumWithOid::from(trig_name),
+                DatumWithOid::from(target_table.to_string()),
+            ],
+        ) {
+            let _ = Spi::run(&drop_stmt);
+        }
+
+        // Drop function.
+        let drop_fn_sql = format!("DROP FUNCTION IF EXISTS {fn_name}()");
+        Spi::run(&drop_fn_sql)
+            .unwrap_or_else(|e| pgrx::error!("detach_agent_trigger drop function: {e}"));
+    }
+
     /// Poll an execution by id. Returns
     /// `{status, output, tokens_in, tokens_out, cost_usd, duration_ms}` or
     /// `{"status": "not_found"}` when the id is unknown.

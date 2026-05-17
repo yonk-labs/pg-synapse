@@ -111,9 +111,27 @@ CREATE TABLE IF NOT EXISTS synapse.traces (
   PRIMARY KEY (execution_id, seq)
 );
 
+-- Reactive triggers: job queue for async agent invocation from triggers.
+-- Operator-driven drain (pg_cron or a sidecar poller) runs synapse.drain_queue().
+-- A true background worker drain is the v0.2 upgrade (design spec D8).
+CREATE TABLE IF NOT EXISTS synapse.agent_queue (
+  job_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  agent       TEXT        NOT NULL,
+  input       TEXT        NOT NULL,
+  status      TEXT        NOT NULL DEFAULT 'queued'
+                          CHECK (status IN ('queued','running','done','error')),
+  result      JSONB,
+  error       TEXT,
+  source      TEXT,
+  enqueued_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at  TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ
+);
+
 GRANT USAGE ON SCHEMA synapse TO synapse_admin;
 GRANT USAGE ON SCHEMA synapse TO synapse_user;
 GRANT SELECT ON synapse.executions TO synapse_user;
 GRANT SELECT ON synapse.messages   TO synapse_user;
 GRANT SELECT ON synapse.traces     TO synapse_user;
+GRANT SELECT ON synapse.agent_queue TO synapse_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_admin;
