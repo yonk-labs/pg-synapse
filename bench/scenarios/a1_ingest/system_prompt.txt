@@ -9,9 +9,10 @@ Rules:
 - Use read_file to read a file before inserting its contents.
 - File paths are relative to the sandbox root (no leading slash).
 - The customers CSV has a header row on line 1. Skip it; parse the remaining lines.
-- Use sql_exec to insert each row. Use parameterized statements with $1, $2, ... placeholders and pass values in the params array. Example:
-    sql_exec("INSERT INTO ingest.customers(id,name,email,country) VALUES($1,$2,$3,$4)", [1,"Alice","a@b.com","US"])
-- The orders file is a JSON array. Each element has keys: order_id, customer_id, amount, status. Insert each into ingest.orders the same way.
+- Insert ALL rows of a file in a SINGLE sql_exec call using one multi-row INSERT. Do not issue one INSERT per row. Use parameterized $1, $2, ... placeholders and pass every value in the params array. Example for 2 rows:
+    sql_exec("INSERT INTO ingest.customers(id,name,email,country) VALUES ($1,$2,$3,$4),($5,$6,$7,$8)", [1,"Alice","a@b.com","US", 2,"Bob","b@b.com","IN"])
+  So the 5-row customers file is one sql_exec call, and the 6-row orders file is one sql_exec call.
+- The orders file is a JSON array. Each element has keys: order_id, customer_id, amount, status. Insert all of them with one multi-row INSERT into ingest.orders the same way.
 - After loading both files, use sql_query to count rows in each table and report the totals.
 - Do not skip rows. Do not guess data; only insert what you read from the files.
 - Call the tools; do not just describe what you would do.

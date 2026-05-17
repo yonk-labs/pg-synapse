@@ -393,16 +393,24 @@ for MKEY in "${MODEL_KEYS[@]}"; do
 
         log "  Scenario: $SCENARIO"
 
-        # Load per-scenario metadata. Defaults: KIND=sql, TOOLS=sql_query,sql_exec.
+        # Load per-scenario metadata. Defaults: KIND=sql,
+        # TOOLS=sql_query,sql_exec, MAX_ITER=25. The 25 default matches
+        # LangGraph's recursion_limit; simple scenarios use far fewer,
+        # multi-step agents (a1_ingest, a3_triage) declare a higher
+        # MAX_ITER in their meta.env. pg_synapse honors the per-agent
+        # max_iterations column; this passes a scenario-appropriate value
+        # instead of a hardcoded constant.
         SCENARIO_KIND="sql"
         SCENARIO_TOOLS="sql_query,sql_exec"
+        SCENARIO_MAX_ITER="25"
         if [[ -f "$SCENARIO_DIR/meta.env" ]]; then
             # shellcheck source=/dev/null
             source "$SCENARIO_DIR/meta.env"
             SCENARIO_KIND="${KIND:-sql}"
             SCENARIO_TOOLS="${TOOLS:-sql_query,sql_exec}"
+            SCENARIO_MAX_ITER="${MAX_ITER:-25}"
         fi
-        log "  Kind: $SCENARIO_KIND  Tools: $SCENARIO_TOOLS"
+        log "  Kind: $SCENARIO_KIND  Tools: $SCENARIO_TOOLS  MaxIter: $SCENARIO_MAX_ITER"
 
         if [[ $OPT_FORCE -eq 0 ]] && already_done "$MKEY" "$SCENARIO" "$OPT_SCALE"; then
             log "  Already done ($MKEY/$SCENARIO/scale=$OPT_SCALE); skipping. Use --force to re-run."
@@ -564,7 +572,7 @@ print(arr)
             'conversation',
             '$PROFILE_NAME',
             ${TOOLS_ARRAY_SQL},
-            10,
+            ${SCENARIO_MAX_ITER},
             $((OPT_TIMEOUT * 1000))
         );" > /dev/null 2>&1 || {
             ERROR="agent_create failed"
