@@ -618,7 +618,7 @@ pub(crate) mod synapse {
                        ) \
                        RETURNING job_id, agent, input \
                      ) \
-                     SELECT job_id, agent, input FROM claimed",
+                     SELECT job_id::text, agent, input FROM claimed",
                     None,
                     &[DatumWithOid::from(max_jobs)],
                 )
