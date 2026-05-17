@@ -1,8 +1,2 @@
--- adk_root seed: Google ADK root_agent + tool parity scenario.
--- Creates a probe table for the agent to write into.
-
-CREATE SCHEMA IF NOT EXISTS adk;
-
-CREATE TABLE IF NOT EXISTS adk.probe (
-    has_time BOOLEAN NOT NULL
-);
+-- adk_root seed: no DB tables needed (typed-tool only, assert checks output text).
+SELECT 1;

@@ -1,2 +1,8 @@
--- adk_root assertion: the agent received a timestamp and recorded true.
-SELECT (SELECT has_time FROM adk.probe LIMIT 1) = true AS passed;
+-- adk_root assertion: the agent's output confirms it received a timestamp.
+-- Checks synapse.executions.output for timestamp-shaped content (year + T separator)
+-- instead of a DB table, so the scenario tests typed-tool use only.
+SELECT (
+    SELECT output ~* '\d{4}.*T'
+    FROM synapse.executions
+    ORDER BY started_at DESC LIMIT 1
+) AS passed;

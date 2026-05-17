@@ -1,1 +1,1 @@
-Get the current time with the tool, then sql_exec INSERT into adk.probe whether you received an ISO8601 timestamp (true/false).
+Get the current time with the tool and report whether you received a valid ISO8601 timestamp.

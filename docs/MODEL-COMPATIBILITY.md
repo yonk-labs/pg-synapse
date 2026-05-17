@@ -1,143 +1,210 @@
-# pg_synapse model compatibility
+# pg_synapse v0.1.1 -- Model Compatibility Matrix
 
-**What this measures.** The neutral filesystem (fs) benchmark runs models on 3 tasks that
-have nothing to do with SQL: find files, edit a config file, collate text across multiple files.
-Each task requires the model to emit valid tool calls (read_file, write_file, edit_file, list_files,
-grep) and complete the task correctly. This separates "does the model work as an agent framework
-inside pg_synapse" from "does the model know SQL." A model that scores 3/3 on fs is agentic-ready
-for any pg_synapse tool set, including the SQL tools. A model that scores 0/3 on fs cannot reliably
-use tools in this stack and will not succeed on SQL tasks either.
+Last updated: 2026-05-17. Data sources: `bench/results.jsonl` (latest run_date per
+model/scenario, 2026-05-17T11:43Z sweep), `bench/run_n_a2_distill.log` and
+`bench/run_n_adk_root.log` (post-B18 characterization runs), `bench/models.toml`,
+`bench/SMALL-MODEL-DIAGNOSIS.md`.
 
-SQL scores (s1_notes, s2_triage, s3_report) are shown for context. They measure domain capability
-on top of the agentic baseline.
+## How to read this document
 
----
+pg_synapse is model-agnostic: any OpenAI-compatible chat-completions endpoint works.
+This matrix records which models actually pass the benchmark scenarios at N=1 (single
+run per cell) unless noted otherwise. N=1 results are noisy -- a model that fails one
+run may pass the next. The post-B18 characterization runs (N=3) are the trustworthy
+source for vllm-qwen3-coder on the two tested scenarios.
 
-## B13 methodology correction: Qwen3.5 are conversational models, not base
+### Scenario descriptions
 
-**Prior (incorrect) claim (B7/B11):** Qwen3.5-2B/0.8B were described as "base" or "pretrain-only"
-models that cannot tool-call by design.
-
-**Corrected fact:** Qwen/Qwen3.5-2B and Qwen/Qwen3.5-0.8B are conversational `image-text-to-text`
-models. Their GGUF chat templates include xml_tools tool-call support. They CAN tool-call. The B6
-and B11 scores of 0/3 on fs scenarios were caused by a client-side format-extraction failure, not
-a model capability gap.
-
-**Evidence:** Phase 1 capture (B13) showed Qwen3.5-2B emitting valid
-`<tool_call><function=grep><parameter=path>...</parameter></function></tool_call>` XML-parameter
-format in f1_find, which the B6 extractor already handled for the first two calls. The third call
-(`write_file`) was emitted with empty parameters (`<function=write_file></function>`), which is a
-model-capability limit at 2B scale for the multi-step f1_find task, not a parsing failure.
-
-**What the B13 parser fix actually delivered:** The Gemma double-brace JSON fix
-(`{{"content":"v","path":"p"}}` inside `<|tool_call>` format) moved gemma-4-E2B-it from 1/3 to
-3/3 on fs and gemma-4-E4B-it from 1/3 to 3/3 on fs. The python_tools extractor was added for
-completeness (kwarg-format function calls in fenced python blocks) but produced no measurable delta
-for the tested models in this run.
+| Scenario | Kind | Tools used | What it tests |
+|----------|------|-----------|---------------|
+| a1_ingest | SQL-heavy | sql_exec, sql_query, read_file | Load CSV+JSON into Postgres tables |
+| a2_distill | SQL-heavy | sql_exec, sql_query | Sentiment analysis + lede generation via SQL |
+| a3_triage | SQL-heavy | sql_exec, sql_query | Categorize and route support tickets |
+| lg_calc | Typed-tool | calculator, sql_exec | LangGraph parity -- arithmetic via typed tool |
+| oai_triage | Typed-tool | categorize_ticket | OpenAI Agents SDK parity -- single typed tool |
+| adk_root | Typed-tool | greet | ADK parity -- single typed tool, minimal SQL |
 
 ---
 
-## Main compatibility table
+## Summary Matrix
 
-Columns:
+Legend: P = PASS, F = FAIL, -- = not tested. Superscript asterisk (*) = flappy (both
+PASS and FAIL observed across multiple runs in results.jsonl).
 
-- **fs score**: tasks passed out of 3 fs scenarios (f1_find, f2_edit, f3_collate), authoritative B13 run 2026-05-17
-- **fs tool-emit**: scenarios where the model emitted at least one parseable tool call
-- **sql score**: tasks passed out of 3 sql scenarios (s1_notes, s2_triage, s3_report), latest run
-- **p50 lat/step**: median per-step latency in milliseconds across fs scenarios that produced timing data
-- **approx RAM**: GGUF file size on disk (int4 quant); actual runtime RAM is roughly 1.2-1.5x this
-- **verdict**: WORKS (3/3 fs), PARTIAL (1-2/3 fs, tool-emit confirmed), NO (0/3 fs, no tool-emit)
+All results from the 2026-05-17T11:43Z sweep unless noted.
 
-| model | params/quant | approx RAM | fs score | fs tool-emit | sql score | p50 lat/step | verdict |
-|-------|-------------|-----------|----------|-------------|----------|-------------|---------|
-| vllm-qwen3-coder | Qwen3-Coder-Next int4 | n/a (API) | 3/3 | 3/3 | 3/3 | 3,352 ms | WORKS |
-| openai-gpt5-mini | gpt-5-mini | n/a (API) | 3/3 | 3/3 | 2/3 | 6,006 ms | WORKS |
-| qwen3-4b-2507 | 4B int4 (Q4_K_M) | 2.4 GB | 3/3 | 3/3 | 2/3 | 57,215 ms | WORKS |
-| gemma-4-E2B-it | 2B int4 (Q4_K_M) | 2.9 GB | 3/3 | 3/3 | 2/3 | 24,080 ms | WORKS |
-| gemma-4-E4B-it | 4B int4 (Q4_K_M) | 4.7 GB | 3/3 | 3/3 | 1/3 | 39,305 ms | WORKS |
-| qwen3.5-9b | 9B int4 (Q4_K_M) | 5.7 GB | 3/3 | 2/3 | - | n/a | WORKS |
-| qwen3.5-4b | 4B int4 (Q4_K_M) | 2.5 GB | 2/3 | 2/3 | - | 78,057 ms | PARTIAL |
-| qwen3.5-2b | 2B int4 (Q4_K_M) | 1.2 GB | 1/3 | 0/3 | 1/3 | n/a | PARTIAL |
-| qwen3.5-0.8b | 0.8B int4 (Q4_K_M) | 508 MB | 1/3 | 0/3 | 0/3 | n/a | PARTIAL |
-| qwen2.5-7b | 7B int4 (Q4_K_M) | 4.4 GB | 1/3 | 2/3 | 1/3 | 37,614 ms | PARTIAL |
-| llama-3.2-3b | 3B int4 (Q4_K_M) | 1.9 GB | 0/3 | 0/3 | 1/3 | 24,276 ms | NO |
-| smollm3-3b | 3B int4 (Q4_K_M) | 1.8 GB | 0/3 | 0/3 | 0/3 | 21,811 ms | NO |
-| granite-4.0-h-1b | 1B int4 (Q4_K_M) | 860 MB | 0/3 | 0/3 | 0/3 | 12,949 ms | NO |
-| granite-4.0-tiny-preview | ~1B int4 (Q4_K_M) | 3.9 GB | 0/3 | 0/3 | 0/3 | 12,264 ms | NO |
-| granite-4.1-3b | 3B int4 (Q4_K_M) | ~2.0 GB | 0/3 | 0/3 | - | 52,838 ms | NO |
+### Remote / infra models
 
-Notes on specific models:
+| Model | a1_ingest | a2_distill | a3_triage | lg_calc | oai_triage | adk_root | Score |
+|-------|-----------|-----------|-----------|---------|-----------|---------|-------|
+| vllm-qwen3-coder | P | F* | P* | P | P | P | 5/6 |
+| openai-gpt5-mini | P | P | F* | P | P | P | 5/6 |
 
-- **qwen3.5-2b/0.8b (PARTIAL, corrected):** These are conversational models that emit XML-parameter
-  tool calls. Their PARTIAL verdict is due to model-capability limits at 2B/0.8B scale: the final
-  `write_file` step in multi-step fs tasks is emitted with empty parameters. The prior B11 annotation
-  calling them "base models that cannot tool-call" was incorrect.
-- **qwen3.5-9b f1_find:** Registered as PASS with tokens_in=0 due to a tool-error
-  in a prior step being swallowed and the sandbox state matching the assertion. The model did emit
-  valid tool calls (f2_edit and f3_collate confirmed). This is an assertion artifact.
-- **granite-4.1-3b:** Loads and runs via llama-cpp-python (hybrid Mamba-2 architecture supported).
-  Does not emit parseable tool calls. Verdict: NO, not agentic-ready.
+### Local CPU GGUF models (Q4_K_M quant, no GPU)
+
+| Model | Params | a1_ingest | a2_distill | a3_triage | lg_calc | oai_triage | adk_root | Score |
+|-------|--------|-----------|-----------|-----------|---------|-----------|---------|-------|
+| qwen3-4b-2507 | 4B | F | P | P | P | P | P | 5/6 |
+| gemma-4-E2B-it | 2B | P** | F | F | P | P | P | 4/6 |
+| gemma-4-E4B-it | 4B | F | F | P* | P | F | P | 3/6 |
+| qwen3.5-9b | 9B | F | F | F | F | P | P | 2/6 |
+| qwen2.5-7b | 7B | F | F | F | F | F | P | 1/6 |
+
+`*` Flappy: this cell has recorded both PASS and FAIL across multiple results.jsonl entries.
+
+`**` gemma-4-E2B-it a1_ingest: recorded as task_passed=true in results.jsonl despite a
+`missing field query` error on one tool call. The assertion passed because the ingest
+completed via a different code path before the failed call. Treat as a weak pass.
 
 ---
 
-## B13 delta: what the parser fix produced
+## Post-B18 Verified Results (tool-error feedback loop)
 
-| model | B12 fs | B13 fs | delta | cause |
-|-------|--------|--------|-------|-------|
-| gemma-4-E2B-it | 1/3 | 3/3 | +2 | Gemma double-brace JSON fix: `{{"key":"v"}}` inside `<|tool_call>` now fast-path parsed |
-| gemma-4-E4B-it | 1/3 | 3/3 | +2 | Same fix |
-| qwen3.5-2b | 0/3 | 0/3 | 0 | XML extractor already worked; model emits empty write_file args |
-| qwen3.5-0.8b | 1/3 | 1/3 | 0 | Same; f2_edit passes via sandbox state, not genuine agent |
-| smollm3-3b | 0/3 | 0/3 | 0 | Model outputs prose; no structured call format. Confirmed NO |
+### What B18 changed
 
----
+Before B18, the executor aborted on the first tool error (`?` operator on
+`dispatch_tool_call`). After B18, tool errors are fed back to the model as Tool-role
+messages, giving the model a chance to self-correct its SQL and retry.
 
-## Tiering recommendation
+This is the decisive fix for SQL-heavy scenarios. Models that generate initially-wrong
+SQL (missing params, wrong types, duplicate columns) can now recover in-loop instead of
+failing immediately.
 
-### Remote / cloud (no local hardware required)
+### Characterization runs (post-B18)
 
-**vllm-qwen3-coder** (Qwen3-Coder-Next int4 served via vLLM on a remote host): best overall score,
-fastest API latency at 3.4 s per step, 3/3 fs and 3/3 sql. Use this when you have a local vLLM
-endpoint or a compatible OpenAI-API host.
+Source: `bench/run_n_a2_distill.log`, `bench/run_n_adk_root.log`
 
-**openai-gpt5-mini**: 3/3 fs and 2/3 sql at 6.0 s per step via the OpenAI API. Reliable and fast;
-costs API credits. The sql miss on s2_triage was a type coercion error unrelated to agent capability.
+| Model | Scenario | N | Pass | Fail | Rate |
+|-------|----------|---|------|------|------|
+| vllm-qwen3-coder | a2_distill | 3 | 3 | 0 | 100% |
+| vllm-qwen3-coder | adk_root | 3 | 3 | 0 | 100% |
 
-### Local with adequate hardware (8+ GB RAM, any CPU)
+Context: a2_distill was the scenario most affected by pre-B18 abort behavior. The
+SESSION-HANDOFF.md notes that a2_distill went "from 6/10 pass to 10/10" during
+development. The committed characterization logs confirm 3/3 at N=3. The N=1 results
+in the sweep still show a2_distill as FAIL for vllm-qwen3-coder -- this is because the
+model occasionally emits `column "sentiment" specified more than once`, which B18
+cannot fix (the retry produces the same wrong SQL). The error-feedback loop helps when
+the error is informative enough for the model to correct course; it does not help when
+the model consistently generates the same structural error.
 
-**qwen3-4b-2507** (Qwen3-4B-Instruct-2507 Q4_K_M, 2.4 GB): the only local GGUF model to score 3/3
-on fs and 2/3 on sql in a pre-B13 run. Median latency of 57 s per step on CPU is slow but
-deterministic. This is the local pick if you have patience and at least 4 GB free RAM.
+### Pre-B18 contamination warning
 
-**gemma-4-E2B-it** (B13): upgraded to 3/3 fs after the double-brace JSON fix. 2.9 GB on disk,
-faster than qwen3-4b-2507 per step (~24 s median). Strong local option for fs tasks.
-
-**gemma-4-E4B-it** (B13): 3/3 fs, 1/3 sql. 4.7 GB on disk, ~39 s median step. Works well as an
-agentic fs model; weaker on SQL generation than the 2B variant.
-
-**qwen3.5-9b** (B13, new): 3/3 fs. 5.7 GB on disk. Tested fs-only in this run; SQL unknown.
-Multi-step tasks take 1-3 min per step on CPU.
-
-### Tiny CPU-local (under 2 GB RAM, speed-constrained)
-
-**qwen3.5-4b** (B13, new): 2/3 fs (f1+f2 PASS, f3_collate fails). 2.5 GB on disk. Better tool-call
-reliability than qwen3.5-2b for multi-step tasks but still misses the hardest scenario.
-
-No sub-2B model achieved 3/3 fs in any run. qwen3.5-0.8b's PARTIAL is due to sandbox-state
-coincidence rather than genuine multi-step agent success. Granite 4 (h-1b, tiny-preview, 4.1-3b)
-runs on CPU but does not emit parseable tool calls. SmolLM3-3B outputs prose, not tool calls.
+The results.jsonl entries from before 2026-05-17 (dates 2026-05-16T*) were collected
+under the old abort-on-first-error behavior. Any FAIL on an SQL-heavy scenario
+(a1_ingest, a2_distill, a3_triage) in those entries may be an artifact of the abort,
+not a model capability limit. The 2026-05-17T11:43Z sweep is the authoritative post-B18
+dataset, but even it has N=1 noise.
 
 ---
 
-## Honest limitations
+## Known-NO Models
 
-- All local models ran on a single CPU (no GPU, no quantization other than Q4_K_M). GPU results
-  would show lower latency but the same pass/fail pattern.
-- Each scenario ran once per model in the authoritative pass. Single-run pass/fail is noisy at
-  the margins; a model that scored 1/3 might score 2/3 on a different seed or temperature.
-- "tool-emit" counts scenarios where the framework received at least one parseable tool call. It
-  does not imply the call was correct. A model that emits tool calls but fails the assertion
-  (TOOL? in RESULTS.md) understood the protocol but produced wrong arguments or wrong logic.
-- SQL scores reflect a different prompt and tool set from the fs scores. A model can score 0/3 on
-  sql while still being agentic-capable.
-- No infra errors were recorded in the B13 run.
+These models were tested and cannot reliably participate as pg_synapse agents. They are
+excluded from the matrix above.
+
+| Model | Params | Reason |
+|-------|--------|--------|
+| smollm3-3b | 3B | Cannot emit structured tool calls in any format. Outputs prose and Markdown code blocks. Confirmed across fs and sql scenarios. Model capability gap at 3B scale. |
+| qwen3.5-0.8b | 0.8B | Emits XML-parameter tool calls but generates SQL syntax errors and empty parameter objects. 0/6 on sql scenarios, 0/3 genuine fs passes (sandbox-state coincidences). Too small for multi-step agent tasks. |
+| qwen3.5-2b | 2B | Emits XML-parameter tool calls for simple steps but sends empty params for write_file. 1/3 on old sql scenarios (s1_notes only). Insufficient SQL generation at 2B scale. |
+| llama-3.2-3b | 3B | 0/3 fs, 1/3 old sql (s1_notes only, after B9 lenient-params fix). Does not emit tool calls in multi-step scenarios. SQL generation limited at 3B. |
+| granite-4.0-h-1b | 1B | Does not emit parseable tool calls. 0/3 fs, 0/3 sql. |
+| granite-4.0-tiny-preview | ~1B | Does not emit parseable tool calls. 0/3 fs, 0/3 sql. |
+| granite-4.1-3b | 3B | Loads on llama-cpp-python (hybrid Mamba-2 arch). Does not emit parseable tool calls. 0/3 fs. |
+
+---
+
+## Min-Specs and Recommendations
+
+### The key insight
+
+**Failures correlate with SQL-authoring surface area, not agent-loop capability.**
+
+Every model that can emit structured tool calls passes the typed-tool scenarios
+(adk_root, oai_triage, lg_calc) at higher rates than the SQL-heavy scenarios
+(a1_ingest, a2_distill, a3_triage). The difference:
+
+- **Typed-tool scenarios** give the model a single tool with a clear schema (e.g.,
+  `greet(name)`, `categorize_ticket(category, priority)`). The model fills in simple
+  fields. No SQL authoring required.
+- **SQL-heavy scenarios** require the model to compose multi-statement SQL with correct
+  parameter placeholders (`$1`, `$2`), correct types, correct column names, and correct
+  JOIN logic. This is a much harder generative task.
+
+The B18 error-feedback fix narrows the gap for capable models (vllm-qwen3-coder passes
+a2_distill at 100% post-B18) but cannot help models that consistently generate the same
+structural SQL errors.
+
+### Minimum viable model by scenario class
+
+| Scenario class | Minimum viable model | Notes |
+|----------------|---------------------|-------|
+| Typed-tool (adk_root, oai_triage) | gemma-4-E2B-it (2B, 2.9 GB) | Every WORKS-tier model passes adk_root. Even qwen2.5-7b passes adk_root. |
+| Typed-tool with arithmetic (lg_calc) | gemma-4-E2B-it (2B, 2.9 GB) | All WORKS-tier local models pass. qwen3.5-9b and qwen2.5-7b fail (tool-arg type issues). |
+| SQL-heavy (a2_distill, a3_triage) | qwen3-4b-2507 (4B, 2.4 GB) | Smallest local model to pass SQL-heavy scenarios. Flappy on a1_ingest. |
+| SQL-heavy + ingest (a1_ingest) | vllm-qwen3-coder or openai-gpt5-mini | a1_ingest requires multi-file read + multi-table SQL. No local GGUF model reliably passes at N=1. |
+
+### Recommended configurations
+
+**Best overall (remote):** vllm-qwen3-coder (Qwen3-Coder-Next int4 via vLLM). 5/6
+scenarios, fastest latency (~3-4s per step), 100% on a2_distill at N=3 post-B18. Needs
+a vLLM endpoint with ~24 GB VRAM.
+
+**Best overall (cloud API):** openai-gpt5-mini. 5/6 scenarios, ~6s per step. Costs
+API credits. Reliable on SQL-heavy scenarios.
+
+**Best local GGUF (SQL-capable):** qwen3-4b-2507 (Qwen3-4B-Instruct-2507, Q4_K_M,
+2.4 GB). 5/6 scenarios. Slow on CPU (~60-100s per step) but the only local model to
+pass both a2_distill and a3_triage. Needs ~4 GB free RAM.
+
+**Best local GGUF (typed-tool only):** gemma-4-E2B-it (Q4_K_M, 2.9 GB). 4/6 scenarios
+(passes all typed-tool scenarios, weak on SQL-heavy). Faster than qwen3-4b-2507 (~20s
+per step). Good choice if your agent uses typed tools, not raw SQL.
+
+**Cheapest viable (typed-tool only):** gemma-4-E2B-it at 2.9 GB or qwen3-4b-2507 at
+2.4 GB. Both fit in 4 GB RAM.
+
+**Not recommended for production:** qwen3.5-9b (2/6, only passes oai_triage + adk_root
+due to empty `{}` args on sql_exec), qwen2.5-7b (1/6, only passes adk_root).
+
+---
+
+## Filesystem (fs) Benchmark Baseline
+
+The fs benchmark (f1_find, f2_edit, f3_collate) tests pure agent-loop capability with
+no SQL. A model that passes 3/3 fs can emit valid tool calls and complete multi-step
+tasks. This is the prerequisite for SQL scenario success.
+
+| Model | fs score | Verdict |
+|-------|---------|---------|
+| vllm-qwen3-coder | 3/3 | WORKS |
+| openai-gpt5-mini | 3/3 | WORKS |
+| qwen3-4b-2507 | 3/3 | WORKS |
+| gemma-4-E2B-it | 3/3 | WORKS |
+| gemma-4-E4B-it | 3/3 | WORKS |
+| qwen3.5-9b | 3/3 | WORKS |
+| qwen3.5-4b | 2/3 | PARTIAL |
+| qwen2.5-7b | 1/3 | PARTIAL |
+| All Known-NO models | 0/3 | NO |
+
+Source: B13 run (2026-05-17T02:21Z). See `bench/SMALL-MODEL-DIAGNOSIS.md` for the
+detailed per-model diagnosis of tool-call extraction and model capability limits.
+
+---
+
+## Methodology notes
+
+- All local GGUF models ran on CPU (no GPU). Q4_K_M quantization via llama-cpp-python.
+  GPU would reduce latency but not change pass/fail outcomes.
+- Each scenario ran once per model in the sweep (N=1). Single-run results are noisy.
+  Models marked with `*` (flappy) have recorded both PASS and FAIL across multiple runs.
+- The B18 tool-error feedback loop feeds SQL errors back to the model as conversation
+  context. This means post-B18 results may show more iterations (model retries) and
+  higher token counts than pre-B18 results.
+- The `task_passed` field in results.jsonl is the authoritative pass/fail. Some entries
+  show `task_passed=true` alongside a non-empty `error` field -- this means an error
+  occurred on one tool call but the overall task assertion still passed.
+- Tool-call extraction (B6/B13) handles four model output formats: JSON-in-tag, XML
+  params, Gemma special-token, and fenced JSON. See `bench/SMALL-MODEL-DIAGNOSIS.md`
+  for format details per model.

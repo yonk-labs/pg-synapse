@@ -1,1 +1,1 @@
-A student asks: what is 18 times 4? Route it to the right specialist and store the specialist's answer.
+A student asks: what is 18 times 4? Route it to the right specialist and report the answer.

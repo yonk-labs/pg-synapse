@@ -9,11 +9,7 @@
 -- (created by the harness) that calls call_agent to delegate to specialist
 -- sub-agents seeded here. This mirrors the OpenAI SDK agent.as_tool() pattern.
 
-CREATE SCHEMA IF NOT EXISTS triage;
-
-CREATE TABLE IF NOT EXISTS triage.log (
-    answer TEXT NOT NULL
-);
+-- No result table needed (assert checks synapse.executions.output).
 
 -- Seed the math specialist sub-agent.
 INSERT INTO synapse.agents (

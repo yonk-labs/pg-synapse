@@ -35,11 +35,29 @@ pub(crate) fn role_str(r: &pg_synapse_core::types::Role) -> &'static str {
     }
 }
 
+fn resolve_trace_level(agent_name: &str) -> pg_synapse_core::types::TraceLevel {
+    use pgrx::datum::DatumWithOid;
+    let level_str: Option<String> = pgrx::Spi::connect(|client| {
+        client
+            .select(
+                "SELECT trace_level FROM synapse.agents WHERE name = $1",
+                None,
+                &[DatumWithOid::from(agent_name.to_string())],
+            )
+            .ok()
+            .and_then(|mut t| t.next().and_then(|r| r.get::<String>(1).ok().flatten()))
+    });
+    level_str
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default()
+}
+
 pub(crate) fn log_execution(
     o: &pg_synapse_core::types::ExecutorOutcome,
     agent: &str,
     input: &str,
     caller: Option<&str>,
+    trace_level: pg_synapse_core::types::TraceLevel,
 ) -> Result<(), String> {
     use pgrx::JsonB;
     use pgrx::datum::DatumWithOid;
@@ -85,6 +103,11 @@ pub(crate) fn log_execution(
     )
     .map_err(|e| e.to_string())?;
 
+    let run_succeeded = o.status == pg_synapse_core::types::OutcomeStatus::Completed;
+    if !trace_level.should_persist_messages(run_succeeded) {
+        return Ok(());
+    }
+
     for m in &o.messages {
         let msg_args: Vec<DatumWithOid<'_>> = vec![
             DatumWithOid::from(m.execution_id.to_string()),
@@ -129,7 +152,7 @@ pub(crate) mod synapse {
     use pgrx::prelude::*;
     use serde_json::json;
 
-    use super::{log_execution, status_label};
+    use super::{log_execution, resolve_trace_level, status_label};
     use crate::runtime_holder::{kernel_handle, rebuild_kernel, tokio};
 
     /// Run the named agent against `input`. Returns a JSON object with the
@@ -163,7 +186,8 @@ pub(crate) mod synapse {
                     .first()
                     .map(|m| m.execution_id.to_string())
                     .unwrap_or_default();
-                let _ = log_execution(&o, agent_name, input, caller_role.as_deref());
+                let tl = resolve_trace_level(agent_name);
+                let _ = log_execution(&o, agent_name, input, caller_role.as_deref(), tl);
                 JsonB(json!({
                     "execution_id": exec_id,
                     "output": o.output,
@@ -584,7 +608,8 @@ pub(crate) mod synapse {
                     "DELETE FROM synapse.executions WHERE execution_id = $1::uuid",
                     &del,
                 );
-                let _ = log_execution(&o, agent_name, input, caller_role.as_deref());
+                let tl = resolve_trace_level(agent_name);
+                let _ = log_execution(&o, agent_name, input, caller_role.as_deref(), tl);
                 let real_id = o
                     .messages
                     .first()

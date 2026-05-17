@@ -618,13 +618,23 @@ for line in sys.stdin:
         LATENCY_MS="$(echo "$EXEC_JSON_PARSED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('duration_ms',0))" 2>/dev/null || echo 0)"
         ITERATIONS="$(echo "$EXEC_JSON_PARSED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('iterations',0))" 2>/dev/null || echo 0)"
 
-        # Check if tool calls were emitted.
-        TOOL_EMITTED="$(echo "$EXEC_JSON_PARSED" | python3 -c "
+        # Check if tool calls were emitted. Prefer the ground truth in
+        # synapse.messages (survives mid-loop errors), fall back to the
+        # executor JSON for scenarios where the DB was dropped early.
+        TOOL_EMITTED_DB="$(pg_run "$DB" -Atc \
+            "SELECT EXISTS(SELECT 1 FROM synapse.messages WHERE role='tool' LIMIT 1);" 2>/dev/null || echo '')"
+        if [[ "$TOOL_EMITTED_DB" == "t" ]]; then
+            TOOL_EMITTED="true"
+        elif [[ "$TOOL_EMITTED_DB" == "f" ]]; then
+            TOOL_EMITTED="false"
+        else
+            TOOL_EMITTED="$(echo "$EXEC_JSON_PARSED" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
 tcs = d.get('tool_calls', [])
 print('true' if tcs else 'false')
 " 2>/dev/null || echo 'false')"
+        fi
 
         # Capture any error from execution.
         EXEC_ERROR="$(echo "$EXEC_JSON_PARSED" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('error',''))" 2>/dev/null || true)"
