@@ -1,7 +1,9 @@
 //! The [`LlmProvider`] trait, [`LlmProviderFactory`] for building one from a
 //! profile row, [`ProviderCapabilities`] for pre-flight introspection, and
-//! [`retry_layer`] for opt-in jittered retry on transient errors.
+//! [`retry_layer`] for opt-in jittered retry on transient errors, and
+//! [`recovery_layer`] for opt-in context-overflow compaction recovery.
 
+pub mod recovery_layer;
 pub mod retry_layer;
 
 use async_trait::async_trait;
