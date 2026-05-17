@@ -14,6 +14,7 @@ each item has a why and a rough size. Ordered by leverage.
 | `pg-synapse-a2a` (client + server) | Google A2A parity; cross-service agent-to-agent. Maps onto gateway-level intercept/governance. Real protocol work. | L | v0.2 design direction |
 | `pg-synapse-provider-candle` | In-process Rust inference, zero external server (attractive for the pgrx extension). Operator flagged candle has idiosyncrasies, so cautious bet. | L | v0.2, cautious |
 | `pg-synapse-tools-http` hardening | Real HTTP tool exists; add auth/retry/timeout knobs for production agents. | S | v0.1.x |
+| `pg-synapse-tools-cli` (`run_cli`, GOVERNED) | Operator note 2026-05-17: let an agent call CLI tools, but ONLY commands approved in a DB table. Default-deny: a `synapse.cli_allowlist` table (binary/arg pattern, working-dir + role scope, enabled, max_runtime, approved_by/at); the tool refuses anything not matching an enabled row and audits every invocation (caller_role, argv, exit) to traces or a dedicated audit table. Approval is an admin-only SECURITY DEFINER fn (`synapse.cli_approve(...)`, same role/grant model as other admin fns); pairs with the inline-veto trigger so a gate agent can deny too. This is the constrained, governed form of the D14 "CodeAct excluded until a sandbox+rollback design exists" item: the DB allowlist + audit + admin approval IS that guardrail design. Highest-risk tool: default-deny, allowlist-only, fully audited, admin-approved. | M | v0.2, governance-gated |
 
 ## Loop / executor variants
 
