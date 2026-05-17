@@ -1,5 +1,9 @@
 # Examples
 
+For a complete catalog of all six benchmark agents (with schemas, sample code,
+and expected outcomes), see `docs/AGENTS-GUIDE.md`. For the reactive trigger
+demos (queue mode and inline mode), see `examples/reactive-triggers/`.
+
 Three repeatable, end-to-end workflows for pg_synapse v0.1. Each directory has
 its own `README.md` (full prerequisites and caveats) and an
 `EXAMPLE_OUTPUT.md` (a captured run with timings, tokens, and the message

@@ -85,6 +85,7 @@ docs/                       design spec, quickstarts, reference, recipes
 
 ## Documentation
 
+- `docs/AGENTS-GUIDE.md` agent catalog: all 6 benchmark agents with schemas, sample code, and reactive triggers
 - `docs/design.md` the design contract
 - `docs/extension-quickstart.md` install and first agent
 - `docs/tool-authoring.md` three ways to add tools
