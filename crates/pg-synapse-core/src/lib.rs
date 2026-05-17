@@ -105,6 +105,7 @@ pub use error::{
     RuntimeError, ToolError,
 };
 pub use executor::Executor;
+pub use llm::retry_layer::{RetryConfig, RetryProvider};
 pub use llm::{LlmProvider, LlmProviderFactory, ProviderCapabilities};
 pub use memory::MemoryProvider;
 pub use plugin::{Plugin, Registry};

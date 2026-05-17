@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::embedding::EmbeddingProvider;
 use crate::error::{ProviderError, RuntimeError};
 use crate::llm::LlmProvider;
+use crate::llm::retry_layer::{RetryConfig, RetryProvider};
 use crate::plugin::{Plugin, Registry, register_builtin_executors};
 use crate::types::{AgentRow, EmbeddingProfileRow, LlmProfileRow};
 
@@ -30,6 +31,7 @@ pub struct RuntimeBuilder {
     inline_embedding_profiles: Vec<EmbeddingProfileRow>,
     inline_agents: Vec<AgentRow>,
     inline_secrets: HashMap<String, String>,
+    retry_config: Option<RetryConfig>,
 }
 
 impl RuntimeBuilder {
@@ -45,6 +47,7 @@ impl RuntimeBuilder {
             inline_embedding_profiles: vec![],
             inline_agents: vec![],
             inline_secrets: HashMap::new(),
+            retry_config: None,
         }
     }
 
@@ -95,6 +98,16 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Enable retry-on-transient-error for all LLM providers hydrated by this
+    /// builder. Each provider is wrapped in a [`RetryProvider`] at build time.
+    ///
+    /// Opt-in per kernel guideline G4: no retry wrapping happens unless the
+    /// caller explicitly supplies a config here.
+    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = Some(config);
+        self
+    }
+
     /// Build the runtime: pull rows from the source, hydrate every provider,
     /// index agents, and return the finished facade.
     pub async fn build(mut self) -> Result<Runtime, RuntimeError> {
@@ -132,6 +145,11 @@ impl RuntimeBuilder {
             let mut p = profile.clone();
             p.params = inject_resolved_key(p.params, p.api_key_secret.as_deref(), &secrets);
             let provider = factory.build(p)?;
+            // Wrap with retry logic when configured (opt-in per G4).
+            let provider: Arc<dyn LlmProvider> = match &self.retry_config {
+                Some(cfg) => Arc::new(RetryProvider::new(provider, cfg.clone())),
+                None => provider,
+            };
             llm_providers.insert(profile.name.clone(), provider);
         }
 

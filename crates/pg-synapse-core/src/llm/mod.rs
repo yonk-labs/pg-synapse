@@ -1,5 +1,8 @@
 //! The [`LlmProvider`] trait, [`LlmProviderFactory`] for building one from a
-//! profile row, and [`ProviderCapabilities`] for pre-flight introspection.
+//! profile row, [`ProviderCapabilities`] for pre-flight introspection, and
+//! [`retry_layer`] for opt-in jittered retry on transient errors.
+
+pub mod retry_layer;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
