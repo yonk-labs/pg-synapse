@@ -11,7 +11,8 @@ pub mod mock_llm;
 pub mod mock_tool;
 
 pub use cassette::{
-    Cassette, CassetteEntry, CassetteOutcome, CassetteProvider, ConformanceError, run_conformance,
+    Cassette, CassetteEntry, CassetteOutcome, CassetteProvider, ConformanceError,
+    RecordingProvider, run_conformance,
 };
 pub use mock_embedding::MockEmbeddingProvider;
 pub use mock_factories::{MockEmbeddingFactory, MockLlmFactory};
