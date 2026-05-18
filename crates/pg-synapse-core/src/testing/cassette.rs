@@ -64,6 +64,106 @@ impl Cassette {
     pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(s)
     }
+
+    /// Write the cassette to `path` as pretty JSON.
+    pub fn save(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        std::fs::write(path, self.to_json())
+    }
+
+    /// Read a cassette from `path`. A malformed file surfaces as
+    /// [`std::io::ErrorKind::InvalidData`].
+    pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let raw = std::fs::read_to_string(path)?;
+        Self::from_json(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+}
+
+/// Externally-tagged borrowed mirror of [`CassetteOutcome`]. Serde gives a
+/// reference enum the same JSON as the owned one, so this lets
+/// [`RecordingProvider`] serialize an outcome it must also return without
+/// requiring `Clone` on [`LlmError`].
+#[derive(Serialize)]
+enum CassetteOutcomeRef<'a> {
+    Ok(&'a CompletionResponse),
+    Err(&'a LlmError),
+}
+
+/// Wraps a real [`LlmProvider`], passing every `complete` call through while
+/// recording the request and outcome into a [`Cassette`]. Drive it against a
+/// live endpoint (gated like live-tests) to regenerate fixtures; `stream`
+/// delegates without recording (slice 1 replay is complete-only).
+pub struct RecordingProvider {
+    inner: std::sync::Arc<dyn LlmProvider>,
+    recorded: std::sync::Mutex<Vec<CassetteEntry>>,
+}
+
+impl RecordingProvider {
+    /// Wrap `inner` and start recording.
+    pub fn new(inner: std::sync::Arc<dyn LlmProvider>) -> Self {
+        Self {
+            inner,
+            recorded: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Snapshot everything recorded so far into a replayable cassette,
+    /// carrying the inner provider's model and capabilities (PS-1).
+    pub fn into_cassette(&self) -> Cassette {
+        let entries = self
+            .recorded
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .drain(..)
+            .collect();
+        Cassette {
+            model: self.inner.model_name().to_string(),
+            capabilities: self.inner.capabilities(),
+            entries,
+        }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for RecordingProvider {
+    async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        let result = self.inner.complete(req.clone()).await;
+
+        // Serialize from a borrowed view so we never move the outcome out of
+        // `result` (LlmError is not Clone), then re-parse into an owned
+        // CassetteOutcome for storage.
+        let outcome_ref = match &result {
+            Ok(resp) => CassetteOutcomeRef::Ok(resp),
+            Err(err) => CassetteOutcomeRef::Err(err),
+        };
+        let owned: CassetteOutcome = serde_json::from_value(
+            serde_json::to_value(&outcome_ref).expect("CassetteOutcome is always serializable"),
+        )
+        .expect("a CassetteOutcome we serialized always re-parses");
+        self.recorded
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(CassetteEntry {
+                request: req,
+                outcome: owned,
+            });
+
+        result
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+    ) -> Result<BoxStream<'static, Result<CompletionChunk, LlmError>>, LlmError> {
+        self.inner.stream(req).await
+    }
+
+    fn model_name(&self) -> &str {
+        self.inner.model_name()
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.inner.capabilities()
+    }
 }
 
 /// Replays a [`Cassette`] as an [`LlmProvider`], deterministically and
@@ -305,5 +405,79 @@ mod tests {
         let provider = CassetteProvider::new(cassette());
         let err = run_conformance(&provider, &expected).await.unwrap_err();
         assert!(matches!(err, ConformanceError::ModelMismatch { .. }));
+    }
+
+    #[tokio::test]
+    async fn recording_then_replay_round_trips() {
+        use crate::testing::MockLlmProvider;
+        use std::sync::Arc;
+
+        let mock = Arc::new(MockLlmProvider::new("rec-model"));
+        mock.set_capabilities(ProviderCapabilities {
+            tool_use: true,
+            ..Default::default()
+        });
+        mock.push_text("hello");
+        mock.push_error(LlmError::Auth("p".into()));
+
+        let rec = RecordingProvider::new(mock);
+        let first = rec.complete(CompletionRequest::default()).await.unwrap();
+        assert_eq!(first.content.as_deref(), Some("hello"));
+        let second = rec
+            .complete(CompletionRequest::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(second, LlmError::Auth(_)));
+
+        let cas = rec.into_cassette();
+        assert_eq!(cas.model, "rec-model");
+        assert!(cas.capabilities.tool_use);
+        assert_eq!(cas.entries.len(), 2);
+
+        // The recorded cassette replays the same outcomes.
+        let replay = CassetteProvider::new(cas);
+        assert_eq!(
+            replay
+                .complete(CompletionRequest::default())
+                .await
+                .unwrap()
+                .content
+                .as_deref(),
+            Some("hello")
+        );
+        assert!(matches!(
+            replay
+                .complete(CompletionRequest::default())
+                .await
+                .unwrap_err(),
+            LlmError::Auth(_)
+        ));
+    }
+
+    #[test]
+    fn cassette_save_load_round_trips() {
+        let c = cassette();
+        let path = std::env::temp_dir().join(format!(
+            "pgsyn-cassette-{}-{}.json",
+            std::process::id(),
+            "rt"
+        ));
+        c.save(&path).unwrap();
+        let back = Cassette::load(&path).unwrap();
+        assert_eq!(c.to_json(), back.to_json());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_rejects_malformed_file() {
+        let path = std::env::temp_dir().join(format!(
+            "pgsyn-cassette-{}-{}.json",
+            std::process::id(),
+            "bad"
+        ));
+        std::fs::write(&path, "{ not json").unwrap();
+        let err = Cassette::load(&path).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let _ = std::fs::remove_file(&path);
     }
 }
