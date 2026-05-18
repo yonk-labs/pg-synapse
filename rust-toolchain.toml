@@ -1,0 +1,10 @@
+# Pin the toolchain so `cargo fmt --all --check` and
+# `cargo clippy --workspace -- -D warnings` are reproducible across
+# developer machines and CI. Without this, CI's
+# `dtolnay/rust-toolchain@stable` and local `rustup default stable`
+# float, so the formatter/linter gate result is non-deterministic and
+# breaks on every stable rollover. This pins the CLI toolchain only;
+# the crate MSRV stays `rust-version = "1.85"` in Cargo.toml.
+[toolchain]
+channel = "1.93.1"
+components = ["rustfmt", "clippy"]
