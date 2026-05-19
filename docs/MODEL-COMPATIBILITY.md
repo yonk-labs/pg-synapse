@@ -1,8 +1,10 @@
 # pg_synapse v0.1.1 -- Model Compatibility Matrix
 
-Last updated: 2026-05-17. Data sources: `bench/results.jsonl` (latest run_date per
-model/scenario, 2026-05-17T11:43Z sweep), `bench/run_n_a2_distill.log` and
-`bench/run_n_adk_root.log` (post-B18 characterization runs), `bench/models.toml`,
+Last updated: 2026-05-19. Data sources: `bench/results.jsonl` (latest run_date per
+model/scenario, 2026-05-17T11:43Z sweep), the post-B18 characterization logs
+`bench/run_n_a2_distill.log`, `bench/run_n_lg_calc.log`,
+`bench/run_n_oai_triage.log`, `bench/run_n_p1_pipeline.log` (each N=3) and
+`bench/run_n_adk_root.log` (N=1), `bench/models.toml`,
 `bench/SMALL-MODEL-DIAGNOSIS.md`.
 
 ## How to read this document
@@ -10,8 +12,9 @@ model/scenario, 2026-05-17T11:43Z sweep), `bench/run_n_a2_distill.log` and
 pg_synapse is model-agnostic: any OpenAI-compatible chat-completions endpoint works.
 This matrix records which models actually pass the benchmark scenarios at N=1 (single
 run per cell) unless noted otherwise. N=1 results are noisy -- a model that fails one
-run may pass the next. The post-B18 characterization runs (N=3) are the trustworthy
-source for vllm-qwen3-coder on the two tested scenarios.
+run may pass the next. The post-B18 characterization runs are the trustworthy
+source for vllm-qwen3-coder on the five tested scenarios (four at N=3, adk_root at
+N=1).
 
 ### Scenario descriptions
 
@@ -23,6 +26,7 @@ source for vllm-qwen3-coder on the two tested scenarios.
 | lg_calc | Typed-tool | calculator, sql_exec | LangGraph parity -- arithmetic via typed tool |
 | oai_triage | Typed-tool | categorize_ticket | OpenAI Agents SDK parity -- single typed tool |
 | adk_root | Typed-tool | greet | ADK parity -- single typed tool, minimal SQL |
+| p1_pipeline | Multi-tool | get_current_time, http_get, lede_compress, read_file, write_file | 6-step zero-SQL pipeline: clock to write_file to HTTP fetch to compress to append to read_file |
 
 ---
 
@@ -72,12 +76,25 @@ failing immediately.
 
 ### Characterization runs (post-B18)
 
-Source: `bench/run_n_a2_distill.log`, `bench/run_n_adk_root.log`
+Source: `bench/run_n_a2_distill.log`, `bench/run_n_lg_calc.log`,
+`bench/run_n_oai_triage.log`, `bench/run_n_p1_pipeline.log`,
+`bench/run_n_adk_root.log`
 
 | Model | Scenario | N | Pass | Fail | Rate |
 |-------|----------|---|------|------|------|
 | vllm-qwen3-coder | a2_distill | 3 | 3 | 0 | 100% |
-| vllm-qwen3-coder | adk_root | 3 | 3 | 0 | 100% |
+| vllm-qwen3-coder | lg_calc | 3 | 3 | 0 | 100% |
+| vllm-qwen3-coder | oai_triage | 3 | 3 | 0 | 100% |
+| vllm-qwen3-coder | p1_pipeline | 3 | 3 | 0 | 100% |
+| vllm-qwen3-coder | adk_root | 1 | 1 | 0 | 100% |
+
+All five committed characterization logs show vllm-qwen3-coder passing every
+iteration post-B18. a2_distill ran 8 good `sql_exec` calls per iteration; lg_calc,
+oai_triage, adk_root, and p1_pipeline are SQL-free. Correction: `bench/run_n_adk_root.log`
+is an N=1 log (a single iteration); the prior N=3 claim for adk_root was not backed by
+the committed log and has been amended to N=1 here. p1_pipeline is a multi-tool
+pipeline scenario added after the 2026-05-17 sweep (see the scenario table above); it
+does not appear in `bench/RESULTS.md` or the N=1 summary matrix.
 
 Context: a2_distill was the scenario most affected by pre-B18 abort behavior. The
 SESSION-HANDOFF.md notes that a2_distill went "from 6/10 pass to 10/10" during
