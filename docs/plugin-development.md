@@ -126,6 +126,11 @@ tool struct.
   `Plugin::register`, then assert `registry.tools.names()` /
   `registry.llm_factories.contains("...")`. Every shipped plugin has such a
   test.
+- `LlmProvider` conformance: every wired provider plugin runs the shared
+  cassette conformance suite. If you are authoring a new `LlmProvider`
+  plugin, follow the recipe in `docs/provider-conformance.md` to wire
+  yours into the suite (static, golden, and optional live record/replay
+  tests).
 
 ## Workspace layout
 
