@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::LlmError;
 use crate::llm::{LlmProvider, ProviderCapabilities};
 use crate::types::{CompletionChunk, CompletionRequest, CompletionResponse};
+use crate::types::{Message, Role, Usage};
 
 /// The recorded result of one `complete` call.
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,6 +76,47 @@ impl Cassette {
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         Self::from_json(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+}
+
+/// Build the canonical one-entry conformance cassette: the single source of
+/// truth for the per-provider golden fixtures (PS-5 slice 4). The fixture
+/// is deliberately minimal and deterministic: one `User` "ping" message
+/// with `Uuid::nil()` and the unix epoch as `timestamp`, one `Ok` outcome
+/// containing "pong" with zero `Usage`. Provider plugins parameterize only
+/// `model` and `capabilities`; the request and outcome are identical
+/// across providers so any divergence is a serde-shape change in the
+/// shared types, not noise.
+pub fn default_conformance_cassette(
+    model: impl Into<String>,
+    capabilities: ProviderCapabilities,
+) -> Cassette {
+    Cassette {
+        model: model.into(),
+        capabilities,
+        entries: vec![CassetteEntry {
+            request: CompletionRequest {
+                messages: vec![Message {
+                    execution_id: uuid::Uuid::nil(),
+                    seq: 0,
+                    role: Role::User,
+                    content: Some("ping".into()),
+                    tool_call_id: None,
+                    tool_name: None,
+                    tool_input: None,
+                    tool_output: None,
+                    timestamp: chrono::DateTime::from_timestamp(0, 0)
+                        .expect("unix epoch is a valid timestamp"),
+                }],
+                ..Default::default()
+            },
+            outcome: CassetteOutcome::Ok(CompletionResponse {
+                content: Some("pong".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+                usage: Usage::default(),
+            }),
+        }],
     }
 }
 

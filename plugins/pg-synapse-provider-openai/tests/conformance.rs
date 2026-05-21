@@ -10,8 +10,15 @@
 //!   fidelity against a real provider.
 
 use pg_synapse_core::llm::ProviderCapabilities;
-use pg_synapse_core::testing::{Cassette, CassetteProvider, run_conformance};
+use pg_synapse_core::testing::{
+    Cassette, CassetteProvider, default_conformance_cassette, run_conformance,
+};
 use pg_synapse_provider_openai::OpenAiProvider;
+
+/// Path to this crate's committed golden cassette.
+fn fixture_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/conformance-default.json")
+}
 
 /// OpenAiProvider's advertised capabilities (mirrors `impl LlmProvider`).
 fn openai_caps() -> ProviderCapabilities {
@@ -46,8 +53,7 @@ async fn openai_static_conformance() {
 /// a non-empty entries list (the static test uses zero entries).
 #[tokio::test]
 async fn openai_golden_cassette_replays() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/conformance-default.json");
+    let path = fixture_path();
     let cassette = Cassette::load(&path).expect("golden cassette must load");
     assert_eq!(cassette.model, "conformance-model");
     assert_eq!(
@@ -60,6 +66,34 @@ async fn openai_golden_cassette_replays() {
     run_conformance(&replay, &expected)
         .await
         .expect("golden cassette must replay cleanly");
+}
+
+/// PS-5 slice 4: drift check. The committed fixture must equal the canonical
+/// to_json output of `default_conformance_cassette` for this provider's
+/// capabilities. If they diverge (someone hand-edited the JSON, or a serde
+/// shape changed) this test fails; run `regenerate_openai_golden_cassette`
+/// to bring them back in sync.
+#[test]
+fn openai_golden_cassette_matches_canonical() {
+    let canonical = default_conformance_cassette("conformance-model", openai_caps()).to_json();
+    let committed = std::fs::read_to_string(fixture_path()).expect("fixture must exist");
+    assert_eq!(
+        canonical,
+        committed.trim_end_matches('\n'),
+        "fixture drift: run `cargo test -p pg-synapse-provider-openai --test conformance \
+         regenerate_openai_golden_cassette -- --ignored` to refresh"
+    );
+}
+
+/// Regenerator (always ignored). Run explicitly when the canonical shape
+/// changes: `cargo test ... regenerate_openai_golden_cassette -- --ignored`.
+#[test]
+#[ignore]
+fn regenerate_openai_golden_cassette() {
+    let canonical = default_conformance_cassette("conformance-model", openai_caps()).to_json();
+    let mut bytes = canonical.into_bytes();
+    bytes.push(b'\n');
+    std::fs::write(fixture_path(), bytes).expect("fixture is writable");
 }
 
 #[cfg(feature = "live-tests")]
