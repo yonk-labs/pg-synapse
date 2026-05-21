@@ -24,7 +24,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: clippy }
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # pg_synapse_pgrx is excluded for the same reason as the test job:
+      # pgrx-pg-sys's build script needs PGRX_HOME (a `cargo pgrx init`
+      # artifact). The pgrx-tests.yml workflow runs cargo pgrx init plus
+      # the full pgrx test harness for pg15/16/17, so pgrx code is still
+      # exercised in CI; it just doesn't go through this workspace-level
+      # clippy job.
+      - run: cargo clippy --workspace --all-targets --exclude pg_synapse_pgrx -- -D warnings
 
   test:
     runs-on: ubuntu-latest
