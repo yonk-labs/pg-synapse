@@ -20,7 +20,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
       - name: Install pgrx
-        run: cargo install --locked cargo-pgrx
+        # Must match the pinned `pgrx = "=0.18.0"` in Cargo.toml. cargo-pgrx
+        # and the pgrx crate version have to agree or `cargo pgrx test`
+        # fails with a schema/path mismatch (see CLAUDE.md).
+        run: cargo install --locked cargo-pgrx --version 0.18.0
       - name: pgrx init
         run: cargo pgrx init --pg${{ matrix.pg }} $(which pg_config)
       - name: pgrx tests

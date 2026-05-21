@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Provider conformance suite (PS-5)
+
+A deterministic, hermetic test harness in `pg_synapse_core::testing` that
+proves every `LlmProvider` impl satisfies the same contract: declares an
+honest model name, declares honest capabilities (the PS-1 capability
+model), and reproduces recorded outcomes faithfully on replay.
+
+- `Cassette` + `CassetteProvider` replay a recorded sequence of provider
+  interactions as an `LlmProvider`, deterministically and without
+  network. `run_conformance` drives a provider through a cassette and
+  asserts model name, capabilities, and outcomes.
+- `RecordingProvider` wraps a real `LlmProvider`, captures every
+  `complete` call into a cassette. `Cassette::save` / `Cassette::load`
+  are the on-disk format.
+- `default_conformance_cassette` is the canonical three-entry cassette
+  (text reply, tool call, auth error) used by every wired provider as
+  the source of truth for its committed golden fixture. Documented
+  with a doctest so the public API is compile-checked.
+- All three v0.1.1 provider plugins (`openai`, `llama-cpp`, `anthropic`)
+  ship a `tests/conformance.rs` with three layered tests each: a
+  hermetic `*_static_conformance`, a golden-cassette
+  `*_golden_cassette_replays` + `*_matches_canonical` drift check, and
+  a feature-gated `*_live_record_then_replay`. Each crate also ships a
+  committed `tests/fixtures/conformance-default.json` golden file and
+  a `#[ignore]`-d `regenerate_*_golden_cassette` test that refreshes
+  the fixture from the canonical helper.
+- Authoring guide for third-party plugin authors:
+  `docs/provider-conformance.md`.
+
+Workspace tests grew from 373 (post-v0.1.1) to 395 + 10 ignored
+regenerators + 13 doctests.
+
+### CI fix
+
+- `ci.yml` test job now excludes `pg_synapse_pgrx` from
+  `cargo test --workspace`. The pgrx crate uses `#[pg_test]`, which
+  requires `cargo pgrx test` against a managed Postgres backend; that
+  workflow lives in `pgrx-tests.yml` for pg15/16/17. The exclusion
+  turns the test job green for the first time since the workflow was
+  scaffolded.
+
+### Diagnostics export (PS-4)
+
+- Redacted diagnostics export bundle. Kernel capability shipped; the
+  `synapse.execution_export` SQL surface lands with N2.2 in v0.2.
+
 ## [0.1.1] - 2026-05-15
 
 Closes the v0.1.0 known gaps. Security and integrity fixes first, then host

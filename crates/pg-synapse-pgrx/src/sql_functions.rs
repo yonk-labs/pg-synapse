@@ -47,9 +47,7 @@ fn resolve_trace_level(agent_name: &str) -> pg_synapse_core::types::TraceLevel {
             .ok()
             .and_then(|mut t| t.next().and_then(|r| r.get::<String>(1).ok().flatten()))
     });
-    level_str
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_default()
+    level_str.and_then(|s| s.parse().ok()).unwrap_or_default()
 }
 
 pub(crate) fn log_execution(
@@ -266,7 +264,10 @@ pub(crate) mod synapse {
         if let Some(l) = level {
             let valid = ["off", "error", "info", "debug", "full"];
             if !valid.contains(&l) {
-                pgrx::error!("invalid trace level '{}'; use one of: off, error, info, debug, full", l);
+                pgrx::error!(
+                    "invalid trace level '{}'; use one of: off, error, info, debug, full",
+                    l
+                );
             }
         }
         let args: Vec<DatumWithOid<'_>> = vec![
@@ -304,7 +305,7 @@ pub(crate) mod synapse {
                 vec![],
             ),
         };
-        Spi::connect_mut(|mut client| {
+        Spi::connect_mut(|client| {
             client
                 .update(&sql, None, &args)
                 .map(|t| t.len() as i64)

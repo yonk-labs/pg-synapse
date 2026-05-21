@@ -238,9 +238,7 @@ async fn complete_429_without_retry_after_header_is_none() {
         .await
         .unwrap_err();
     match err {
-        LlmError::RateLimited {
-            retry_after_ms, ..
-        } => assert_eq!(retry_after_ms, None),
+        LlmError::RateLimited { retry_after_ms, .. } => assert_eq!(retry_after_ms, None),
         other => panic!("expected RateLimited, got {other:?}"),
     }
 }

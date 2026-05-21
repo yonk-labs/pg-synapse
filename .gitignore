@@ -17,3 +17,4 @@ skill-output/
 secrets.*
 **/.secrets/
 .autonomy/
+.remember/

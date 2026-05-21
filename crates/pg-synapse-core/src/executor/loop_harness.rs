@@ -448,9 +448,9 @@ mod tests {
     use super::*;
     use crate::testing::{MockLlmProvider, MockTool};
     use crate::tool::ToolRegistry;
+    use crate::types::TraceLevel;
     use crate::types::{ToolOutput, Usage};
     use std::sync::Arc;
-    use crate::types::TraceLevel;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -737,12 +737,7 @@ mod tests {
         let ev = h.events().last().unwrap();
         assert_eq!(ev.kind, EventKind::ToolError);
         assert_eq!(ev.payload["tool"], "bad");
-        assert!(
-            ev.payload["error"]
-                .as_str()
-                .unwrap()
-                .contains("not found")
-        );
+        assert!(ev.payload["error"].as_str().unwrap().contains("not found"));
     }
 
     #[tokio::test]

@@ -67,13 +67,13 @@ impl Executor for ReActExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::{LlmError, ToolError};
+    use crate::error::LlmError;
     use crate::llm::LlmProvider;
     use crate::testing::{MockLlmProvider, MockTool};
     use crate::tool::ToolRegistry;
+    use crate::types::TraceLevel;
     use crate::types::{Role, ToolOutput, Usage};
     use std::sync::Arc;
-    use crate::types::TraceLevel;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -204,9 +204,14 @@ mod tests {
         assert_eq!(outcome.status, OutcomeStatus::Completed);
         let fed_back = outcome.messages.iter().any(|m| {
             m.role == Role::Tool
-                && m.content.as_deref().is_some_and(|c| c.contains("not found"))
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("not found"))
         });
-        assert!(fed_back, "NotFound error should be fed back as a tool message");
+        assert!(
+            fed_back,
+            "NotFound error should be fed back as a tool message"
+        );
     }
 
     #[tokio::test]

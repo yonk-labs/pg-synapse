@@ -88,9 +88,9 @@ mod tests {
     use crate::llm::LlmProvider;
     use crate::testing::{MockLlmProvider, MockTool};
     use crate::tool::ToolRegistry;
+    use crate::types::TraceLevel;
     use crate::types::{ToolOutput, ToolSchema, Usage};
     use std::sync::Arc;
-    use crate::types::TraceLevel;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -190,9 +190,7 @@ mod tests {
             _input: serde_json::Value,
             _ctx: &crate::types::ToolCtx,
         ) -> Result<ToolOutput, ToolError> {
-            let n = self
-                .calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             if n < self.fail_times {
                 Err(ToolError::Execution {
                     name: self.name.clone(),
@@ -248,9 +246,14 @@ mod tests {
         assert_eq!(outcome.output, "ok, I will not use that tool");
         let fed_back = outcome.messages.iter().any(|m| {
             m.role == crate::types::Role::Tool
-                && m.content.as_deref().is_some_and(|c| c.contains("not found"))
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("not found"))
         });
-        assert!(fed_back, "NotFound error should be fed back as a tool message");
+        assert!(
+            fed_back,
+            "NotFound error should be fed back as a tool message"
+        );
     }
 
     #[tokio::test]

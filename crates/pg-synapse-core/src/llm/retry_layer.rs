@@ -232,7 +232,10 @@ mod tests {
         mock.push_text("should not reach");
 
         let retry = RetryProvider::new(mock.clone(), fast_config(3));
-        let err = retry.complete(CompletionRequest::default()).await.unwrap_err();
+        let err = retry
+            .complete(CompletionRequest::default())
+            .await
+            .unwrap_err();
         assert!(matches!(err, LlmError::Auth(_)));
         assert_eq!(mock.queued(), 1, "second response should remain unconsumed");
     }
@@ -248,7 +251,10 @@ mod tests {
         mock.push_text("should not reach");
 
         let retry = RetryProvider::new(mock.clone(), fast_config(3));
-        let err = retry.complete(CompletionRequest::default()).await.unwrap_err();
+        let err = retry
+            .complete(CompletionRequest::default())
+            .await
+            .unwrap_err();
         assert!(matches!(err, LlmError::ContextLengthExceeded { .. }));
         assert_eq!(mock.queued(), 1);
     }
@@ -262,7 +268,10 @@ mod tests {
         }
 
         let retry = RetryProvider::new(mock.clone(), fast_config(3));
-        let err = retry.complete(CompletionRequest::default()).await.unwrap_err();
+        let err = retry
+            .complete(CompletionRequest::default())
+            .await
+            .unwrap_err();
         assert!(matches!(err, LlmError::Network(_)));
         assert_eq!(mock.queued(), 0, "all 4 error responses should be consumed");
     }

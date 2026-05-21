@@ -136,11 +136,8 @@ impl Compressor for DefaultCompressor {
 
         // Anything neither the kept system message nor a kept-recent message
         // is collapsed into the digest.
-        let kept: std::collections::HashSet<usize> = kept_recent
-            .iter()
-            .copied()
-            .chain(system_idx)
-            .collect();
+        let kept: std::collections::HashSet<usize> =
+            kept_recent.iter().copied().chain(system_idx).collect();
         let collapsed_indices: Vec<u32> = (0..messages.len())
             .filter(|i| !kept.contains(i))
             .map(|i| i as u32)
@@ -151,8 +148,10 @@ impl Compressor for DefaultCompressor {
             return Ok(Compressed::default());
         }
 
-        let mut lines: Vec<String> =
-            vec![format!("[compacted {} earlier message(s)]", collapsed_indices.len())];
+        let mut lines: Vec<String> = vec![format!(
+            "[compacted {} earlier message(s)]",
+            collapsed_indices.len()
+        )];
         for &i in &collapsed_indices {
             let m = &messages[i as usize];
             let snippet = truncate_chars(&message_text(m), DIGEST_SNIPPET_CHARS);
@@ -238,7 +237,13 @@ mod tests {
     async fn empty_messages_returns_empty_compressed() {
         let c = DefaultCompressor::new();
         let out = c
-            .compress(&[], CompressionBudget { target_tokens: 100, hard_limit_tokens: 200 })
+            .compress(
+                &[],
+                CompressionBudget {
+                    target_tokens: 100,
+                    hard_limit_tokens: 200,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(out, Compressed::default());
@@ -249,7 +254,13 @@ mod tests {
         let c = DefaultCompressor::new();
         let msgs = vec![msg(Role::User, "hi"), msg(Role::Assistant, "hello")];
         let out = c
-            .compress(&msgs, CompressionBudget { target_tokens: 1000, hard_limit_tokens: 2000 })
+            .compress(
+                &msgs,
+                CompressionBudget {
+                    target_tokens: 1000,
+                    hard_limit_tokens: 2000,
+                },
+            )
             .await
             .unwrap();
         assert!(out.collapsed_indices.is_empty());
@@ -269,11 +280,20 @@ mod tests {
         let last = (msgs.len() - 1) as u32;
 
         let out = c
-            .compress(&msgs, CompressionBudget { target_tokens: 120, hard_limit_tokens: 5000 })
+            .compress(
+                &msgs,
+                CompressionBudget {
+                    target_tokens: 120,
+                    hard_limit_tokens: 5000,
+                },
+            )
             .await
             .unwrap();
 
-        assert!(!out.collapsed_indices.is_empty(), "old messages must collapse");
+        assert!(
+            !out.collapsed_indices.is_empty(),
+            "old messages must collapse"
+        );
         assert!(
             !out.collapsed_indices.contains(&last),
             "the newest message must be retained, not collapsed"
@@ -290,7 +310,13 @@ mod tests {
             msgs.push(msg(Role::User, &big));
         }
         let out = c
-            .compress(&msgs, CompressionBudget { target_tokens: 120, hard_limit_tokens: 5000 })
+            .compress(
+                &msgs,
+                CompressionBudget {
+                    target_tokens: 120,
+                    hard_limit_tokens: 5000,
+                },
+            )
             .await
             .unwrap();
         assert!(
@@ -309,7 +335,13 @@ mod tests {
             msg(Role::Assistant, &big),
         ];
         let err = c
-            .compress(&msgs, CompressionBudget { target_tokens: 10, hard_limit_tokens: 5 })
+            .compress(
+                &msgs,
+                CompressionBudget {
+                    target_tokens: 10,
+                    hard_limit_tokens: 5,
+                },
+            )
             .await
             .unwrap_err();
         match err {

@@ -268,6 +268,19 @@ mod tests {
 
     use super::{CallAgentTool, DELEGATION_DEPTH, MAX_DELEGATION_DEPTH};
 
+    // DELEGATION_DEPTH is a process-wide static. `cargo test` runs the tests
+    // in this module on parallel OS threads, so the two tests that store/load
+    // it must not run concurrently or their writes interleave (observed:
+    // depth_decremented_on_sub_agent_failure flaked ~6/15 under a parallel
+    // run). The tokio `current_thread` flavor only isolates async tasks
+    // within one test; it does not serialize separate tests. This mutex
+    // does: every test touching DELEGATION_DEPTH holds it for its whole
+    // critical section, which spans `.await` points, so it must be the
+    // async tokio mutex (a std mutex guard across an await is unsound and
+    // clippy-rejected). tokio's mutex has no poisoning: a panicking test
+    // releases the lock cleanly, so the next test gets it uncorrupted.
+    static DEPTH_TEST_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     fn ctx() -> ToolCtx {
         ToolCtx::default()
     }
@@ -296,10 +309,11 @@ mod tests {
         // This path errors before touching DELEGATION_DEPTH; assert the contract.
     }
 
-    /// Depth guard test -- run with current_thread flavor so DELEGATION_DEPTH
-    /// manipulation is isolated (no other async task on this thread).
+    /// Depth guard test. Serialized via DEPTH_TEST_GUARD because it mutates
+    /// the process-wide DELEGATION_DEPTH (see the guard's doc comment).
     #[tokio::test(flavor = "current_thread")]
     async fn depth_guard_rejects_at_limit() {
+        let _guard = DEPTH_TEST_GUARD.lock().await;
         DELEGATION_DEPTH.store(MAX_DELEGATION_DEPTH, Ordering::SeqCst);
 
         let runtime = minimal_runtime().await;
@@ -319,9 +333,11 @@ mod tests {
         );
     }
 
-    /// Depth decrement test -- current_thread for the same isolation reason.
+    /// Depth decrement test. Serialized via DEPTH_TEST_GUARD for the same
+    /// reason as depth_guard_rejects_at_limit.
     #[tokio::test(flavor = "current_thread")]
     async fn depth_decremented_on_sub_agent_failure() {
+        let _guard = DEPTH_TEST_GUARD.lock().await;
         DELEGATION_DEPTH.store(0, Ordering::SeqCst);
 
         let runtime = minimal_runtime().await;

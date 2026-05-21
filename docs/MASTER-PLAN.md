@@ -60,13 +60,19 @@ in PS-1 (7d19a49); added regression coverage (60a1bdc). Workspace
 build repaired: a pre-existing B19 trace_level drift left sidecar +
 doctests + several test bins non-compiling on main (f5f812a).
 
-### Wave 3 - build on Wave 2 (NEXT)
+### Wave 3 - SHIPPED
 
-7. **PS-4: Redacted diagnostics export bundle.** Needs PS-3. No
-   `synapse.execution_export` SQL (N2.2): build the kernel capability,
-   file the v0.2 SQL issue.
-8. **PS-5: Cassette / record-replay provider conformance suite.** Needs
-   PS-1. Dev/test tooling, not runtime core.
+7. **PS-4: Redacted diagnostics export bundle.** Kernel capability
+   shipped (acbf4eb, commit `acbf4eb`). The `synapse.execution_export`
+   SQL surface lands with N2.2 in v0.2.
+8. **PS-5: Cassette / record-replay provider conformance suite.**
+   SHIPPED across slices 1-10. All three v0.1.1 provider plugins
+   (`openai`, `llama-cpp`, `anthropic`) wired to the shared
+   `pg_synapse_core::testing` conformance harness. Each ships a static
+   conformance test, a golden-cassette replay + drift check, a
+   regenerator, and an optional feature-gated live record/replay test.
+   Authoring guide for third-party plugins: `docs/provider-conformance.md`.
+   See `docs/NEXT-STEPS.md` for the slice-by-slice landing log.
 
 ### Wave 4 - independent, slot in anywhere
 
@@ -113,8 +119,8 @@ more provider plugins (not value until PS-1/PS-5 make it safe).
 
 ## Recommended next action
 
-Wave 3: PS-4 (redacted diagnostics export bundle) now that PS-3 lands
-the trace writer + ExecutorOutcome.events; then PS-5 (cassette /
-record-replay conformance, needs PS-1). Opportunistic: fix the flaky
-`pg-synapse-tools-delegate::depth_decremented_on_sub_agent_failure`
-(see BACKLOG) -- nondeterministic, ~1/5 fail, independent of Wave 2.
+Wave 3 is complete (PS-4 + PS-5 shipped). Next: Wave 4 (PS-6
+structured-output contract + schema sanitizer, PS-7 plugin manifest
++ capability/version metadata) or the v0.1.x small wins listed below.
+See `docs/NEXT-STEPS.md` for a current snapshot of where the repo is
+and what is queued.

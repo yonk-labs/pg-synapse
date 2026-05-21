@@ -163,18 +163,17 @@ impl LlmProvider for RecoveryProvider {
                         hard_limit_tokens: hard,
                     };
 
-                    let compressed =
-                        match self.compressor.compress(&req.messages, budget).await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "pg_synapse_core::recovery",
-                                    error = %e,
-                                    "compaction failed; surfacing original overflow"
-                                );
-                                return Err(overflow);
-                            }
-                        };
+                    let compressed = match self.compressor.compress(&req.messages, budget).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "pg_synapse_core::recovery",
+                                error = %e,
+                                "compaction failed; surfacing original overflow"
+                            );
+                            return Err(overflow);
+                        }
+                    };
 
                     if compressed.collapsed_indices.is_empty() {
                         // Nothing left to shrink: stop instead of looping.
@@ -241,9 +240,10 @@ mod tests {
     }
 
     fn req_with(n: usize) -> CompletionRequest {
-        let mut r = CompletionRequest::default();
-        r.messages = (0..n).map(|i| user_msg(&format!("m{i}"))).collect();
-        r
+        CompletionRequest {
+            messages: (0..n).map(|i| user_msg(&format!("m{i}"))).collect(),
+            ..Default::default()
+        }
     }
 
     /// Collapses everything except the final message into one summary.
@@ -275,10 +275,7 @@ mod tests {
     }
     #[async_trait]
     impl LlmProvider for OverflowUntilSmall {
-        async fn complete(
-            &self,
-            req: CompletionRequest,
-        ) -> Result<CompletionResponse, LlmError> {
+        async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.seen.lock().unwrap().push(req.messages.len());
             if req.messages.len() > self.threshold {
@@ -370,7 +367,10 @@ mod tests {
         let rp = RecoveryProvider::new(
             prov.clone(),
             Arc::new(CollapseAllButLast),
-            RecoveryConfig { max_attempts: 2, target_ratio: 0.5 },
+            RecoveryConfig {
+                max_attempts: 2,
+                target_ratio: 0.5,
+            },
         );
         let err = rp.complete(req_with(5)).await.unwrap_err();
         assert!(matches!(err, LlmError::ContextLengthExceeded { .. }));
@@ -399,7 +399,10 @@ mod tests {
         let rp = RecoveryProvider::new(
             prov.clone(),
             Arc::new(NoOpCompressor),
-            RecoveryConfig { max_attempts: 5, target_ratio: 0.5 },
+            RecoveryConfig {
+                max_attempts: 5,
+                target_ratio: 0.5,
+            },
         );
         let err = rp.complete(req_with(4)).await.unwrap_err();
         assert!(matches!(err, LlmError::ContextLengthExceeded { .. }));

@@ -1,22 +1,34 @@
+//! Trace verbosity levels and structured execution events.
+//!
+//! [`TraceLevel`] controls how much a run persists to `synapse.traces`.
+//! [`ExecutionEvent`] / [`EventKind`] are the structured events recorded
+//! during a run once the level is `Debug` or higher.
+
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// How much detail a run persists to `synapse.traces`.
+///
+/// Ordered least to most verbose; the `Ord` derive matches that
+/// verbosity ordering (`Off < Error < Info < Debug < Full`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TraceLevel {
+    /// Persist nothing.
     Off = 0,
+    /// Persist messages only for runs that failed.
     Error = 1,
+    /// Persist messages for every run. This is the default.
+    #[default]
     Info = 2,
+    /// Everything `Info` does, plus structured [`ExecutionEvent`]s.
     Debug = 3,
+    /// Everything `Debug` does, plus raw LLM request/response payloads.
     Full = 4,
 }
 
-impl Default for TraceLevel {
-    fn default() -> Self {
-        Self::Info
-    }
-}
-
 impl TraceLevel {
+    /// Whether conversation messages should be persisted for a run with
+    /// the given success outcome. `Error` persists only failed runs.
     pub fn should_persist_messages(&self, run_succeeded: bool) -> bool {
         match self {
             Self::Off => false,
@@ -25,10 +37,14 @@ impl TraceLevel {
         }
     }
 
+    /// Whether structured execution events should be persisted
+    /// (`Debug` and `Full` only).
     pub fn should_persist_events(&self) -> bool {
         matches!(self, Self::Debug | Self::Full)
     }
 
+    /// Whether raw LLM request/response payloads should be persisted
+    /// (`Full` only).
     pub fn should_persist_raw_payloads(&self) -> bool {
         matches!(self, Self::Full)
     }
@@ -60,22 +76,35 @@ impl std::fmt::Display for TraceLevel {
     }
 }
 
+/// A single structured event recorded during a run, persisted as one
+/// `synapse.traces` row when the trace level is `Debug` or higher.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionEvent {
+    /// The category of this event.
     pub kind: EventKind,
+    /// Event-specific detail as arbitrary JSON (shape depends on `kind`).
     pub payload: serde_json::Value,
 }
 
+/// The category of an [`ExecutionEvent`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
+    /// A request was sent to the LLM provider.
     LlmRequest,
+    /// A response was received from the LLM provider.
     LlmResponse,
+    /// A tool invocation started.
     ToolStart,
+    /// A tool invocation completed successfully.
     ToolEnd,
+    /// A tool invocation returned an error.
     ToolError,
+    /// A provider call was retried.
     RetryAttempt,
+    /// The per-run cost cap was evaluated.
     CostCapCheck,
+    /// The per-run iteration cap was evaluated.
     IterationCapCheck,
 }
 

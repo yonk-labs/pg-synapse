@@ -88,9 +88,9 @@ mod tests {
     use crate::testing::MockLlmProvider;
     use crate::tool::ToolRegistry;
     use crate::types::OutcomeStatus;
+    use crate::types::TraceLevel;
     use async_trait::async_trait;
     use std::sync::Arc;
-    use crate::types::TraceLevel;
     use std::task::{Context, Poll};
     use std::time::Duration;
     use tower::ServiceExt;
