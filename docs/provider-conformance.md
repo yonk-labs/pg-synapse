@@ -189,4 +189,9 @@ Causes, ranked by likelihood:
 
 * `crates/pg-synapse-core/src/testing/cassette.rs` for the module-level
   rustdoc.
+* The doc-comment on `default_conformance_cassette` carries a doctest
+  that exercises the canonical-cassette half of the recipe shown above.
+  It runs on every `cargo test --doc -p pg-synapse-core`, so changes to
+  the helper's signature surface as a doctest failure before the plugin
+  recipe rots.
 * `docs/plugin-development.md` for the broader plugin authoring guide.

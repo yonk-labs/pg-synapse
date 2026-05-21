@@ -105,6 +105,31 @@ impl Cassette {
 /// 1. Text reply (`Ok` with `content` set, empty `tool_calls`).
 /// 2. Tool call (`Ok` with `content = None`, one `ToolCall`).
 /// 3. Auth error (`Err(LlmError::Auth)`).
+///
+/// # Example
+///
+/// The recipe in `docs/provider-conformance.md` boils down to: build the
+/// canonical cassette, serialize it, then replay it back through
+/// [`CassetteProvider`] and [`run_conformance`]. This compiles as a
+/// doctest so the recipe's API surface is checked on every
+/// `cargo test --doc -p pg-synapse-core`.
+///
+/// ```
+/// use pg_synapse_core::llm::ProviderCapabilities;
+/// use pg_synapse_core::testing::{
+///     Cassette, CassetteProvider, default_conformance_cassette, run_conformance,
+/// };
+///
+/// # tokio_test::block_on(async {
+/// let caps = ProviderCapabilities { tool_use: true, ..Default::default() };
+/// let canonical = default_conformance_cassette("my-model", caps);
+/// let json = canonical.to_json();
+///
+/// let replay = CassetteProvider::from_json(&json).unwrap();
+/// let expected = Cassette::from_json(&json).unwrap();
+/// run_conformance(&replay, &expected).await.unwrap();
+/// # });
+/// ```
 pub fn default_conformance_cassette(
     model: impl Into<String>,
     capabilities: ProviderCapabilities,
