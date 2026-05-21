@@ -1,5 +1,4 @@
-//! Cassette record/replay for deterministic provider conformance tests
-//! (PS-5, slice 1: the replay side + the conformance harness).
+//! Cassette record/replay + conformance harness (PS-5).
 //!
 //! A [`Cassette`] is an ordered recording of provider interactions plus the
 //! provider's declared model and [`ProviderCapabilities`] (the PS-1
@@ -11,7 +10,21 @@
 //! convention rather than fragile request matching. This is dev/test tooling
 //! only: nothing here is on the runtime-core default path (G4).
 //!
-//! Slice 2 adds the recording side (`RecordingProvider`) and file IO.
+//! ## Pieces
+//!
+//! * [`CassetteProvider`] + [`run_conformance`] replay a recorded cassette
+//!   and assert a provider reproduces its model, capabilities, and
+//!   outcomes (slice 1).
+//! * [`RecordingProvider`] wraps a real [`LlmProvider`] and captures every
+//!   `complete` call into a cassette (slice 2a). [`Cassette::save`] /
+//!   [`Cassette::load`] are the on-disk format.
+//! * [`default_conformance_cassette`] is the canonical three-entry
+//!   cassette (text reply + tool call + auth error) used by every wired
+//!   provider plugin as the source of truth for its committed golden
+//!   fixture (slices 4 and 5). Plugins' drift checks pin the committed
+//!   JSON to this helper's `to_json` output; their `#[ignore]`
+//!   regenerator tests bring fixtures back into sync when the canonical
+//!   shape evolves.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -550,5 +563,52 @@ mod tests {
         let err = Cassette::load(&path).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let _ = std::fs::remove_file(&path);
+    }
+
+    // PS-5 slice 6: kernel-level coverage for the canonical helper so
+    // changes to default_conformance_cassette surface here before the
+    // three plugin crates have to compile.
+
+    #[test]
+    fn default_cassette_pins_three_outcome_shapes() {
+        let c = default_conformance_cassette(
+            "m",
+            ProviderCapabilities {
+                tool_use: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(c.model, "m");
+        assert_eq!(c.entries.len(), 3);
+        match &c.entries[0].outcome {
+            CassetteOutcome::Ok(r) => {
+                assert_eq!(r.content.as_deref(), Some("pong"));
+                assert!(r.tool_calls.is_empty());
+            }
+            other => panic!("entry 0 must be Ok(text), got {other:?}"),
+        }
+        match &c.entries[1].outcome {
+            CassetteOutcome::Ok(r) => {
+                assert!(r.content.is_none());
+                assert_eq!(r.tool_calls.len(), 1);
+                assert_eq!(r.tool_calls[0].name, "echo");
+            }
+            other => panic!("entry 1 must be Ok(tool_call), got {other:?}"),
+        }
+        match &c.entries[2].outcome {
+            CassetteOutcome::Err(LlmError::Auth(p)) => assert_eq!(p, "conformance-provider"),
+            other => panic!("entry 2 must be Err(Auth), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn default_cassette_replays_against_itself() {
+        let c = default_conformance_cassette("m", ProviderCapabilities::default());
+        let json = c.to_json();
+        let replay = CassetteProvider::from_json(&json).unwrap();
+        let expected = Cassette::from_json(&json).unwrap();
+        run_conformance(&replay, &expected)
+            .await
+            .expect("canonical cassette must replay cleanly through run_conformance");
     }
 }
