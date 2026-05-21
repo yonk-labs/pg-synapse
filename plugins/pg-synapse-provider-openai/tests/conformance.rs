@@ -58,8 +58,8 @@ async fn openai_golden_cassette_replays() {
     assert_eq!(cassette.model, "conformance-model");
     assert_eq!(
         cassette.entries.len(),
-        1,
-        "fixture exercises one interaction"
+        3,
+        "fixture exercises text reply + tool call + error variant"
     );
     let replay = CassetteProvider::new(cassette);
     let expected = Cassette::load(&path).expect("golden cassette must load");

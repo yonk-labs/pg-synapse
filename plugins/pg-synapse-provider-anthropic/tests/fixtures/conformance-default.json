@@ -42,6 +42,75 @@
           }
         }
       }
+    },
+    {
+      "request": {
+        "messages": [
+          {
+            "execution_id": "00000000-0000-0000-0000-000000000000",
+            "seq": 0,
+            "role": "user",
+            "content": "use the echo tool with input ping",
+            "tool_call_id": null,
+            "tool_name": null,
+            "tool_input": null,
+            "tool_output": null,
+            "timestamp": "1970-01-01T00:00:00Z"
+          }
+        ],
+        "tools": [],
+        "model": null,
+        "temperature": null,
+        "max_tokens": null,
+        "params": null
+      },
+      "outcome": {
+        "Ok": {
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call_0",
+              "name": "echo",
+              "args": {
+                "input": "ping"
+              }
+            }
+          ],
+          "finish_reason": "tool_calls",
+          "usage": {
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cost_usd": null
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "messages": [
+          {
+            "execution_id": "00000000-0000-0000-0000-000000000000",
+            "seq": 0,
+            "role": "user",
+            "content": "trigger auth failure",
+            "tool_call_id": null,
+            "tool_name": null,
+            "tool_input": null,
+            "tool_output": null,
+            "timestamp": "1970-01-01T00:00:00Z"
+          }
+        ],
+        "tools": [],
+        "model": null,
+        "temperature": null,
+        "max_tokens": null,
+        "params": null
+      },
+      "outcome": {
+        "Err": {
+          "Auth": "conformance-provider"
+        }
+      }
     }
   ]
 }

@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::LlmError;
 use crate::llm::{LlmProvider, ProviderCapabilities};
 use crate::types::{CompletionChunk, CompletionRequest, CompletionResponse};
-use crate::types::{Message, Role, Usage};
+use crate::types::{Message, Role, ToolCall, Usage};
 
 /// The recorded result of one `complete` call.
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,44 +79,73 @@ impl Cassette {
     }
 }
 
-/// Build the canonical one-entry conformance cassette: the single source of
-/// truth for the per-provider golden fixtures (PS-5 slice 4). The fixture
-/// is deliberately minimal and deterministic: one `User` "ping" message
-/// with `Uuid::nil()` and the unix epoch as `timestamp`, one `Ok` outcome
-/// containing "pong" with zero `Usage`. Provider plugins parameterize only
-/// `model` and `capabilities`; the request and outcome are identical
+/// Build the canonical three-entry conformance cassette: the single source
+/// of truth for the per-provider golden fixtures (PS-5 slice 4 + 5). The
+/// shape is deliberately minimal and deterministic; all messages use
+/// `Uuid::nil()` and the unix epoch as `timestamp`. Provider plugins
+/// parameterize only `model` and `capabilities`; the entries are identical
 /// across providers so any divergence is a serde-shape change in the
 /// shared types, not noise.
+///
+/// The three entries pin three distinct CassetteOutcome / response shapes
+/// that real providers must reproduce in replay:
+/// 1. Text reply (`Ok` with `content` set, empty `tool_calls`).
+/// 2. Tool call (`Ok` with `content = None`, one `ToolCall`).
+/// 3. Auth error (`Err(LlmError::Auth)`).
 pub fn default_conformance_cassette(
     model: impl Into<String>,
     capabilities: ProviderCapabilities,
 ) -> Cassette {
+    let user_msg = |content: &str| Message {
+        execution_id: uuid::Uuid::nil(),
+        seq: 0,
+        role: Role::User,
+        content: Some(content.into()),
+        tool_call_id: None,
+        tool_name: None,
+        tool_input: None,
+        tool_output: None,
+        timestamp: chrono::DateTime::from_timestamp(0, 0).expect("unix epoch is a valid timestamp"),
+    };
+    let entry = |req_content: &str, outcome: CassetteOutcome| CassetteEntry {
+        request: CompletionRequest {
+            messages: vec![user_msg(req_content)],
+            ..Default::default()
+        },
+        outcome,
+    };
+
     Cassette {
         model: model.into(),
         capabilities,
-        entries: vec![CassetteEntry {
-            request: CompletionRequest {
-                messages: vec![Message {
-                    execution_id: uuid::Uuid::nil(),
-                    seq: 0,
-                    role: Role::User,
-                    content: Some("ping".into()),
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_input: None,
-                    tool_output: None,
-                    timestamp: chrono::DateTime::from_timestamp(0, 0)
-                        .expect("unix epoch is a valid timestamp"),
-                }],
-                ..Default::default()
-            },
-            outcome: CassetteOutcome::Ok(CompletionResponse {
-                content: Some("pong".into()),
-                tool_calls: vec![],
-                finish_reason: "stop".into(),
-                usage: Usage::default(),
-            }),
-        }],
+        entries: vec![
+            entry(
+                "ping",
+                CassetteOutcome::Ok(CompletionResponse {
+                    content: Some("pong".into()),
+                    tool_calls: vec![],
+                    finish_reason: "stop".into(),
+                    usage: Usage::default(),
+                }),
+            ),
+            entry(
+                "use the echo tool with input ping",
+                CassetteOutcome::Ok(CompletionResponse {
+                    content: None,
+                    tool_calls: vec![ToolCall {
+                        id: "call_0".into(),
+                        name: "echo".into(),
+                        args: serde_json::json!({ "input": "ping" }),
+                    }],
+                    finish_reason: "tool_calls".into(),
+                    usage: Usage::default(),
+                }),
+            ),
+            entry(
+                "trigger auth failure",
+                CassetteOutcome::Err(LlmError::Auth("conformance-provider".into())),
+            ),
+        ],
     }
 }
 
