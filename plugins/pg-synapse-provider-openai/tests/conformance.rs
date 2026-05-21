@@ -10,7 +10,7 @@
 //!   fidelity against a real provider.
 
 use pg_synapse_core::llm::ProviderCapabilities;
-use pg_synapse_core::testing::{Cassette, run_conformance};
+use pg_synapse_core::testing::{Cassette, CassetteProvider, run_conformance};
 use pg_synapse_provider_openai::OpenAiProvider;
 
 /// OpenAiProvider's advertised capabilities (mirrors `impl LlmProvider`).
@@ -38,6 +38,30 @@ async fn openai_static_conformance() {
         .expect("OpenAiProvider must satisfy its declared PS-1 contract");
 }
 
+/// PS-5 slice 3a: hermetic regression check against a committed golden
+/// cassette. Catches silent serde-shape changes in the Cassette /
+/// CompletionRequest / CompletionResponse / CassetteOutcome types: if any
+/// of those evolve, loading the committed fixture will fail at parse time.
+/// Also exercises CassetteProvider replay through `run_conformance` against
+/// a non-empty entries list (the static test uses zero entries).
+#[tokio::test]
+async fn openai_golden_cassette_replays() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/conformance-default.json");
+    let cassette = Cassette::load(&path).expect("golden cassette must load");
+    assert_eq!(cassette.model, "conformance-model");
+    assert_eq!(
+        cassette.entries.len(),
+        1,
+        "fixture exercises one interaction"
+    );
+    let replay = CassetteProvider::new(cassette);
+    let expected = Cassette::load(&path).expect("golden cassette must load");
+    run_conformance(&replay, &expected)
+        .await
+        .expect("golden cassette must replay cleanly");
+}
+
 #[cfg(feature = "live-tests")]
 fn endpoint() -> Option<(String, String)> {
     let base = std::env::var("PG_SYNAPSE_TEST_LLM_BASE_URL").ok()?;
@@ -50,7 +74,7 @@ fn endpoint() -> Option<(String, String)> {
 #[tokio::test]
 async fn openai_live_record_then_replay() {
     use pg_synapse_core::LlmProvider;
-    use pg_synapse_core::testing::{CassetteProvider, RecordingProvider};
+    use pg_synapse_core::testing::RecordingProvider;
     use pg_synapse_core::types::{CompletionRequest, Message, Role};
     use std::sync::Arc;
 

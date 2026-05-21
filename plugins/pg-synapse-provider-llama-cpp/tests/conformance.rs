@@ -10,7 +10,7 @@
 //!   fidelity against a real provider.
 
 use pg_synapse_core::llm::ProviderCapabilities;
-use pg_synapse_core::testing::{Cassette, run_conformance};
+use pg_synapse_core::testing::{Cassette, CassetteProvider, run_conformance};
 use pg_synapse_provider_llama_cpp::LlamaCppProvider;
 
 /// LlamaCppProvider does not override `LlmProvider::capabilities`, so its
@@ -33,6 +33,27 @@ async fn llamacpp_static_conformance() {
         .expect("LlamaCppProvider must satisfy its declared PS-1 contract");
 }
 
+/// PS-5 slice 3b: hermetic regression check against a committed golden
+/// cassette. Catches silent serde-shape changes; exercises CassetteProvider
+/// replay against a non-empty entries list (the static test uses zero).
+#[tokio::test]
+async fn llamacpp_golden_cassette_replays() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/conformance-default.json");
+    let cassette = Cassette::load(&path).expect("golden cassette must load");
+    assert_eq!(cassette.model, "conformance-model");
+    assert_eq!(
+        cassette.entries.len(),
+        1,
+        "fixture exercises one interaction"
+    );
+    let replay = CassetteProvider::new(cassette);
+    let expected = Cassette::load(&path).expect("golden cassette must load");
+    run_conformance(&replay, &expected)
+        .await
+        .expect("golden cassette must replay cleanly");
+}
+
 #[cfg(feature = "live-tests")]
 fn endpoint() -> Option<(String, String)> {
     let base = std::env::var("PG_SYNAPSE_TEST_LLAMACPP_BASE_URL").ok()?;
@@ -45,7 +66,7 @@ fn endpoint() -> Option<(String, String)> {
 #[tokio::test]
 async fn llamacpp_live_record_then_replay() {
     use pg_synapse_core::LlmProvider;
-    use pg_synapse_core::testing::{CassetteProvider, RecordingProvider};
+    use pg_synapse_core::testing::RecordingProvider;
     use pg_synapse_core::types::{CompletionRequest, Message, Role};
     use std::sync::Arc;
 
