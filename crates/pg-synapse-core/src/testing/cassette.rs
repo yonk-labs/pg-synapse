@@ -128,19 +128,36 @@ pub fn default_conformance_cassette(
         outcome,
     };
 
+    // Entry 1 carries non-None Option<f32> / Option<u32> on the request and
+    // non-zero Usage including Option<f64> cost on the response, so the
+    // golden fixture pins the JSON shape of those non-default Options in
+    // addition to the None defaults pinned by entries 2 and 3.
+    let pinged_request = CompletionRequest {
+        messages: vec![user_msg("ping")],
+        tools: vec![],
+        model: None,
+        temperature: Some(0.0),
+        max_tokens: Some(32),
+        params: serde_json::Value::Null,
+    };
+
     Cassette {
         model: model.into(),
         capabilities,
         entries: vec![
-            entry(
-                "ping",
-                CassetteOutcome::Ok(CompletionResponse {
+            CassetteEntry {
+                request: pinged_request,
+                outcome: CassetteOutcome::Ok(CompletionResponse {
                     content: Some("pong".into()),
                     tool_calls: vec![],
                     finish_reason: "stop".into(),
-                    usage: Usage::default(),
+                    usage: Usage {
+                        tokens_in: 2,
+                        tokens_out: 1,
+                        cost_usd: Some(0.001),
+                    },
                 }),
-            ),
+            },
             entry(
                 "use the echo tool with input ping",
                 CassetteOutcome::Ok(CompletionResponse {

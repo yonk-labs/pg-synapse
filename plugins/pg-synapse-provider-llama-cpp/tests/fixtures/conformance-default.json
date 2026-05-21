@@ -26,8 +26,8 @@
         ],
         "tools": [],
         "model": null,
-        "temperature": null,
-        "max_tokens": null,
+        "temperature": 0.0,
+        "max_tokens": 32,
         "params": null
       },
       "outcome": {
@@ -36,9 +36,9 @@
           "tool_calls": [],
           "finish_reason": "stop",
           "usage": {
-            "tokens_in": 0,
-            "tokens_out": 0,
-            "cost_usd": null
+            "tokens_in": 2,
+            "tokens_out": 1,
+            "cost_usd": 0.001
           }
         }
       }
