@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Runtime hardening (backend containment)
+
+Bulletproofing pass focused on failure containment inside the Postgres
+backend, where a runaway agent is a production incident rather than a hung
+script.
+
+- **Wall-clock timeout is now enforced.** `Runtime::execute_inner` wraps the
+  executor in `tokio::time::timeout(ctx.timeout, ...)` at the single chokepoint
+  every run passes through. Previously the `timeout_ms` column, the timeout
+  GUCs, and `OutcomeStatus::TimedOut` were dead plumbing: a hung provider call
+  could park a backend thread for up to `max_iterations * per-request timeout`.
+  A zero budget means "no wall-clock limit". Elapsed runs return
+  `OutcomeStatus::TimedOut`.
+- **Transient LLM failures are retried in production.** The pgrx host now wires
+  `RetryConfig::default()` into the kernel build, so a single transient
+  5xx / rate-limit / network blip mid-loop no longer aborts the run. Retries
+  are bounded by the wall-clock budget above.
+- **Panicking tools are contained.** `dispatch_tool_call` wraps `Tool::run` in
+  `catch_unwind`; a plugin that hits an `unwrap`/`panic!` degrades to a
+  tool-error fed back to the model instead of aborting the transaction.
+- **`tools-http` SSRF guard.** `http_get`/`http_post`/`http_head` now
+  default-deny loopback, RFC1918, link-local (incl. the `169.254.169.254`
+  cloud metadata endpoint), and IPv6 equivalents, resolving DNS names to reject
+  hostnames that point at internal addresses. Operators allowlist specific
+  hosts via the `PG_SYNAPSE_HTTP_ALLOW` env var (comma-separated).
+- **`tools-lede` CLI path is opt-in.** The plugin no longer auto-detects a
+  `lede` binary on PATH (which made behavior host-dependent and broke hermetic
+  tests). Set `PG_SYNAPSE_LEDE_CLI=1` to enable it; the deterministic
+  extractive shim is the default. Corrected the drifted `--max-tokens` flag to
+  `--max-chars`.
+
 ### Provider conformance suite (PS-5)
 
 A deterministic, hermetic test harness in `pg_synapse_core::testing` that
