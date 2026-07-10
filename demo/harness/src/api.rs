@@ -707,6 +707,25 @@ async fn require_table(
     }
 }
 
+/// Convenience for the bottom-dock tree: schemas each with their table list,
+/// one row per schema. Keeps the client tree render a single call.
+pub async fn schema_tree(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let tree = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(x)::text FROM ( \
+           SELECT table_schema AS schema, \
+             array_agg(table_name ORDER BY table_name) AS tables \
+           FROM information_schema.tables \
+           WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
+           AND table_type IN ('BASE TABLE', 'VIEW') \
+           GROUP BY table_schema ORDER BY table_schema) x",
+        &[],
+    )
+    .await?;
+    Ok(Json(json!({"ok": true, "tree": tree})))
+}
+
 pub async fn schema_tables(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
     let client = db::connect(&state.db_url).await?;
     let rows = db::jsonb_rows(

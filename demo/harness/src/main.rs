@@ -66,6 +66,7 @@ async fn main() {
         .route("/api/demo/order", post(api::insert_order))
         .route("/api/drain", post(api::drain_queue))
         .route("/api/table/{name}", get(api::table_view))
+        .route("/api/schema/tree", get(api::schema_tree))
         .route("/api/schema/tables", get(api::schema_tables))
         .route("/api/schema/columns", get(api::schema_columns))
         .route("/api/schema/rows", get(api::schema_rows))

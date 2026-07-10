@@ -24,50 +24,112 @@
   #adv-switch { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted);
                 cursor: pointer; user-select: none; }
   #adv-switch input { accent-color: var(--accent); }
-  main { flex: 1 1 auto; min-height: 0; display: grid;
-         grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
-         gap: 14px; padding: 12px 16px; }
+  main { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
+         gap: 10px; padding: 10px 14px; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
            padding: 12px 14px; }
-  .panel h2 { margin: 0 0 4px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
+  .panel h2 { margin: 0 0 4px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em;
               color: var(--accent); }
-  .panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  .panel .sub { color: var(--muted); font-size: 12.5px; margin: 0 0 10px; }
 
-  /* hero (persistent architecture animation) */
-  .hero { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-  .hero-head { display: flex; justify-content: space-between; align-items: baseline; flex: none; }
-  .hero-head h2 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
-                  color: var(--accent); }
-  .hero-svg { flex: 1 1 auto; min-height: 0; display: flex; align-items: center;
-              justify-content: center; margin-top: 6px; }
-  .hero-svg svg { width: 100%; height: 100%; max-height: 100%; }
-
-  /* control column with tabs */
-  .ctrl { display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; }
-  #conn-strip { flex: none; border-bottom: 1px solid var(--border); padding-bottom: 10px;
-                margin-bottom: 8px; }
-  .conn-title { font-size: 12px; color: var(--muted); text-transform: uppercase;
-                letter-spacing: .06em; margin-bottom: 6px; }
-  #conn-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: var(--mono); }
+  /* connection bar (full width, under header) */
+  #conn-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 8px 16px;
+              background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  #conn-chip { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-family: var(--mono); }
   #conn-chip .cdot { width: 9px; height: 9px; border-radius: 50%; background: var(--green);
                      box-shadow: 0 0 6px var(--green); flex: none; }
   #conn-chip .cmuted { color: var(--muted); }
   #conn-chip b { color: var(--green); }
+  #conn-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+  .conn-title { font-size: 12px; color: var(--orange); text-transform: uppercase; letter-spacing: .06em;
+                flex: none; }
+  #conn-form input { width: auto; flex: 1 1 190px; }
+  #conn-form input#llm-key { flex: 1 1 130px; }
+  #conn-form button { flex: none; }
+  #llm-status { flex-basis: 100%; }
   button.link { background: none; border: none; color: var(--accent); padding: 2px 4px;
                 font-size: 12px; text-decoration: underline; cursor: pointer; }
   button.link:hover { color: #7ec0ff; }
-  .tabbar { flex: none; display: flex; gap: 3px; flex-wrap: wrap; border-bottom: 1px solid var(--border);
-            margin-bottom: 8px; }
+
+  /* stage: hero canvas + detail overlay. Keep the hero readable (min-height);
+     on short viewports main scrolls rather than shrinking the canvas. */
+  #stage { flex: 1.7 1 0; min-height: 360px; position: relative; display: flex; }
+  .hero { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+  .hero-head { display: flex; justify-content: space-between; align-items: center; flex: none; gap: 10px; }
+  .hero-head h2 { margin: 0; font-size: 15px; text-transform: uppercase; letter-spacing: .06em;
+                  color: var(--accent); }
+  .hero-hint { color: var(--muted); font-size: 11.5px; text-transform: none; letter-spacing: 0;
+               font-weight: 400; margin-left: 8px; }
+  #touched { color: var(--yellow); }
+  .hero-svg { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center;
+              margin-top: 4px; }
+  .hero-svg svg { width: 100%; height: 100%; max-height: 100%; }
+  .viz-nodeg.clickable { cursor: pointer; }
+  .viz-nodeg.clickable:hover .viz-node { stroke: var(--accent); stroke-width: 2.5; }
+
+  /* detail panel (opens on node click) */
+  #detail { position: absolute; top: 0; right: 0; bottom: 0; width: 460px; max-width: 82%;
+            display: none; flex-direction: column; overflow: hidden; z-index: 5;
+            box-shadow: -16px 0 32px rgba(0,0,0,.5); }
+  #detail.open { display: flex; }
+  #detail-head { flex: none; display: flex; justify-content: space-between; align-items: center;
+                 border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px; }
+  #detail-title { color: var(--accent); font-size: 15px; font-weight: 600; text-transform: uppercase;
+                  letter-spacing: .05em; }
+  #detail-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 4px;
+                 font-size: 13.5px; line-height: 1.5; }
+  .detail-note { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .ab-h { color: var(--green); font-weight: 600; margin: 10px 0 4px; }
+  .ab-meta { font-family: var(--mono); font-size: 12px; color: var(--muted); margin: 2px 0; }
+  .ab-label { color: var(--accent); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em;
+              margin: 10px 0 4px; }
+  .ab-prompt { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+               font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-word;
+               margin: 0 0 8px; max-height: 320px; overflow: auto; }
+  .pb-sql code { display: block; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+                 padding: 8px 10px; font-family: var(--mono); font-size: 12.5px; color: var(--green);
+                 margin-top: 6px; word-break: break-word; }
+  .acc { border: 1px solid var(--border); border-radius: 6px; margin: 6px 0; overflow: hidden; }
+  .acc-h { background: var(--panel2); padding: 8px 10px; cursor: pointer; display: flex;
+           justify-content: space-between; font-weight: 600; }
+  .acc-x { color: var(--accent); }
+  .acc-b { display: none; padding: 8px 10px; color: var(--text); border-top: 1px solid var(--border); }
+  .audit-row { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0;
+               cursor: pointer; background: var(--panel2); }
+  .audit-row:hover { border-color: var(--accent); }
+
+  /* horizontal tab bar under the hero */
+  .tabbar { flex: none; display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
   .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
-         color: var(--muted); padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
-  .tab:hover { color: var(--text); border-color: var(--border); }
+         color: var(--muted); padding: 7px 15px; font-size: 13.5px; cursor: pointer; }
+  .tab:hover { color: var(--text); }
   .tab.active { color: var(--accent); border-color: var(--accent); }
   .tab.adv { display: none; }
   body.show-adv .tab.adv { display: inline-block; }
-  .tabpanels { flex: 1 1 auto; min-height: 0; position: relative; }
-  .tabpanel { display: none; height: 100%; overflow: auto; padding-right: 4px; }
+  #tabpanels { flex: 1 1 0; min-height: 190px; position: relative; }
+  .tabpanel { display: none; height: 100%; overflow: auto; padding: 2px 4px 0 0; }
   .tabpanel.active { display: block; }
   .tabpanel > .sub:first-child { margin-top: 0; }
+
+  /* bottom dock: schema tree */
+  #dock { flex: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+          display: flex; flex-direction: column; height: 210px; overflow: hidden; }
+  #dock.collapsed { height: 42px; }
+  #dock-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+               border-bottom: 1px solid var(--border); font-size: 13px; }
+  #dock-head b { color: var(--accent); text-transform: uppercase; letter-spacing: .05em; font-size: 12.5px; }
+  #dock.collapsed #dock-head { border-bottom: none; }
+  #dock-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 300px 1fr; }
+  #dock.collapsed #dock-body { display: none; }
+  #tree { overflow-y: auto; border-right: 1px solid var(--border); padding: 6px 10px; }
+  #tree-detail { overflow: auto; padding: 6px 12px; }
+  #tree-detail .td-h { color: var(--green); font-family: var(--mono); font-size: 13px; margin-bottom: 4px; }
+  .tnode { font-family: var(--mono); font-size: 12.5px; }
+  .tschema { color: var(--accent); cursor: pointer; padding: 3px 0; user-select: none; }
+  .ttable { color: var(--text); cursor: pointer; padding: 2px 0 2px 18px; }
+  .ttable:hover, .tschema:hover { color: #7ec0ff; }
+  .ttable.sel { color: var(--green); font-weight: 600; }
+  .tcount { color: var(--muted); }
 
   /* schema browser */
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
@@ -145,17 +207,17 @@
   .pline.fail { color: var(--red); }
 
   /* ---- architecture visualization ---- */
-  #p-arch svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+  #p-arch svg { width: 100%; height: 100%; display: block; }
   .viz-boundary { fill: rgba(78,161,255,.05); stroke: var(--border); stroke-width: 1.5;
                   stroke-dasharray: 3 5; }
-  .viz-boxtitle { fill: var(--muted); font-size: 14px; font-weight: 700; letter-spacing: .08em;
+  .viz-boxtitle { fill: var(--muted); font-size: 16px; font-weight: 700; letter-spacing: .08em;
                   text-transform: uppercase; }
   .viz-node { fill: var(--panel2); stroke: var(--border); stroke-width: 1.5; }
   .viz-nodeg.hot .viz-node { stroke: var(--accent); stroke-width: 2.5;
                              filter: drop-shadow(0 0 7px rgba(78,161,255,.6)); }
-  .viz-title { fill: var(--text); font-size: 15px; font-weight: 600; text-anchor: middle; }
-  .viz-sub { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); text-anchor: middle; }
-  .viz-iter { fill: var(--accent); font-size: 11.5px; font-family: var(--mono); text-anchor: middle; }
+  .viz-title { fill: var(--text); font-size: 18px; font-weight: 600; text-anchor: middle; }
+  .viz-sub { fill: var(--muted); font-size: 12.5px; font-family: var(--mono); text-anchor: middle; }
+  .viz-iter { fill: var(--accent); font-size: 13px; font-family: var(--mono); text-anchor: middle; }
   .viz-edge { fill: none; stroke: #45526b; stroke-width: 2; marker-end: url(#viz-arrow); }
   .viz-edge.faint { opacity: .38; stroke-dasharray: 5 6; }
   .viz-edge.faint.hot { opacity: 1; stroke: var(--accent); stroke-dasharray: none; }
@@ -164,8 +226,8 @@
   .viz-edge.flowing { stroke: var(--accent); stroke-dasharray: 7 9;
                       animation: vizflow .8s linear infinite; }
   @keyframes vizflow { to { stroke-dashoffset: -32; } }
-  .viz-elabel { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); text-anchor: middle; }
-  .viz-hud { fill: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  .viz-elabel { fill: var(--muted); font-size: 12px; font-family: var(--mono); text-anchor: middle; }
+  .viz-hud { fill: var(--muted); font-size: 14px; font-family: var(--mono); }
   .viz-cap { fill: var(--text); }
   .viz-ring { fill: none; stroke: #45526b; stroke-width: 2; stroke-dasharray: 4 7; }
   .viz-ring-arrow { fill: #45526b; }
@@ -208,12 +270,35 @@
     <input type="checkbox" id="adv-toggle"> <span>Advanced</span>
   </label>
 </header>
+
+<div id="conn-bar">
+  <div id="conn-chip" style="display:none">
+    <span class="cdot"></span>
+    <span>Connected: <b id="conn-model">-</b> <span class="cmuted">@</span> <span id="conn-host">-</span></span>
+    <button id="btn-conn-change" class="link">change</button>
+  </div>
+  <div id="conn-form">
+    <span class="conn-title">Connect your LLM endpoint:</span>
+    <input type="text" id="llm-base-url" placeholder="http://host:8000/v1">
+    <input type="text" id="llm-model" placeholder="model id">
+    <input type="password" id="llm-key" placeholder="api key (optional)">
+    <button id="btn-llm-test">Test</button>
+    <button class="primary" id="btn-llm-save">Save</button>
+    <button id="btn-conn-cancel" class="link" style="display:none">cancel</button>
+    <div id="llm-status"></div>
+  </div>
+</div>
+
 <main>
 
+  <div id="stage">
   <div class="panel hero" id="p-arch">
     <div class="hero-head">
-      <h2>The data path</h2>
-      <button id="btn-viz-replay" disabled>Replay last run</button>
+      <h2>The data path <span class="hero-hint">click any node to open its panel</span></h2>
+      <div class="row" style="gap:12px">
+        <span id="touched" class="small"></span>
+        <button id="btn-viz-replay" disabled>Replay last run</button>
+      </div>
     </div>
     <div class="hero-svg">
     <svg id="viz" viewBox="0 0 960 420" role="img" aria-label="pg_synapse architecture diagram">
@@ -323,46 +408,29 @@
     </svg>
     </div>
   </div>
-
-  <div class="panel ctrl" id="ctrl">
-
-    <!-- LLM connection: compact, always visible in the default surface -->
-    <div id="conn-strip">
-      <div id="conn-chip" style="display:none">
-        <span class="cdot"></span>
-        <span>Connected: <b id="conn-model">-</b> <span class="cmuted">@</span> <span id="conn-host">-</span></span>
-        <button id="btn-conn-change" class="link">change</button>
-      </div>
-      <div id="conn-form">
-        <div class="conn-title">Connect your LLM endpoint</div>
-        <div class="grid2" style="gap:6px">
-          <input type="text" id="llm-base-url" placeholder="http://host:8000/v1">
-          <input type="text" id="llm-model" placeholder="model id">
-        </div>
-        <input type="password" id="llm-key" placeholder="api key (optional)" style="margin-top:6px">
-        <div class="row" style="margin-top:8px">
-          <button id="btn-llm-test">Test</button>
-          <button class="primary" id="btn-llm-save">Save</button>
-          <button id="btn-conn-cancel" class="link" style="display:none">cancel</button>
-        </div>
-        <div id="llm-status"></div>
-      </div>
+  <aside id="detail" class="panel">
+    <div id="detail-head">
+      <span id="detail-title"></span>
+      <button id="detail-close" class="link">close</button>
     </div>
+    <div id="detail-body"></div>
+  </aside>
+  </div>
 
-    <!-- tab bar -->
-    <div class="tabbar" id="tabbar">
-      <button class="tab active" data-tab="demos">Demos</button>
-      <button class="tab" data-tab="run">Run</button>
-      <button class="tab" data-tab="schema">Schema</button>
-      <button class="tab" data-tab="sql">SQL</button>
-      <button class="tab adv" data-tab="agent">Agent</button>
-      <button class="tab adv" data-tab="triggers">Triggers</button>
-      <button class="tab adv" data-tab="data">Tables</button>
-      <button class="tab adv" data-tab="probes">Probes</button>
-      <button class="tab adv" data-tab="config">Config</button>
-    </div>
+  <div class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="demos">Demos</button>
+    <button class="tab" data-tab="run">Run</button>
+    <button class="tab" data-tab="nl">Talk to DB</button>
+    <button class="tab" data-tab="schema">Schema</button>
+    <button class="tab" data-tab="sql">SQL</button>
+    <button class="tab adv" data-tab="agent">Agent</button>
+    <button class="tab adv" data-tab="triggers">Triggers</button>
+    <button class="tab adv" data-tab="data">Tables</button>
+    <button class="tab adv" data-tab="probes">Probes</button>
+    <button class="tab adv" data-tab="config">Config</button>
+  </div>
 
-    <div class="tabpanels">
+  <div class="tabpanels" id="tabpanels">
 
       <!-- DEFAULT: Demos -->
       <section class="tabpanel active" data-panel="demos" id="p-scenarios">
@@ -390,6 +458,20 @@
           <summary>structured trace events (synapse.traces)</summary>
           <div id="trace-events"></div>
         </details>
+      </section>
+
+      <!-- DEFAULT: Talk to the database (NL -> db_architect) -->
+      <section class="tabpanel" data-panel="nl" id="p-nl">
+        <p class="sub">Talk to the database in plain English. The <code>db_architect</code> agent
+          translates your request into SQL (DDL/DML), runs it with <code>sql_exec</code>, and the
+          schema tree below updates. Needs a connected LLM.</p>
+        <textarea id="nl-input" rows="3" spellcheck="false"
+          placeholder="create a table customers with id, name, email"></textarea>
+        <div class="row" style="margin-top:6px">
+          <button class="primary" id="nl-run">Run</button>
+          <span id="nl-status" class="small grow"></span>
+        </div>
+        <div id="nl-out"></div>
       </section>
 
       <!-- DEFAULT: Schema browser + editor -->
@@ -549,6 +631,18 @@
       </section>
 
     </div>
+
+  <div id="dock">
+    <div id="dock-head">
+      <b>Schema tree</b>
+      <span class="small">live: refreshes after every run</span>
+      <button id="dock-refresh">refresh</button>
+      <button id="dock-toggle" class="link" style="margin-left:auto">hide</button>
+    </div>
+    <div id="dock-body">
+      <div id="tree"><div class="hint">loading...</div></div>
+      <div id="tree-detail"><div class="hint">pick a table to see its columns and rows</div></div>
+    </div>
   </div>
 
 </main>
@@ -561,6 +655,7 @@ let pollTimer = null;
 let currentScenario = null;
 let CONNECTED = false;
 let connEditing = false;
+let pendingOnDone = null;
 
 async function api(path, method, body) {
   const opts = { method: method || "GET", headers: {} };
@@ -623,7 +718,7 @@ function updateConnState() {
     $("conn-host").textContent = connHost(prof.base_url);
   } else {
     $("conn-chip").style.display = "none";
-    $("conn-form").style.display = "block";
+    $("conn-form").style.display = "flex";
     $("btn-conn-cancel").style.display = (CONNECTED && connEditing) ? "inline-block" : "none";
   }
   applyGuard();
@@ -1112,7 +1207,7 @@ async function bootstrap(keepForms) {
   const vizProf = data.profiles.find(p => p.name === "vllm-default");
   const vizModel = (vizProf && vizProf.model) || data.default_llm.model || "OpenAI-compatible";
   $("viz-llm-model").textContent =
-    vizModel.length > 26 ? vizModel.slice(0, 25) + "..." : vizModel;
+    vizModel.length > 40 ? vizModel.slice(0, 39) + "..." : vizModel;
 
   $("agent-executor").innerHTML = data.executors.map(e => '<option>' + esc(e) + '</option>').join("");
   $("agent-profile").innerHTML = data.profiles.map(p => '<option>' + esc(p.name) + '</option>').join("");
@@ -1267,7 +1362,35 @@ function renderRunResult(run) {
   renderTraceEvents(run.traces || []);
   vizRemember(env, run.messages || [], run.agent, run.backend_pid ? { pid: run.backend_pid } : null);
   vizPlay(VIZ.lastRun);
+  setTouched(run.messages || []);
   refreshTables();
+  refreshTree();
+}
+
+// Parse the SQL out of sql_query / sql_exec tool inputs so the hero can show,
+// legibly, which tables a run read from and wrote to.
+function tableFromSql(sql) {
+  const names = new Set();
+  const re = /\b(?:from|join|into|update|table)\s+((?:[a-z_][\w]*)\.(?:[a-z_][\w]*)|[a-z_][\w]*)/gi;
+  let m;
+  while ((m = re.exec(sql || "")) !== null) names.add(m[1].toLowerCase());
+  return names;
+}
+function setTouched(messages) {
+  let reads = 0, writes = 0;
+  const tables = new Set();
+  for (const m of messages) {
+    if (m.role !== "assistant" || (m.tool_name !== "sql_query" && m.tool_name !== "sql_exec")) continue;
+    let sql = m.tool_input;
+    try { const j = JSON.parse(m.tool_input); sql = j.sql || m.tool_input; } catch (e) { /* raw */ }
+    if (m.tool_name === "sql_query") reads++; else writes++;
+    tableFromSql(sql).forEach(t => tables.add(t));
+  }
+  const el = $("touched");
+  if (!el) return;
+  if (!reads && !writes) { el.textContent = ""; return; }
+  const list = [...tables].slice(0, 4).join(", ") + (tables.size > 4 ? "..." : "");
+  el.textContent = "tables touched: " + (list || "none") + "  (" + reads + " read, " + writes + " write)";
 }
 
 async function pollRun() {
@@ -1286,15 +1409,26 @@ async function pollRun() {
     $("btn-cancel").disabled = true;
     renderRunResult(run);
     currentRun = null;
+    if (pendingOnDone) { const cb = pendingOnDone; pendingOnDone = null; cb(run); }
   }
 }
 
-async function startRun(agent, input) {
-  activateTab("run");
+function finishEarly(run) {
+  if (pendingOnDone) { const cb = pendingOnDone; pendingOnDone = null; cb(run); }
+}
+
+// opts: { silent } skips switching to the Run tab (used by the hero prompt
+// builder and the NL tab, which show their own result); { onDone } fires with
+// the final run once it lands (or immediately on an early failure).
+async function startRun(agent, input, opts) {
+  opts = opts || {};
+  pendingOnDone = opts.onDone || null;
+  if (!opts.silent) activateTab("run");
   if (!CONNECTED) {
     setRunStatusChip("failed", "failed", "no LLM endpoint configured");
     vizReset();
-    vizCaption("Connect your LLM endpoint first (top of the control column).");
+    vizCaption("Connect your LLM endpoint first.");
+    finishEarly({ phase: "failed", error: "no LLM endpoint configured", agent });
     return;
   }
   $("run-agent").value = agent;
@@ -1308,6 +1442,7 @@ async function startRun(agent, input) {
     setRunStatusChip("failed", "failed", r.error || "");
     vizReset();
     vizCaption("run failed to start: " + (r.error || "unknown error"));
+    finishEarly({ phase: "failed", error: r.error || "run failed to start", agent });
     return;
   }
   currentRun = r.run_id;
@@ -1440,7 +1575,6 @@ async function refreshTables() {
 
 function renderWatch(s) {
   currentScenario = s;
-  $("p-watch").style.display = "block";
   $("watch-title").textContent = "Scenario watch: " + s.title;
   $("watch-probe-out").innerHTML = "";
   $("watch-probes").innerHTML = (s.probes || []).map(p =>
@@ -1722,7 +1856,298 @@ $("sql-run").onclick = async () => {
 
 sqlInitSnippets();
 
+// ---- SQL tab: refresh the schema tree after DDL/DML ----
+const sqlRunPrev = $("sql-run").onclick;
+$("sql-run").onclick = async () => { await sqlRunPrev(); refreshTree(); };
+
+// ---- interactive hero: detail panels ----
+
+function openDetail(title, html) {
+  $("detail-title").textContent = title;
+  $("detail-body").innerHTML = html;
+  $("detail").classList.add("open");
+}
+function closeDetail() { $("detail").classList.remove("open"); }
+$("detail-close").onclick = closeDetail;
+
+function wireHeroNodes() {
+  const map = {
+    "n-client": openPromptBuilder, "n-kernel": openDefinitions, "n-trace": openAudit,
+    "n-llm": openLlmInfo, "n-tables": openTablesInfo, "n-other": openToolsInfo,
+  };
+  for (const id in map) {
+    const el = $(id);
+    if (!el) continue;
+    el.classList.add("clickable");
+    el.onclick = map[id];
+  }
+}
+
+// 1. SQL client node -> prompt builder + agent box
+function openPromptBuilder() {
+  openDetail("Prompt builder", '' +
+    '<div class="detail-note">Compose a run. This is exactly <code>SELECT synapse.execute(agent, input)</code>.</div>' +
+    '<label>agent</label><select id="pb-agent"></select>' +
+    '<label>input</label><textarea id="pb-input" rows="4" placeholder="ask the agent something"></textarea>' +
+    '<div class="pb-sql" id="pb-sql"></div>' +
+    '<div class="row" style="margin-top:8px"><button class="primary" id="pb-run">Run</button>' +
+    '<span id="pb-guard" class="small grow"></span></div>' +
+    '<div id="pb-agentbox"></div>');
+  const sel = $("pb-agent");
+  sel.innerHTML = ((BOOT && BOOT.agents) || []).map(a => '<option>' + esc(a.name) + '</option>').join("");
+  if ($("run-agent").value) sel.value = $("run-agent").value;
+  const renderSql = () => {
+    const inp = ($("pb-input").value || "").replace(/'/g, "''");
+    $("pb-sql").innerHTML = "<code>SELECT synapse.execute('" + esc(sel.value) + "', '" + esc(inp) + "');</code>";
+  };
+  const upd = () => { renderAgentBox(sel.value); renderSql(); };
+  sel.onchange = upd;
+  $("pb-input").oninput = renderSql;
+  $("pb-guard").textContent = CONNECTED ? "" : "connect an endpoint first";
+  $("pb-run").onclick = () => {
+    if (!requireConnected($("pb-guard"))) return;
+    startRun(sel.value, $("pb-input").value);
+  };
+  upd();
+}
+
+// 2. Agent box (full system prompt, tools, executor, caps)
+function renderAgentBox(name) {
+  const box = $("pb-agentbox");
+  if (!box) return;
+  const a = ((BOOT && BOOT.agents) || []).find(x => x.name === name);
+  if (!a) { box.innerHTML = ""; return; }
+  box.innerHTML =
+    '<div class="ab-h">Agent box: ' + esc(a.name) + '</div>' +
+    '<div class="ab-meta">executor: ' + esc(a.executor_name) + '   max_iterations: ' + esc(a.max_iterations) +
+    '   timeout: ' + esc(a.timeout_ms) + 'ms   cost cap: ' + (a.cost_cap_usd ? ("$" + esc(a.cost_cap_usd)) : "none") + '</div>' +
+    '<div class="ab-meta">tools: ' + ((a.tools && a.tools.length) ? a.tools.map(esc).join(", ") : "none") + '</div>' +
+    '<div class="ab-label">system prompt (full)</div>' +
+    '<pre class="ab-prompt">' + esc(a.system_prompt) + '</pre>' +
+    '<button class="link" id="ab-edit">edit this prompt in the Schema tab</button>';
+  $("ab-edit").onclick = () => { closeDetail(); schemaGoto("synapse", "agents"); };
+}
+
+// 3. Agent-loop node -> definitions (accurate to this codebase)
+const LOOP_DEFS = [
+  ["First messages", "The agent's system prompt and soul seed the first messages of the conversation, before the model is ever called."],
+  ["One iteration = one LLM call", "Each iteration makes exactly one call to the LLM. The response is either final text (the loop ends) or one or more tool calls."],
+  ["Tool calls", "Tool calls dispatch to tools. sql_query reads from your tables; sql_exec writes. Each result is fed back into the conversation as a tool message."],
+  ["Repeat until done", "The loop repeats (LLM call, tools, feed results back) until the model returns final text or a cap trips."],
+  ["Caps", "max_iterations bounds logical steps; cost_cap_usd bounds USD spend; timeout_ms is a wall-clock kill. Any cap ends the loop immediately."],
+  ["Cancel", "A Postgres statement cancel (pg_cancel_backend) from another session aborts the run between iterations."],
+  ["Executors", "conversation = chat plus tools; react = reason then act; reflection = a judge critiques each step."],
+  ["Persistence", "The full message trace and execution record persist to synapse.messages and synapse.executions when the run completes."],
+];
+function openDefinitions() {
+  openDetail("The agent loop, defined",
+    '<div class="detail-note">The agent loop is the heart of the kernel runtime. Click any part.</div>' +
+    LOOP_DEFS.map((d, i) =>
+      '<div class="acc"><div class="acc-h" data-i="' + i + '">' + esc(d[0]) +
+      '<span class="acc-x">+</span></div><div class="acc-b" data-b="' + i + '">' + esc(d[1]) + '</div></div>').join(""));
+  $("detail-body").querySelectorAll(".acc-h").forEach(h => h.onclick = () => {
+    const b = $("detail-body").querySelector('[data-b="' + h.dataset.i + '"]');
+    const open = b.style.display === "block";
+    b.style.display = open ? "none" : "block";
+    h.querySelector(".acc-x").textContent = open ? "+" : "-";
+  });
+}
+
+// 5. Audit node -> recent executions, click to replay
+async function openAudit() {
+  openDetail("Audit trail",
+    '<div class="detail-note">Recent runs from <code>synapse.executions</code>. Click one to replay its animation.</div>' +
+    '<div id="audit-list" class="hint">loading...</div>');
+  const ex = await api("/api/table/executions");
+  const list = $("audit-list");
+  if (!list) return;
+  if (!ex.ok || !ex.rows || !ex.rows.length) { list.innerHTML = '<div class="hint">no executions yet</div>'; return; }
+  list.innerHTML = ex.rows.map((r, i) =>
+    '<div class="audit-row" data-i="' + i + '"><b>' + esc(r.agent_name) + '</b> ' +
+    '<span class="chip ' + esc(r.status) + '">' + esc(r.status) + '</span>' +
+    '<div class="small">' + esc(r.input || "") + '</div></div>').join("");
+  list.querySelectorAll(".audit-row").forEach(row => row.onclick = async () => {
+    const r = ex.rows[parseInt(row.dataset.i, 10)];
+    const d = await api("/api/execution/" + r.execution_id);
+    if (d.ok && d.execution) {
+      vizRemember(d.execution, d.messages || [], d.execution.agent_name, null);
+      vizPlay(VIZ.lastRun);
+      setTouched(d.messages || []);
+      setRunStatusChip(d.execution.status, d.execution.status, "history: " + r.execution_id);
+      renderStats(d.execution);
+      renderMessages(d.messages || []);
+    }
+  });
+}
+
+function openLlmInfo() {
+  const prof = ((BOOT && BOOT.profiles) || []).find(p => p.name === "vllm-default") || ((BOOT && BOOT.profiles) || [])[0];
+  const body = prof
+    ? '<div class="ab-meta">model: ' + esc(prof.model) + '</div><div class="ab-meta">base_url: ' + esc(prof.base_url) + '</div>' +
+      '<div class="ab-meta">api key: ' + (prof.has_api_key ? "set" : "none") + '</div>'
+    : '<div class="hint">no endpoint configured. Use the Connect bar at the top.</div>';
+  openDetail("LLM endpoint",
+    '<div class="detail-note">The model is external and yours. Each loop iteration makes one completion request here.</div>' + body);
+}
+function openTablesInfo() {
+  const t = $("touched").textContent;
+  openDetail("Your tables",
+    '<div class="detail-note">Tools read and write ordinary Postgres tables via SPI, inside the run\'s transaction.</div>' +
+    '<div class="ab-meta">' + (t ? esc(t) : "run an agent to see which tables it touches") + '</div>' +
+    '<div class="ab-label">browse</div><div>Open the schema tree in the dock below to inspect any table live.</div>');
+}
+function openToolsInfo() {
+  const tools = (BOOT && BOOT.tools) || [];
+  openDetail("Tools",
+    '<div class="detail-note">Tools the agent can call. sql_query (read) and sql_exec (write) hit your tables; the rest are utility tools.</div>' +
+    (tools.length ? tools.map(t => '<div class="ab-meta"><b>' + esc(t.name) + '</b>: ' + esc(t.description) + '</div>').join("") : '<div class="hint">none</div>'));
+}
+
+// ---- bottom dock: live schema tree ----
+
+let TREE = [];
+const TREE_OPEN = new Set();
+let treeSel = { schema: null, table: null };
+
+async function loadTree() {
+  const r = await api("/api/schema/tree");
+  const tree = $("tree");
+  if (!r.ok) { tree.innerHTML = '<div class="hint">' + esc(r.error || "schema unavailable") + '</div>'; return; }
+  TREE = r.tree || [];
+  if (!TREE_OPEN.size) { const syn = TREE.find(s => s.schema === "synapse"); if (syn) TREE_OPEN.add("synapse"); }
+  renderTree();
+}
+function renderTree() {
+  const tree = $("tree");
+  if (!TREE.length) { tree.innerHTML = '<div class="hint">no user tables yet</div>'; return; }
+  tree.innerHTML = TREE.map(s => {
+    const open = TREE_OPEN.has(s.schema);
+    return '<div class="tnode"><div class="tschema" data-s="' + esc(s.schema) + '">' +
+      (open ? "v " : "> ") + esc(s.schema) + ' <span class="tcount">(' + s.tables.length + ')</span></div>' +
+      (open ? s.tables.map(t =>
+        '<div class="ttable' + ((treeSel.schema === s.schema && treeSel.table === t) ? " sel" : "") +
+        '" data-s="' + esc(s.schema) + '" data-t="' + esc(t) + '">' + esc(t) + '</div>').join("") : "") + '</div>';
+  }).join("");
+  tree.querySelectorAll(".tschema").forEach(el => el.onclick = () => {
+    const s = el.dataset.s;
+    if (TREE_OPEN.has(s)) TREE_OPEN.delete(s); else TREE_OPEN.add(s);
+    renderTree();
+  });
+  tree.querySelectorAll(".ttable").forEach(el => el.onclick = () => selectTreeTable(el.dataset.s, el.dataset.t));
+}
+async function selectTreeTable(schema, table) {
+  treeSel = { schema, table };
+  renderTree();
+  const td = $("tree-detail");
+  td.innerHTML = '<div class="hint">loading...</div>';
+  const [c, rows] = await Promise.all([
+    api("/api/schema/columns?schema=" + encodeURIComponent(schema) + "&table=" + encodeURIComponent(table)),
+    api("/api/schema/rows?schema=" + encodeURIComponent(schema) + "&table=" + encodeURIComponent(table) + "&limit=50"),
+  ]);
+  const cols = c.ok ? (c.columns || []) : [];
+  let html = '<div class="td-h">' + esc(schema) + "." + esc(table) + "</div>";
+  html += '<div class="small">' + (cols.length
+    ? cols.map(col => esc(col.column) + " " + esc(col.type) + (col.pk ? " PK" : "")).join("   |   ")
+    : "no columns") + "</div>";
+  if (rows.ok && rows.rows && rows.rows.length) {
+    const cn = cols.length ? cols.map(x => x.column) : Object.keys(rows.rows[0]);
+    html += "<table><tr>" + cn.map(x => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
+      rows.rows.map(r => "<tr>" + cn.map(x => {
+        const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
+        return "<td title='" + esc(d) + "'>" + esc(d.length > 60 ? d.slice(0, 60) + "..." : d) + "</td>";
+      }).join("") + "</tr>").join("") + "</table>";
+  } else {
+    html += '<div class="hint">' + (rows.ok ? "no rows" : esc(rows.error || "could not read rows")) + "</div>";
+  }
+  td.innerHTML = html;
+}
+async function refreshTree() {
+  await loadTree();
+  if (treeSel.table) await selectTreeTable(treeSel.schema, treeSel.table);
+}
+$("dock-refresh").onclick = refreshTree;
+$("dock-toggle").onclick = () => {
+  const dock = $("dock");
+  const collapsed = dock.classList.toggle("collapsed");
+  $("dock-toggle").textContent = collapsed ? "show" : "hide";
+};
+
+// ---- NL tab: talk to the database via db_architect ----
+
+const DB_ARCHITECT = {
+  name: "db_architect",
+  system_prompt:
+    "You translate the user's natural-language request into SQL and execute it. Use sql_exec for DDL and DML " +
+    "(CREATE TABLE, INSERT, UPDATE, ALTER, DELETE) and sql_query to inspect the schema when you need to. Run the " +
+    "statements, then reply with a short confirmation of exactly what you did. Prefer plain CREATE TABLE, which is " +
+    "transaction-safe. Do not ask questions; make reasonable assumptions.",
+  executor: "conversation",
+  llm_profile: "vllm-default",
+  tools: ["sql_exec", "sql_query"],
+  max_iterations: 8,
+  timeout_ms: 60000,
+  cost_cap_usd: 0,
+};
+
+async function ensureDbArchitect() {
+  if (((BOOT && BOOT.agents) || []).some(a => a.name === "db_architect")) return true;
+  const r = await api("/api/agent", "POST", DB_ARCHITECT);
+  if (r.ok) await bootstrap(true);
+  return r.ok;
+}
+
+$("nl-run").onclick = async () => {
+  if (!requireConnected($("nl-status"))) return;
+  const text = $("nl-input").value.trim();
+  if (!text) { $("nl-status").textContent = "type a request first"; return; }
+  $("nl-run").disabled = true;
+  $("nl-status").textContent = "preparing db_architect...";
+  $("nl-out").innerHTML = '<div class="hint">the agent is writing and running SQL...</div>';
+  if (!await ensureDbArchitect()) {
+    $("nl-run").disabled = false;
+    $("nl-status").textContent = "could not register db_architect";
+    return;
+  }
+  $("nl-status").textContent = "running...";
+  startRun("db_architect", text, {
+    silent: true,
+    onDone: (run) => {
+      $("nl-run").disabled = false;
+      if (run.phase === "failed") {
+        $("nl-status").textContent = "failed";
+        banner($("nl-out"), "bad", run.error || "run failed");
+        return;
+      }
+      const env = run.envelope || {};
+      $("nl-status").textContent = env.status || "done";
+      const sqls = (run.messages || [])
+        .filter(m => m.role === "assistant" && (m.tool_name === "sql_exec" || m.tool_name === "sql_query"))
+        .map(m => { try { return JSON.parse(m.tool_input).sql || m.tool_input; } catch (e) { return m.tool_input; } });
+      let html = "";
+      if (env.output) html += '<div class="banner ok">' + esc(env.output) + "</div>";
+      if (sqls.length) html += '<div class="ab-label">SQL it ran</div>' +
+        sqls.map(s => '<pre class="ab-prompt">' + esc(s) + "</pre>").join("");
+      $("nl-out").innerHTML = html || '<div class="hint">no SQL captured</div>';
+      refreshTree();
+    },
+  });
+};
+
+// ---- Schema tab navigation helper ----
+
+function schemaGoto(schema, table) {
+  activateTab("schema");
+  schemaOnShow();
+  const v = schema + "." + table;
+  setTimeout(() => {
+    const sel = $("schema-table");
+    if ([...sel.options].some(o => o.value === v)) { sel.value = v; schemaSelect(); }
+  }, 350);
+}
+
 // ---- boot ----
+wireHeroNodes();
+loadTree();
 bootstrap(false);
 setInterval(() => { if (!document.hidden && !currentRun) refreshTables(); }, 4000);
 </script>
