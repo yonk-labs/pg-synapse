@@ -441,6 +441,7 @@
     <button class="tab" data-tab="nl">Talk to DB</button>
     <button class="tab" data-tab="schema">Schema</button>
     <button class="tab" data-tab="sql">SQL</button>
+    <button class="tab" data-tab="tools">Tools</button>
     <button class="tab adv" data-tab="agent">Agent</button>
     <button class="tab adv" data-tab="triggers">Triggers</button>
     <button class="tab adv" data-tab="data">Tables</button>
@@ -530,6 +531,7 @@
       </section>
 
       <!-- ADVANCED: Agent editor -->
+      <section class="tabpanel" data-panel="tools" id="p-tools"></section>
       <section class="tabpanel" data-panel="agent" id="p-agent">
         <p class="sub">Natural-language instructions plus tool allow-list and safety caps.
           Persisted with <code>synapse.agent_create()</code>.</p>
@@ -705,6 +707,7 @@ function activateTab(name) {
   document.querySelectorAll("#tabbar .tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   document.querySelectorAll(".tabpanel").forEach(p => p.classList.toggle("active", p.dataset.panel === name));
   if (name === "schema" && typeof schemaOnShow === "function") schemaOnShow();
+  if (name === "tools" && typeof renderTools === "function") renderTools();
 }
 document.querySelectorAll("#tabbar .tab").forEach(t => t.onclick = () => activateTab(t.dataset.tab));
 $("adv-toggle").onchange = () => {
@@ -2043,11 +2046,73 @@ function openTablesInfo() {
     '<div class="ab-meta">' + (t ? esc(t) : "run an agent to see which tables it touches") + '</div>' +
     '<div class="ab-label">browse</div><div>Open the schema tree in the dock below to inspect any table live.</div>');
 }
-function openToolsInfo() {
+function wireAccordions(root) {
+  root.querySelectorAll(".acc-h").forEach(h => h.onclick = () => {
+    const b = h.nextElementSibling;
+    const open = b.style.display === "block";
+    b.style.display = open ? "none" : "block";
+    h.querySelector(".acc-x").textContent = open ? "+" : "-";
+  });
+}
+function toolsHtml() {
   const tools = (BOOT && BOOT.tools) || [];
-  openDetail("Tools",
-    '<div class="detail-note">Tools the agent can call. sql_query (read) and sql_exec (write) hit your tables; the rest are utility tools.</div>' +
-    (tools.length ? tools.map(t => '<div class="ab-meta"><b>' + esc(t.name) + '</b>: ' + esc(t.description) + '</div>').join("") : '<div class="hint">none</div>'));
+  const byName = {}; tools.forEach(t => byName[t.name] = t.description);
+  const groups = [
+    ["Database (read / write your tables)", ["sql_query", "sql_exec"]],
+    ["HTTP", ["http_get", "http_post", "http_head"]],
+    ["Utility", ["calculator", "get_current_time", "call_agent"]],
+  ];
+  let list = '<div class="ab-label">Installed and usable in this build (' + tools.length + ')</div>';
+  const seen = new Set();
+  groups.forEach(([g, names]) => {
+    const rows = names.filter(n => byName[n] !== undefined);
+    rows.forEach(n => seen.add(n));
+    if (rows.length) list += '<div class="ab-h" style="margin:8px 0 2px">' + esc(g) + '</div>' +
+      rows.map(n => '<div class="ab-meta"><b>' + esc(n) + '</b>: ' + esc(byName[n] || "") + '</div>').join("");
+  });
+  const extra = tools.filter(t => !seen.has(t.name));
+  if (extra.length) list += '<div class="ab-h" style="margin:8px 0 2px">Other</div>' +
+    extra.map(t => '<div class="ab-meta"><b>' + esc(t.name) + '</b>: ' + esc(t.description || "") + '</div>').join("");
+
+  const code = esc(
+    '#[derive(Deserialize, JsonSchema)]\n' +
+    'struct PdfInput { html: String, path: String }\n\n' +
+    '#[async_trait]\n' +
+    'impl Tool for PdfWriter {\n' +
+    '    fn name(&self) -> &str { "pdf_write" }\n' +
+    '    fn schema(&self) -> &ToolSchema { &self.schema }\n' +
+    '    async fn run(&self, input: Value, _ctx: &ToolCtx)\n' +
+    '        -> Result<ToolOutput, ToolError> {\n' +
+    '        let a: PdfInput = serde_json::from_value(input)?;\n' +
+    '        // shell out to a CLI, exactly like tools-lede does\n' +
+    '        std::process::Command::new("wkhtmltopdf")\n' +
+    '            .arg("-").arg(&a.path).status()?;\n' +
+    '        Ok(ToolOutput::json(json!({ "path": a.path })))\n' +
+    '    }\n' +
+    '}');
+  const acc = (title, body) =>
+    '<div class="acc"><div class="acc-h">' + esc(title) + '<span class="acc-x">+</span></div>' +
+    '<div class="acc-b">' + body + '</div></div>';
+  const howto = '<div class="ab-label" style="margin-top:14px">How to add a tool</div>' +
+    acc("1. Use http_get (no new code)",
+      'Agents already have http_get / http_post. A web search is often just an agent that calls a search API: add "http_get" to its tools and prompt it. Cheapest path for anything HTTP-reachable.') +
+    acc("2. MCP server (no recompile)",
+      'The kernel has an MCP client. Point pg_synapse at an external MCP tool server (web search, PDF, filesystem) and its tools become callable by agents. Nothing is compiled into the extension.') +
+    acc("3. Native Rust tool plugin",
+      'The first-class way. A struct is the tool args (JsonSchema), plus an async run() and a name. tools-lede shells out to a CLI (lede) via std::process, so a PDF writer or any CLI wraps the same way. Register it in a Plugin, gate it behind a cargo feature, then add the tool name to the agent tools list.' +
+      '<pre class="ab-prompt">' + code + '</pre>');
+  return '<div class="detail-note">Tools an agent can call. sql_query (read) and sql_exec (write) hit your tables; the rest are utility tools.</div>' +
+    list + howto;
+}
+function openToolsInfo() {
+  openDetail("Tools", toolsHtml());
+  wireAccordions($("detail-body"));
+}
+function renderTools() {
+  const el = $("p-tools");
+  if (!el) return;
+  el.innerHTML = toolsHtml();
+  wireAccordions(el);
 }
 
 // ---- bottom dock: live schema tree ----
