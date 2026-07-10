@@ -104,7 +104,13 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     let spi_exec: Arc<dyn pg_synapse_tools_sql::SqlExecutor> =
         Arc::new(crate::spi_executor::SpiSqlExecutor);
 
+    // Wrap every LLM provider in the jittered-backoff retry layer so a single
+    // transient 5xx / rate-limit / network blip mid-loop does not abort the
+    // run. Retries are bounded by the per-agent wall-clock budget enforced in
+    // the kernel, so they cannot extend an execution past its timeout.
+    // TODO: expose max_retries/base_delay as GUCs to tune or disable (NOTES.md).
     let builder = Runtime::builder()
+        .with_retry_config(pg_synapse_core::RetryConfig::default())
         .with_plugin(pg_synapse_provider_openai::OpenAiProviderFactory)
         .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec));
 
