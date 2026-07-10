@@ -2,10 +2,11 @@
 
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio_postgres::types::ToSql;
 use uuid::Uuid;
 
 use crate::db;
@@ -377,6 +378,47 @@ pub struct ExecuteReq {
     pub input: String,
 }
 
+/// The friendly message shown whenever an agent would run without a usable
+/// LLM endpoint. Keeps the raw kernel "provider ... not registered" error off
+/// the presenter's screen.
+pub const NO_ENDPOINT_MSG: &str =
+    "No LLM endpoint configured - connect and Save your endpoint first \
+     (or the agent references a missing profile).";
+
+/// Guard: the target agent must reference an `llm_profile_main` that exists in
+/// `synapse.llm_profiles`. Returns BadRequest with a friendly message when the
+/// endpoint is missing. If the agent itself is absent, we let the normal
+/// execute path report that (it is a separate, less common failure).
+async fn require_agent_endpoint(
+    client: &tokio_postgres::Client,
+    agent: &str,
+) -> Result<(), HarnessError> {
+    let row = client
+        .query_opt(
+            "SELECT EXISTS (SELECT 1 FROM synapse.llm_profiles p WHERE p.name = a.llm_profile_main) \
+             FROM synapse.agents a WHERE a.name = $1",
+            &[&agent],
+        )
+        .await?;
+    if let Some(row) = row {
+        let has_profile: bool = row.get(0);
+        if !has_profile {
+            return Err(HarnessError::BadRequest(NO_ENDPOINT_MSG.to_owned()));
+        }
+    }
+    Ok(())
+}
+
+/// Translate a raw kernel/provider "not registered" error into the friendly
+/// endpoint message; pass anything else through unchanged.
+pub fn friendly_agent_error(raw: &str) -> String {
+    if raw.to_lowercase().contains("not registered") {
+        NO_ENDPOINT_MSG.to_owned()
+    } else {
+        raw.to_owned()
+    }
+}
+
 pub async fn execute(
     State(state): State<AppState>,
     Json(req): Json<ExecuteReq>,
@@ -384,6 +426,8 @@ pub async fn execute(
     if req.agent.trim().is_empty() {
         return Err(HarnessError::BadRequest("agent is required".to_owned()));
     }
+    let client = db::connect(&state.db_url).await?;
+    require_agent_endpoint(&client, &req.agent).await?;
     let run_id = runs::start_run(
         state.runs.clone(),
         state.db_url.clone(),
@@ -539,12 +583,14 @@ pub async fn insert_order(
     match result {
         Ok(id) => Json(json!({"ok": true, "committed": true, "id": id})),
         Err(HarnessError::Db(e)) => {
-            // Surface the rollback reason (the agent's rejection) verbatim.
+            // Surface the rollback reason (the agent's rejection); translate a
+            // missing-endpoint kernel error into the friendly message.
             let reason = e
                 .as_db_error()
                 .map(|d| d.message().to_owned())
                 .unwrap_or_else(|| e.to_string());
-            Json(json!({"ok": true, "committed": false, "rolled_back": true, "reason": reason}))
+            Json(json!({"ok": true, "committed": false, "rolled_back": true,
+                "reason": friendly_agent_error(&reason)}))
         }
         Err(e) => Json(json!({"ok": false, "error": e.to_string()})),
     }
@@ -580,6 +626,321 @@ pub async fn table_view(
             "error": e.as_db_error().map(|d| d.message().to_owned()).unwrap_or_else(|| e.to_string()),
         }))),
         Err(e) => Err(e),
+    }
+}
+
+// ---- schema browser (catalog-validated table viewer + editor) ----
+//
+// Every identifier (schema, table, column) is validated against the live
+// catalog before use and then quoted; every value is bound as a $ parameter
+// and cast through the column's real type. Nothing user-supplied is ever
+// string-interpolated as a value, and a table absent from the catalog is
+// rejected rather than executed.
+
+/// Double-quote an identifier, doubling any embedded quotes. Only ever called
+/// on identifiers already confirmed to exist in the catalog.
+fn quote_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// JSON value to the text we bind as a `$n` parameter: null stays SQL NULL,
+/// strings pass through raw, everything else uses its compact JSON form.
+fn as_sql_text(v: &Value) -> Option<String> {
+    match v {
+        Value::Null => None,
+        Value::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// True when `schema.table` is a user table or view (never a system catalog).
+async fn table_in_catalog(
+    client: &tokio_postgres::Client,
+    schema: &str,
+    table: &str,
+) -> Result<bool, HarnessError> {
+    let row = client
+        .query_one(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
+             WHERE table_schema = $1 AND table_name = $2 \
+             AND table_schema NOT IN ('pg_catalog', 'information_schema'))",
+            &[&schema, &table],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+/// The column's castable type string (e.g. `numeric(12,2)`, `text`) or None if
+/// the column does not exist. Doubles as column-existence validation. The
+/// returned string comes from `format_type`, not user input.
+async fn column_type(
+    client: &tokio_postgres::Client,
+    schema: &str,
+    table: &str,
+    col: &str,
+) -> Result<Option<String>, HarnessError> {
+    let row = client
+        .query_opt(
+            "SELECT format_type(a.atttypid, a.atttypmod) \
+             FROM pg_attribute a \
+             JOIN pg_class c ON c.oid = a.attrelid \
+             JOIN pg_namespace n ON n.oid = c.relnamespace \
+             WHERE n.nspname = $1 AND c.relname = $2 AND a.attname = $3 \
+             AND a.attnum > 0 AND NOT a.attisdropped",
+            &[&schema, &table, &col],
+        )
+        .await?;
+    Ok(row.map(|r| r.get::<_, String>(0)))
+}
+
+async fn require_table(
+    client: &tokio_postgres::Client,
+    schema: &str,
+    table: &str,
+) -> Result<(), HarnessError> {
+    if table_in_catalog(client, schema, table).await? {
+        Ok(())
+    } else {
+        Err(HarnessError::BadRequest(format!(
+            "table \"{schema}.{table}\" is not a browsable table in this database"
+        )))
+    }
+}
+
+pub async fn schema_tables(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let rows = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(x)::text FROM (SELECT table_schema AS schema, table_name AS table \
+         FROM information_schema.tables \
+         WHERE table_schema NOT IN ('pg_catalog', 'information_schema') \
+         AND table_type IN ('BASE TABLE', 'VIEW') \
+         ORDER BY table_schema, table_name) x",
+        &[],
+    )
+    .await?;
+    Ok(Json(json!({"ok": true, "tables": rows})))
+}
+
+#[derive(Deserialize)]
+pub struct SchemaRef {
+    pub schema: String,
+    pub table: String,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+pub async fn schema_columns(
+    State(state): State<AppState>,
+    Query(q): Query<SchemaRef>,
+) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    require_table(&client, &q.schema, &q.table).await?;
+    let rows = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(x)::text FROM ( \
+           SELECT c.column_name AS column, c.data_type AS type, \
+             (c.is_nullable = 'YES') AS nullable, c.column_default AS default, \
+             COALESCE(pk.is_pk, false) AS pk \
+           FROM information_schema.columns c \
+           LEFT JOIN ( \
+             SELECT kcu.column_name, true AS is_pk \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name \
+              AND tc.table_schema = kcu.table_schema \
+             WHERE tc.constraint_type = 'PRIMARY KEY' \
+               AND tc.table_schema = $1 AND tc.table_name = $2 \
+           ) pk ON pk.column_name = c.column_name \
+           WHERE c.table_schema = $1 AND c.table_name = $2 \
+           ORDER BY c.ordinal_position) x",
+        &[&q.schema, &q.table],
+    )
+    .await?;
+    Ok(Json(json!({"ok": true, "columns": rows})))
+}
+
+pub async fn schema_rows(
+    State(state): State<AppState>,
+    Query(q): Query<SchemaRef>,
+) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    require_table(&client, &q.schema, &q.table).await?;
+    let limit = q.limit.unwrap_or(100).clamp(1, 200);
+    let sql = format!(
+        "SELECT to_jsonb(x)::text FROM (SELECT * FROM {}.{} LIMIT $1) x",
+        quote_ident(&q.schema),
+        quote_ident(&q.table),
+    );
+    let rows = db::jsonb_rows(&client, &sql, &[&limit]).await?;
+    Ok(Json(json!({"ok": true, "rows": rows, "limit": limit})))
+}
+
+#[derive(Deserialize)]
+pub struct SchemaUpdateReq {
+    pub schema: String,
+    pub table: String,
+    pub pk_col: String,
+    pub pk_val: Value,
+    pub col: String,
+    pub val: Value,
+}
+
+pub async fn schema_update(
+    State(state): State<AppState>,
+    Json(req): Json<SchemaUpdateReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    require_table(&client, &req.schema, &req.table).await?;
+    let col_type = column_type(&client, &req.schema, &req.table, &req.col)
+        .await?
+        .ok_or_else(|| HarnessError::BadRequest(format!("unknown column '{}'", req.col)))?;
+    let pk_type = column_type(&client, &req.schema, &req.table, &req.pk_col)
+        .await?
+        .ok_or_else(|| HarnessError::BadRequest(format!("unknown pk column '{}'", req.pk_col)))?;
+    // Identifiers are catalog-validated and quoted; type strings come from
+    // format_type; only the two $ values are user data.
+    let sql = format!(
+        "UPDATE {}.{} SET {} = $1::text::{} WHERE {} = $2::text::{}",
+        quote_ident(&req.schema),
+        quote_ident(&req.table),
+        quote_ident(&req.col),
+        col_type,
+        quote_ident(&req.pk_col),
+        pk_type,
+    );
+    let val = as_sql_text(&req.val);
+    let pk_val = as_sql_text(&req.pk_val);
+    let n = client.execute(&sql, &[&val, &pk_val]).await?;
+    Ok(Json(json!({"ok": true, "updated": n})))
+}
+
+#[derive(Deserialize)]
+pub struct SchemaInsertReq {
+    pub schema: String,
+    pub table: String,
+    pub values: serde_json::Map<String, Value>,
+}
+
+pub async fn schema_insert(
+    State(state): State<AppState>,
+    Json(req): Json<SchemaInsertReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    require_table(&client, &req.schema, &req.table).await?;
+    if req.values.is_empty() {
+        return Err(HarnessError::BadRequest(
+            "insert needs at least one column value".to_owned(),
+        ));
+    }
+    let mut cols = Vec::new();
+    let mut placeholders = Vec::new();
+    let mut vals: Vec<Option<String>> = Vec::new();
+    for (col, v) in &req.values {
+        let ty = column_type(&client, &req.schema, &req.table, col)
+            .await?
+            .ok_or_else(|| HarnessError::BadRequest(format!("unknown column '{col}'")))?;
+        vals.push(as_sql_text(v));
+        placeholders.push(format!("${}::text::{}", vals.len(), ty));
+        cols.push(quote_ident(col));
+    }
+    let sql = format!(
+        "INSERT INTO {}.{} ({}) VALUES ({})",
+        quote_ident(&req.schema),
+        quote_ident(&req.table),
+        cols.join(", "),
+        placeholders.join(", "),
+    );
+    let params: Vec<&(dyn ToSql + Sync)> = vals.iter().map(|v| v as &(dyn ToSql + Sync)).collect();
+    let n = client.execute(&sql, &params).await?;
+    Ok(Json(json!({"ok": true, "inserted": n})))
+}
+
+// ---- SQL console ----
+//
+// Arbitrary SQL against the local demo database is the point (the audience
+// wants to call synapse.execute() like any other function), so this is not
+// sandboxed to read-only. It runs on its own short-lived connection with a
+// generous timeout so a slow LLM-backed agent call cannot block other
+// requests, and every failure comes back as a clean JSON error.
+
+#[derive(Deserialize)]
+pub struct SqlReq {
+    pub sql: String,
+}
+
+const SQL_TIMEOUT_SECS: u64 = 180;
+const SQL_ROW_CAP: usize = 1000;
+
+pub async fn run_sql(State(state): State<AppState>, Json(req): Json<SqlReq>) -> Json<Value> {
+    if req.sql.trim().is_empty() {
+        return Json(json!({"ok": false, "error": "empty statement"}));
+    }
+    let fut = async {
+        let client = db::connect(&state.db_url).await?;
+        let msgs = client.simple_query(&req.sql).await?;
+        Ok::<Vec<tokio_postgres::SimpleQueryMessage>, HarnessError>(msgs)
+    };
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(SQL_TIMEOUT_SECS), fut).await;
+
+    let msgs = match outcome {
+        Err(_) => {
+            return Json(json!({
+                "ok": false,
+                "error": format!("statement timed out after {SQL_TIMEOUT_SECS}s"),
+            }));
+        }
+        Ok(Err(HarnessError::Db(e))) => {
+            let msg = e
+                .as_db_error()
+                .map(|d| d.message().to_owned())
+                .unwrap_or_else(|| e.to_string());
+            return Json(json!({"ok": false, "error": msg}));
+        }
+        Ok(Err(e)) => return Json(json!({"ok": false, "error": e.to_string()})),
+        Ok(Ok(msgs)) => msgs,
+    };
+
+    let mut columns: Vec<String> = Vec::new();
+    let mut rows: Vec<Vec<Option<String>>> = Vec::new();
+    let mut rows_affected: u64 = 0;
+    let mut truncated = false;
+    for msg in msgs {
+        match msg {
+            tokio_postgres::SimpleQueryMessage::Row(row) => {
+                if columns.is_empty() {
+                    columns = row.columns().iter().map(|c| c.name().to_owned()).collect();
+                }
+                if rows.len() < SQL_ROW_CAP {
+                    let cells = (0..row.len())
+                        .map(|i| row.get(i).map(str::to_owned))
+                        .collect();
+                    rows.push(cells);
+                } else {
+                    truncated = true;
+                }
+            }
+            tokio_postgres::SimpleQueryMessage::CommandComplete(n) => {
+                rows_affected = n;
+            }
+            _ => {}
+        }
+    }
+
+    if !columns.is_empty() {
+        Json(json!({
+            "ok": true,
+            "columns": columns,
+            "rows": rows,
+            "truncated": truncated,
+        }))
+    } else {
+        Json(json!({
+            "ok": true,
+            "command": "statement executed",
+            "rows_affected": rows_affected,
+            "notices": [],
+        }))
     }
 }
 

@@ -184,7 +184,9 @@ async fn run_task(
                 s.error = Some(if cancelled {
                     "execution cancelled: statement cancelled by operator".to_owned()
                 } else {
-                    e.to_string()
+                    // Keep raw kernel "provider not registered" errors off the
+                    // presenter's screen.
+                    crate::api::friendly_agent_error(&e.to_string())
                 });
                 s.finished_at_ms = Some(now_ms());
             });

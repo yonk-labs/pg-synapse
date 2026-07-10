@@ -11,21 +11,73 @@
     --red: #f85149; --orange: #d29922; --yellow: #e3b341; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
+         display: flex; flex-direction: column;
          font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 22px;
+  header { flex: none; display: flex; align-items: center; gap: 14px; padding: 9px 20px;
            border-bottom: 1px solid var(--border); background: var(--panel); }
-  header h1 { font-size: 18px; margin: 0; }
+  header h1 { font-size: 16px; margin: 0; }
   header h1 span { color: var(--accent); }
   header .ver { color: var(--muted); font-family: var(--mono); font-size: 12px; }
-  header .conn { margin-left: auto; font-size: 12px; color: var(--muted); }
-  main { display: grid; grid-template-columns: 420px 1fr; gap: 16px; padding: 16px 22px; align-items: start; }
-  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  header .conn { margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  #adv-switch { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted);
+                cursor: pointer; user-select: none; }
+  #adv-switch input { accent-color: var(--accent); }
+  main { flex: 1 1 auto; min-height: 0; display: grid;
+         grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+         gap: 14px; padding: 12px 16px; }
   .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-           padding: 14px 16px; margin-bottom: 16px; }
+           padding: 12px 14px; }
   .panel h2 { margin: 0 0 4px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
               color: var(--accent); }
-  .panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  .panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+
+  /* hero (persistent architecture animation) */
+  .hero { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .hero-head { display: flex; justify-content: space-between; align-items: baseline; flex: none; }
+  .hero-head h2 { margin: 0; font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
+                  color: var(--accent); }
+  .hero-svg { flex: 1 1 auto; min-height: 0; display: flex; align-items: center;
+              justify-content: center; margin-top: 6px; }
+  .hero-svg svg { width: 100%; height: 100%; max-height: 100%; }
+
+  /* control column with tabs */
+  .ctrl { display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; }
+  #conn-strip { flex: none; border-bottom: 1px solid var(--border); padding-bottom: 10px;
+                margin-bottom: 8px; }
+  .conn-title { font-size: 12px; color: var(--muted); text-transform: uppercase;
+                letter-spacing: .06em; margin-bottom: 6px; }
+  #conn-chip { display: flex; align-items: center; gap: 8px; font-size: 13px; font-family: var(--mono); }
+  #conn-chip .cdot { width: 9px; height: 9px; border-radius: 50%; background: var(--green);
+                     box-shadow: 0 0 6px var(--green); flex: none; }
+  #conn-chip .cmuted { color: var(--muted); }
+  #conn-chip b { color: var(--green); }
+  button.link { background: none; border: none; color: var(--accent); padding: 2px 4px;
+                font-size: 12px; text-decoration: underline; cursor: pointer; }
+  button.link:hover { color: #7ec0ff; }
+  .tabbar { flex: none; display: flex; gap: 3px; flex-wrap: wrap; border-bottom: 1px solid var(--border);
+            margin-bottom: 8px; }
+  .tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+         color: var(--muted); padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
+  .tab:hover { color: var(--text); border-color: var(--border); }
+  .tab.active { color: var(--accent); border-color: var(--accent); }
+  .tab.adv { display: none; }
+  body.show-adv .tab.adv { display: inline-block; }
+  .tabpanels { flex: 1 1 auto; min-height: 0; position: relative; }
+  .tabpanel { display: none; height: 100%; overflow: auto; padding-right: 4px; }
+  .tabpanel.active { display: block; }
+  .tabpanel > .sub:first-child { margin-top: 0; }
+
+  /* schema browser */
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg-btn { border: none; border-radius: 0; background: var(--panel2); padding: 5px 10px; font-size: 12px; }
+  .seg-btn.active { background: #1f4b7a; color: var(--text); }
+  #schema-out { margin-top: 8px; }
+  #schema-out textarea { font-size: 12px; }
+  #schema-out td.editing { max-width: none; white-space: normal; overflow: visible; }
+  #schema-out td.scell { cursor: pointer; }
+  #schema-out td.scell:hover { background: var(--panel2); }
   label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
   input[type=text], input[type=password], input[type=number], textarea, select {
     width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
@@ -152,91 +204,18 @@
   <h1><span>pg_synapse</span> live demo</h1>
   <span class="ver" id="ver"></span>
   <span class="conn" id="conn">connecting...</span>
+  <label id="adv-switch" title="Reveal the advanced tabs (agent editor, triggers, tables, probes)">
+    <input type="checkbox" id="adv-toggle"> <span>Advanced</span>
+  </label>
 </header>
 <main>
-<div id="left">
 
-  <div class="panel" id="p-llm">
-    <h2>1. LLM endpoint</h2>
-    <p class="sub">External OpenAI-compatible endpoint (vLLM, llama.cpp, OpenAI). Stored in
-      <code>synapse.llm_profiles</code> via <code>synapse.llm_profile_set()</code>.</p>
-    <label>base_url</label>
-    <input type="text" id="llm-base-url" placeholder="http://host:8000/v1">
-    <label>model</label>
-    <input type="text" id="llm-model" placeholder="model id">
-    <label>api key (optional, stored via synapse.secret_set)</label>
-    <input type="password" id="llm-key" placeholder="none">
-    <div class="row" style="margin-top:10px">
-      <button id="btn-llm-test">Test</button>
-      <button class="primary" id="btn-llm-save">Save profile 'vllm-default'</button>
-    </div>
-    <div id="llm-status"></div>
-  </div>
-
-  <div class="panel" id="p-scenarios">
-    <h2>2. Load a demo</h2>
-    <p class="sub">One click seeds schema plus data, registers the agents, and prefills a
-      suggested run.</p>
-    <div id="scenario-list"></div>
-  </div>
-
-  <div class="panel" id="p-agent">
-    <h2>3. Agent editor</h2>
-    <p class="sub">Natural-language instructions plus tool allow-list and safety caps.
-      Persisted with <code>synapse.agent_create()</code>.</p>
-    <label>existing agents</label>
-    <div class="row">
-      <select id="agent-select" class="grow"></select>
-      <button id="btn-agent-load">Load</button>
-      <button class="danger" id="btn-agent-drop">Drop</button>
-    </div>
-    <label>name</label>
-    <input type="text" id="agent-name" placeholder="my_agent">
-    <label>system prompt (the instructions)</label>
-    <textarea id="agent-prompt" rows="8" placeholder="You are ..."></textarea>
-    <div class="grid2">
-      <div>
-        <label>executor</label>
-        <select id="agent-executor"></select>
-      </div>
-      <div>
-        <label>llm profile</label>
-        <select id="agent-profile"></select>
-      </div>
-    </div>
-    <label>tool allow-list</label>
-    <div class="toolgrid" id="agent-tools"></div>
-    <div class="grid3">
-      <div>
-        <label>max_iterations</label>
-        <input type="number" id="agent-maxiter" value="10" min="1">
-      </div>
-      <div>
-        <label>timeout_ms</label>
-        <input type="number" id="agent-timeout" value="60000" min="0" step="1000">
-      </div>
-      <div>
-        <label>cost_cap_usd (0 = none)</label>
-        <input type="number" id="agent-costcap" value="0" min="0" step="0.01">
-      </div>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button class="primary" id="btn-agent-save">Save agent</button>
-      <span id="agent-status" class="small"></span>
-    </div>
-  </div>
-
-</div>
-<div id="right">
-
-  <div class="panel" id="p-arch">
-    <div class="row" style="justify-content:space-between;align-items:baseline">
+  <div class="panel hero" id="p-arch">
+    <div class="hero-head">
       <h2>The data path</h2>
       <button id="btn-viz-replay" disabled>Replay last run</button>
     </div>
-    <p class="sub">Live map of a run: SQL client to the kernel agent loop, round trips to the
-      LLM, tools reading and writing your tables, audit trail persisted. Completed runs replay
-      their real message trace; guardrail terminations play the kill sequence.</p>
+    <div class="hero-svg">
     <svg id="viz" viewBox="0 0 960 420" role="img" aria-label="pg_synapse architecture diagram">
       <defs>
         <marker id="viz-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5"
@@ -342,97 +321,236 @@
         <text id="viz-banner-sub" x="480" y="248"></text>
       </g>
     </svg>
-  </div>
-
-  <div class="panel" id="p-run">
-    <h2>4. Run an agent loop</h2>
-    <p class="sub"><code>SELECT synapse.execute(agent, input)</code> through the harness; the
-      trace below comes from <code>synapse.messages</code> and <code>synapse.traces</code>.</p>
-    <div class="row">
-      <select id="run-agent" style="width:220px"></select>
-      <input type="text" id="run-input" class="grow" placeholder="ask the agent something">
-      <button class="primary" id="btn-run">Run</button>
-      <button class="danger" id="btn-cancel" disabled>Cancel</button>
     </div>
-    <div id="run-status" style="margin-top:10px"></div>
-    <div class="stats" id="run-stats"></div>
-    <div id="run-output"></div>
-    <div id="trace"></div>
-    <details id="events-details" style="display:none">
-      <summary>structured trace events (synapse.traces)</summary>
-      <div id="trace-events"></div>
-    </details>
   </div>
 
-  <div class="panel" id="p-watch" style="display:none">
-    <h2 id="watch-title">Scenario watch</h2>
-    <p class="sub">Live view of the loaded scenario: probe buttons (EXPLAIN, end-state
-      checks) and the tables the agent touches.</p>
-    <div class="row" id="watch-probes"></div>
-    <div id="watch-probe-out"></div>
-    <div id="watch-tables"></div>
-  </div>
+  <div class="panel ctrl" id="ctrl">
 
-  <div class="panel" id="p-events">
-    <h2>5. Event triggers</h2>
-    <p class="sub">Agents attached to tables with <code>synapse.attach_agent_trigger()</code>.
-      Queue mode enriches rows after commit; inline mode can ROLL BACK the write.</p>
-
-    <div class="grid2">
-      <div>
-        <h3 style="margin:6px 0 2px;font-size:13px">Queue mode: demo.tickets</h3>
-        <div class="row" style="margin:6px 0">
-          <button id="btn-attach-queue">Attach enrich_agent</button>
-          <button id="btn-detach-queue">Detach</button>
+    <!-- LLM connection: compact, always visible in the default surface -->
+    <div id="conn-strip">
+      <div id="conn-chip" style="display:none">
+        <span class="cdot"></span>
+        <span>Connected: <b id="conn-model">-</b> <span class="cmuted">@</span> <span id="conn-host">-</span></span>
+        <button id="btn-conn-change" class="link">change</button>
+      </div>
+      <div id="conn-form">
+        <div class="conn-title">Connect your LLM endpoint</div>
+        <div class="grid2" style="gap:6px">
+          <input type="text" id="llm-base-url" placeholder="http://host:8000/v1">
+          <input type="text" id="llm-model" placeholder="model id">
         </div>
-        <input type="text" id="ticket-subject" placeholder="subject" value="API rate limit exceeded">
-        <input type="text" id="ticket-body" style="margin-top:6px" placeholder="body"
-               value="Getting 429 errors on all endpoints since 10 AM. Production impacted.">
+        <input type="password" id="llm-key" placeholder="api key (optional)" style="margin-top:6px">
         <div class="row" style="margin-top:8px">
-          <button class="primary" id="btn-insert-ticket">INSERT ticket</button>
-          <button id="btn-drain">Drain queue now</button>
+          <button id="btn-llm-test">Test</button>
+          <button class="primary" id="btn-llm-save">Save</button>
+          <button id="btn-conn-cancel" class="link" style="display:none">cancel</button>
         </div>
-      </div>
-      <div>
-        <h3 style="margin:6px 0 2px;font-size:13px">Inline mode: demo.orders</h3>
-        <div class="row" style="margin:6px 0">
-          <button id="btn-attach-inline">Attach policy_agent</button>
-          <button id="btn-detach-inline">Detach</button>
-        </div>
-        <input type="text" id="order-customer" placeholder="customer" value="alice@acme.com">
-        <input type="number" id="order-amount" style="margin-top:6px" placeholder="amount" value="150" step="0.01">
-        <div class="row" style="margin-top:8px">
-          <button class="primary" id="btn-insert-order">INSERT order</button>
-          <button class="danger" id="btn-insert-bad-order">INSERT bad order (-50)</button>
-        </div>
+        <div id="llm-status"></div>
       </div>
     </div>
-    <div id="event-status"></div>
 
-    <div class="grid2" style="margin-top:10px">
-      <div>
-        <div class="small">demo.tickets</div>
-        <div id="tbl-tickets"></div>
-      </div>
-      <div>
-        <div class="small">demo.orders</div>
-        <div id="tbl-orders"></div>
-      </div>
+    <!-- tab bar -->
+    <div class="tabbar" id="tabbar">
+      <button class="tab active" data-tab="demos">Demos</button>
+      <button class="tab" data-tab="run">Run</button>
+      <button class="tab" data-tab="schema">Schema</button>
+      <button class="tab" data-tab="sql">SQL</button>
+      <button class="tab adv" data-tab="agent">Agent</button>
+      <button class="tab adv" data-tab="triggers">Triggers</button>
+      <button class="tab adv" data-tab="data">Tables</button>
+      <button class="tab adv" data-tab="probes">Probes</button>
+      <button class="tab adv" data-tab="config">Config</button>
     </div>
-    <div style="margin-top:10px">
-      <div class="small">synapse.agent_queue (latest 20)</div>
-      <div id="tbl-queue"></div>
+
+    <div class="tabpanels">
+
+      <!-- DEFAULT: Demos -->
+      <section class="tabpanel active" data-panel="demos" id="p-scenarios">
+        <p class="sub">One click seeds schema plus data, registers the agents, and prefills a
+          suggested run.</p>
+        <div id="scenario-list"></div>
+      </section>
+
+      <!-- DEFAULT: Run -->
+      <section class="tabpanel" data-panel="run" id="p-run">
+        <p class="sub"><code>SELECT synapse.execute(agent, input)</code> through the harness; the
+          trace comes from <code>synapse.messages</code> / <code>synapse.traces</code>.</p>
+        <div class="row">
+          <select id="run-agent" style="width:180px"></select>
+          <input type="text" id="run-input" class="grow" placeholder="ask the agent something">
+          <button class="primary" id="btn-run">Run</button>
+          <button class="danger" id="btn-cancel" disabled>Cancel</button>
+        </div>
+        <div id="run-guard" class="hint" style="margin-top:6px"></div>
+        <div id="run-status" style="margin-top:8px"></div>
+        <div class="stats" id="run-stats"></div>
+        <div id="run-output"></div>
+        <div id="trace"></div>
+        <details id="events-details" style="display:none">
+          <summary>structured trace events (synapse.traces)</summary>
+          <div id="trace-events"></div>
+        </details>
+      </section>
+
+      <!-- DEFAULT: Schema browser + editor -->
+      <section class="tabpanel" data-panel="schema" id="p-schema">
+        <p class="sub">Browse any table in <code>synapse.*</code> and the scenario schemas.
+          Edit a text cell in place or add a row: the classic use is reading and writing the
+          system prompts in <code>synapse.agents</code>.</p>
+        <div class="row">
+          <select id="schema-table" class="grow"></select>
+          <button id="schema-refresh" title="reload the table list">refresh</button>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <span class="seg">
+            <button id="schema-view-data" class="seg-btn active">Data</button>
+            <button id="schema-view-def" class="seg-btn">Definition</button>
+          </span>
+          <button id="schema-add">+ row</button>
+          <span id="schema-status" class="small grow"></span>
+        </div>
+        <div id="schema-out"></div>
+      </section>
+
+      <!-- DEFAULT: SQL console -->
+      <section class="tabpanel" data-panel="sql" id="p-sql">
+        <p class="sub">An agent is a function: call <code>synapse.execute()</code> here like any
+          other SELECT. Arbitrary SQL against the local demo database.</p>
+        <div class="row" style="margin-bottom:6px">
+          <select id="sql-snippets" class="grow"><option value="">snippets...</option></select>
+        </div>
+        <textarea id="sql-editor" rows="5" spellcheck="false"
+          placeholder="SELECT synapse.execute('index_tuner', 'tune the slow query');"></textarea>
+        <div class="row" style="margin-top:6px">
+          <button class="primary" id="sql-run">Run SQL</button>
+          <span id="sql-status" class="small grow"></span>
+        </div>
+        <div id="sql-out"></div>
+      </section>
+
+      <!-- ADVANCED: Agent editor -->
+      <section class="tabpanel" data-panel="agent" id="p-agent">
+        <p class="sub">Natural-language instructions plus tool allow-list and safety caps.
+          Persisted with <code>synapse.agent_create()</code>.</p>
+        <label>existing agents</label>
+        <div class="row">
+          <select id="agent-select" class="grow"></select>
+          <button id="btn-agent-load">Load</button>
+          <button class="danger" id="btn-agent-drop">Drop</button>
+        </div>
+        <label>name</label>
+        <input type="text" id="agent-name" placeholder="my_agent">
+        <label>system prompt (the instructions)</label>
+        <textarea id="agent-prompt" rows="5" placeholder="You are ..."></textarea>
+        <div class="grid2">
+          <div>
+            <label>executor</label>
+            <select id="agent-executor"></select>
+          </div>
+          <div>
+            <label>llm profile</label>
+            <select id="agent-profile"></select>
+          </div>
+        </div>
+        <label>tool allow-list</label>
+        <div class="toolgrid" id="agent-tools"></div>
+        <div class="grid3">
+          <div>
+            <label>max_iterations</label>
+            <input type="number" id="agent-maxiter" value="10" min="1">
+          </div>
+          <div>
+            <label>timeout_ms</label>
+            <input type="number" id="agent-timeout" value="60000" min="0" step="1000">
+          </div>
+          <div>
+            <label>cost_cap_usd (0 = none)</label>
+            <input type="number" id="agent-costcap" value="0" min="0" step="0.01">
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btn-agent-save">Save agent</button>
+          <span id="agent-status" class="small"></span>
+        </div>
+      </section>
+
+      <!-- ADVANCED: Triggers -->
+      <section class="tabpanel" data-panel="triggers" id="p-events">
+        <p class="sub">Agents attached to tables with <code>synapse.attach_agent_trigger()</code>.
+          Queue mode enriches rows after commit; inline mode can ROLL BACK the write.</p>
+        <div class="grid2">
+          <div>
+            <h3 style="margin:6px 0 2px;font-size:13px">Queue mode: demo.tickets</h3>
+            <div class="row" style="margin:6px 0">
+              <button id="btn-attach-queue">Attach enrich_agent</button>
+              <button id="btn-detach-queue">Detach</button>
+            </div>
+            <input type="text" id="ticket-subject" placeholder="subject" value="API rate limit exceeded">
+            <input type="text" id="ticket-body" style="margin-top:6px" placeholder="body"
+                   value="Getting 429 errors on all endpoints since 10 AM. Production impacted.">
+            <div class="row" style="margin-top:8px">
+              <button class="primary" id="btn-insert-ticket">INSERT ticket</button>
+              <button id="btn-drain">Drain queue now</button>
+            </div>
+          </div>
+          <div>
+            <h3 style="margin:6px 0 2px;font-size:13px">Inline mode: demo.orders</h3>
+            <div class="row" style="margin:6px 0">
+              <button id="btn-attach-inline">Attach policy_agent</button>
+              <button id="btn-detach-inline">Detach</button>
+            </div>
+            <input type="text" id="order-customer" placeholder="customer" value="alice@acme.com">
+            <input type="number" id="order-amount" style="margin-top:6px" placeholder="amount" value="150" step="0.01">
+            <div class="row" style="margin-top:8px">
+              <button class="primary" id="btn-insert-order">INSERT order</button>
+              <button class="danger" id="btn-insert-bad-order">INSERT bad order (-50)</button>
+            </div>
+          </div>
+        </div>
+        <div id="event-status"></div>
+        <div class="grid2" style="margin-top:10px">
+          <div>
+            <div class="small">demo.tickets</div>
+            <div id="tbl-tickets"></div>
+          </div>
+          <div>
+            <div class="small">demo.orders</div>
+            <div id="tbl-orders"></div>
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <div class="small">synapse.agent_queue (latest 20)</div>
+          <div id="tbl-queue"></div>
+        </div>
+      </section>
+
+      <!-- ADVANCED: Tables / history -->
+      <section class="tabpanel" data-panel="data" id="p-history">
+        <p class="sub">Everything is audited in <code>synapse.executions</code>. Click a row to
+          reload and replay its trace.</p>
+        <div id="tbl-executions"></div>
+      </section>
+
+      <!-- ADVANCED: Probes / scenario watch -->
+      <section class="tabpanel" data-panel="probes" id="p-watch">
+        <h3 id="watch-title" style="margin:4px 0 2px">Scenario watch</h3>
+        <p class="sub">Probe buttons (EXPLAIN, end-state checks) and the tables the agent touches.
+          Load a scenario first.</p>
+        <div class="row" id="watch-probes"></div>
+        <div id="watch-probe-out"></div>
+        <div id="watch-tables"></div>
+      </section>
+
+      <!-- ADVANCED: Config -->
+      <section class="tabpanel" data-panel="config" id="p-config">
+        <p class="sub">Raw connection state. The endpoint form lives in the connection strip
+          above; this shows what the harness resolved.</p>
+        <div id="config-body" class="small"></div>
+      </section>
+
     </div>
   </div>
 
-  <div class="panel" id="p-history">
-    <h2>Execution history</h2>
-    <p class="sub">Everything is audited in <code>synapse.executions</code>. Click a row to
-      reload its trace.</p>
-    <div id="tbl-executions"></div>
-  </div>
-
-</div>
 </main>
 <script>
 "use strict";
@@ -441,6 +559,8 @@ let BOOT = null;
 let currentRun = null;
 let pollTimer = null;
 let currentScenario = null;
+let CONNECTED = false;
+let connEditing = false;
 
 async function api(path, method, body) {
   const opts = { method: method || "GET", headers: {} };
@@ -463,6 +583,84 @@ function pretty(v) {
   return JSON.stringify(v, null, 2);
 }
 function banner(el, cls, text) { el.innerHTML = '<div class="banner ' + cls + '">' + esc(text) + '</div>'; }
+
+// ---- tabs + advanced toggle ----
+
+function activateTab(name) {
+  document.querySelectorAll("#tabbar .tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  document.querySelectorAll(".tabpanel").forEach(p => p.classList.toggle("active", p.dataset.panel === name));
+  if (name === "schema" && typeof schemaOnShow === "function") schemaOnShow();
+}
+document.querySelectorAll("#tabbar .tab").forEach(t => t.onclick = () => activateTab(t.dataset.tab));
+$("adv-toggle").onchange = () => {
+  const on = $("adv-toggle").checked;
+  document.body.classList.toggle("show-adv", on);
+  if (!on) {
+    const active = document.querySelector("#tabbar .tab.active");
+    if (active && active.classList.contains("adv")) activateTab("demos");
+  }
+};
+
+// ---- LLM connection strip + endpoint guard ----
+
+function connHost(url) {
+  try { return new URL(url).host; }
+  catch (e) { return (url || "").replace(/^https?:\/\//, "").split("/")[0] || "-"; }
+}
+
+// The guard that prevents the "provider not registered" bug: a run needs a
+// configured endpoint. Reflected in the strip, the header, and every action
+// that would execute an agent.
+function updateConnState() {
+  const profs = (BOOT && BOOT.profiles) || [];
+  const prof = profs.find(p => p.name === "vllm-default") || profs[0] || null;
+  CONNECTED = !!prof;
+  $("conn").textContent = CONNECTED ? ("connected: " + prof.model) : "no LLM endpoint";
+  if (CONNECTED && !connEditing) {
+    $("conn-chip").style.display = "flex";
+    $("conn-form").style.display = "none";
+    $("conn-model").textContent = prof.model;
+    $("conn-host").textContent = connHost(prof.base_url);
+  } else {
+    $("conn-chip").style.display = "none";
+    $("conn-form").style.display = "block";
+    $("btn-conn-cancel").style.display = (CONNECTED && connEditing) ? "inline-block" : "none";
+  }
+  applyGuard();
+  renderConfig();
+}
+
+function applyGuard() {
+  $("btn-run").disabled = !CONNECTED || !!currentRun;
+  const hint = $("run-guard");
+  if (hint) hint.textContent = CONNECTED ? "" : "Connect your LLM endpoint (top of this column) before running.";
+  document.querySelectorAll("[data-run]").forEach(b => b.disabled = !CONNECTED);
+  ["btn-insert-order", "btn-insert-bad-order", "btn-drain", "btn-insert-ticket"].forEach(id => {
+    const b = $(id); if (b) b.disabled = !CONNECTED;
+  });
+}
+
+function requireConnected(el) {
+  if (CONNECTED) return true;
+  if (el) banner(el, "bad", "Connect your LLM endpoint first (top of the control column).");
+  connEditing = false;
+  updateConnState();
+  return false;
+}
+
+function renderConfig() {
+  const b = $("config-body");
+  if (!b || !BOOT) return;
+  const profs = BOOT.profiles || [];
+  b.innerHTML =
+    "extension: v" + esc(BOOT.version) + "<br>" +
+    "default endpoint: " + esc(BOOT.default_llm.base_url) + " (" + esc(BOOT.default_llm.model) + ")<br>" +
+    "profiles: " + (profs.length ? profs.map(p => esc(p.name) + " -> " + esc(p.model)).join(", ") : "none") + "<br>" +
+    "executors: " + esc((BOOT.executors || []).join(", "));
+}
+
+$("btn-conn-change").onclick = () => { connEditing = true; updateConnState(); $("llm-base-url").focus(); };
+$("btn-conn-cancel").onclick = () => { connEditing = false; updateConnState(); };
 
 // ---- architecture visualization ----
 // A timed replay of a completed run's real trace (synapse.messages), animated
@@ -924,6 +1122,7 @@ async function bootstrap(keepForms) {
     (checked.has(t.name) ? " checked" : "") + '> ' + esc(t.name) + '</label>').join("");
 
   renderScenarios(data.scenarios);
+  updateConnState();
   refreshTables();
 }
 
@@ -945,7 +1144,7 @@ $("btn-llm-save").onclick = async () => {
   const r = await api("/api/profile", "POST", {
     name: "vllm-default", base_url: $("llm-base-url").value,
     model: $("llm-model").value, api_key: $("llm-key").value });
-  if (r.ok) { banner($("llm-status"), "ok", "saved llm profile 'vllm-default'"); bootstrap(true); }
+  if (r.ok) { banner($("llm-status"), "ok", "saved llm profile 'vllm-default'"); connEditing = false; bootstrap(true); }
   else banner($("llm-status"), "bad", r.error || "save failed");
 };
 
@@ -1091,6 +1290,13 @@ async function pollRun() {
 }
 
 async function startRun(agent, input) {
+  activateTab("run");
+  if (!CONNECTED) {
+    setRunStatusChip("failed", "failed", "no LLM endpoint configured");
+    vizReset();
+    vizCaption("Connect your LLM endpoint first (top of the control column).");
+    return;
+  }
   $("run-agent").value = agent;
   $("run-input").value = input;
   $("run-stats").innerHTML = "";
@@ -1140,6 +1346,7 @@ $("btn-detach-inline").onclick = async () => {
 };
 
 $("btn-insert-ticket").onclick = async () => {
+  if (!requireConnected($("event-status"))) return;
   const r = await api("/api/demo/ticket", "POST", {
     subject: $("ticket-subject").value, body: $("ticket-body").value });
   banner($("event-status"), r.ok ? "ok" : "bad",
@@ -1150,6 +1357,7 @@ $("btn-insert-ticket").onclick = async () => {
 };
 
 async function insertOrder(customer, amount) {
+  if (!requireConnected($("event-status"))) return;
   banner($("event-status"), "info", "INSERT INTO demo.orders (" + customer + ", " + amount + ") ... agent is deciding");
   const vizToken = vizInlineStart();
   const r = await api("/api/demo/order", "POST", { customer, amount });
@@ -1168,6 +1376,7 @@ $("btn-insert-order").onclick = () =>
 $("btn-insert-bad-order").onclick = () => insertOrder("bad_actor", -50);
 
 $("btn-drain").onclick = async () => {
+  if (!requireConnected($("event-status"))) return;
   banner($("event-status"), "info", "draining queue (the agent runs now)...");
   vizReset();
   vizGhost("e-queue", true);
@@ -1273,6 +1482,7 @@ function renderScenarios(list) {
   document.querySelectorAll("[data-load]").forEach(btn => btn.onclick = async () => {
     const id = btn.dataset.load;
     const st = $("scen-status-" + id);
+    if (!requireConnected(st)) return;
     banner(st, "info", "loading scenario (seeding schema, data, agents)...");
     const r = await api("/api/scenario/" + id, "POST");
     if (r.ok) {
@@ -1294,6 +1504,223 @@ function renderScenarios(list) {
     startRun(run.agent, run.input);
   });
 }
+
+// ---- schema browser + editor ----
+
+const SCHEMA = { schema: null, table: null, cols: [], view: "data" };
+let schemaInited = false;
+
+function schemaOnShow() {
+  if (!schemaInited) { schemaInited = true; schemaLoadTables(); }
+}
+
+async function schemaLoadTables() {
+  const sel = $("schema-table");
+  const r = await api("/api/schema/tables");
+  if (!r.ok) {
+    sel.innerHTML = "";
+    $("schema-out").innerHTML = '<div class="hint">' + esc(r.error || "could not load tables") + '</div>';
+    return;
+  }
+  const groups = {};
+  (r.tables || []).forEach(t => { (groups[t.schema] = groups[t.schema] || []).push(t.table); });
+  const prev = sel.value;
+  sel.innerHTML = Object.keys(groups).map(s =>
+    '<optgroup label="' + esc(s) + '">' + groups[s].map(tb =>
+      '<option value="' + esc(s) + "." + esc(tb) + '">' + esc(tb) + '</option>').join("") +
+    '</optgroup>').join("");
+  const opts = [...sel.options].map(o => o.value);
+  const want = opts.includes(prev) ? prev
+    : (opts.includes("synapse.agents") ? "synapse.agents" : (opts[0] || ""));
+  if (want) sel.value = want;
+  await schemaSelect();
+}
+
+function schemaParts() {
+  const v = $("schema-table").value || "";
+  const dot = v.indexOf(".");
+  if (dot < 0) return { schema: "", table: "" };
+  return { schema: v.slice(0, dot), table: v.slice(dot + 1) };
+}
+
+function schemaPk() { const p = SCHEMA.cols.find(c => c.pk); return p ? p.column : null; }
+
+async function schemaSelect() {
+  const { schema, table } = schemaParts();
+  SCHEMA.schema = schema; SCHEMA.table = table;
+  if (!schema || !table) { $("schema-out").innerHTML = ""; return; }
+  const c = await api("/api/schema/columns?schema=" + encodeURIComponent(schema) +
+    "&table=" + encodeURIComponent(table));
+  SCHEMA.cols = c.ok ? (c.columns || []) : [];
+  $("schema-status").textContent = "";
+  schemaRender();
+}
+
+function schemaSetView() {
+  $("schema-view-data").classList.toggle("active", SCHEMA.view === "data");
+  $("schema-view-def").classList.toggle("active", SCHEMA.view === "def");
+}
+
+function schemaRender() {
+  if (SCHEMA.view === "def") schemaRenderDef(); else schemaRenderData();
+}
+
+function schemaRenderDef() {
+  const out = $("schema-out");
+  if (!SCHEMA.cols.length) { out.innerHTML = '<div class="hint">no columns</div>'; return; }
+  out.innerHTML = "<table><tr><th>column</th><th>type</th><th>null</th><th>default</th><th>key</th></tr>" +
+    SCHEMA.cols.map(c => "<tr><td>" + esc(c.column) + "</td><td>" + esc(c.type) + "</td><td>" +
+      (c.nullable ? "yes" : "no") + "</td><td title='" + esc(c.default) + "'>" +
+      esc(c.default || "") + "</td><td>" + (c.pk ? "PK" : "") + "</td></tr>").join("") + "</table>";
+}
+
+async function schemaRenderData() {
+  const out = $("schema-out");
+  const r = await api("/api/schema/rows?schema=" + encodeURIComponent(SCHEMA.schema) +
+    "&table=" + encodeURIComponent(SCHEMA.table) + "&limit=100");
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not read rows") + '</div>'; return; }
+  const rows = r.rows || [];
+  const pk = schemaPk();
+  const cols = SCHEMA.cols.length ? SCHEMA.cols.map(c => c.column) : (rows[0] ? Object.keys(rows[0]) : []);
+  let html = '<div class="small">SELECT * LIMIT ' + esc(r.limit) +
+    (pk ? "" : "  (no primary key: read-only)") + "</div>";
+  html += "<table><tr>" + cols.map(c => "<th>" + esc(c) + (c === pk ? " *" : "") + "</th>").join("") + "</tr>";
+  rows.forEach((row, i) => {
+    html += '<tr data-i="' + i + '">' + cols.map(c => {
+      const v = row[c];
+      const disp = (v === null || v === undefined) ? "" : String(v);
+      const short = disp.length > 80 ? disp.slice(0, 80) + "..." : disp;
+      return '<td class="scell" data-col="' + esc(c) + '" title="' + esc(disp) + '">' + esc(short) + "</td>";
+    }).join("") + "</tr>";
+  });
+  out.innerHTML = html + "</table>";
+  if (pk) {
+    out.querySelectorAll("td.scell").forEach(td => {
+      td.onclick = () => schemaEditCell(td, rows[parseInt(td.closest("tr").dataset.i, 10)], pk);
+    });
+  }
+}
+
+function schemaEditCell(td, row, pk) {
+  if (td.querySelector("textarea")) return;
+  const col = td.dataset.col;
+  const cur = (row[col] === null || row[col] === undefined) ? "" : String(row[col]);
+  td.classList.add("editing");
+  td.innerHTML = "";
+  const ta = document.createElement("textarea");
+  ta.value = cur;
+  ta.rows = Math.min(8, Math.max(1, Math.ceil((cur.length || 1) / 40)));
+  ta.style.width = "100%";
+  const bar = document.createElement("div");
+  bar.className = "row"; bar.style.marginTop = "4px";
+  const save = document.createElement("button");
+  save.className = "primary"; save.textContent = "save";
+  const cancel = document.createElement("button");
+  cancel.textContent = "cancel";
+  bar.appendChild(save); bar.appendChild(cancel);
+  td.appendChild(ta); td.appendChild(bar); ta.focus();
+  cancel.onclick = () => schemaRenderData();
+  save.onclick = async () => {
+    save.disabled = true;
+    const r = await api("/api/schema/update", "POST", {
+      schema: SCHEMA.schema, table: SCHEMA.table, pk_col: pk, pk_val: row[pk], col, val: ta.value });
+    if (r.ok) { $("schema-status").textContent = "updated " + r.updated + " row(s)"; schemaRenderData(); }
+    else { $("schema-status").textContent = r.error || "update failed"; save.disabled = false; }
+  };
+}
+
+function schemaInsertForm() {
+  const out = $("schema-out");
+  if (!SCHEMA.cols.length) { out.innerHTML = '<div class="hint">select a table first</div>'; return; }
+  out.innerHTML = '<div class="small">INSERT INTO ' + esc(SCHEMA.schema) + "." + esc(SCHEMA.table) +
+    " (leave a field blank to use its default)</div>" +
+    SCHEMA.cols.map(c => {
+      const t = c.type || "";
+      const long = t.includes("text") || t.includes("char") || t.includes("json");
+      const meta = '<span class="small">' + esc(t) + (c.pk ? " PK" : "") + (c.nullable ? "" : " NOT NULL") + "</span>";
+      const field = long
+        ? '<textarea data-ins="' + esc(c.column) + '" rows="2"></textarea>'
+        : '<input type="text" data-ins="' + esc(c.column) + '">';
+      return "<label>" + esc(c.column) + " " + meta + "</label>" + field;
+    }).join("") +
+    '<div class="row" style="margin-top:8px"><button class="primary" id="schema-ins-save">Insert row</button>' +
+    '<button id="schema-ins-cancel">cancel</button></div>';
+  $("schema-ins-cancel").onclick = () => schemaRender();
+  $("schema-ins-save").onclick = async () => {
+    const values = {};
+    out.querySelectorAll("[data-ins]").forEach(el => { if (el.value !== "") values[el.dataset.ins] = el.value; });
+    if (!Object.keys(values).length) { $("schema-status").textContent = "fill at least one field"; return; }
+    const r = await api("/api/schema/insert", "POST", { schema: SCHEMA.schema, table: SCHEMA.table, values });
+    if (r.ok) { $("schema-status").textContent = "inserted " + r.inserted + " row(s)"; SCHEMA.view = "data"; schemaSetView(); schemaRenderData(); }
+    else { $("schema-status").textContent = r.error || "insert failed"; }
+  };
+}
+
+$("schema-view-data").onclick = () => { SCHEMA.view = "data"; schemaSetView(); schemaRender(); };
+$("schema-view-def").onclick = () => { SCHEMA.view = "def"; schemaSetView(); schemaRender(); };
+$("schema-add").onclick = () => schemaInsertForm();
+$("schema-refresh").onclick = () => schemaLoadTables();
+$("schema-table").onchange = () => schemaSelect();
+
+// ---- SQL console ----
+
+const SQL_SNIPPETS = [
+  ["run an agent as a function",
+    "SELECT synapse.execute('index_tuner', 'The slow query is: SELECT * FROM perf.orders WHERE customer_id = 12345');"],
+  ["recent executions",
+    "SELECT agent_name, status, tokens_in, tokens_out, duration_ms\nFROM synapse.executions ORDER BY started_at DESC LIMIT 10;"],
+  ["registered agents",
+    "SELECT name, llm_profile_main, tools FROM synapse.agents;"],
+  ["sample rows",
+    "SELECT * FROM perf.orders LIMIT 20;"],
+];
+
+function sqlInitSnippets() {
+  const sel = $("sql-snippets");
+  if (sel.dataset.ready) return;
+  sel.dataset.ready = "1";
+  sel.innerHTML = '<option value="">snippets...</option>' +
+    SQL_SNIPPETS.map((s, i) => '<option value="' + i + '">' + esc(s[0]) + "</option>").join("");
+  sel.onchange = () => {
+    const i = sel.value;
+    if (i !== "") { $("sql-editor").value = SQL_SNIPPETS[parseInt(i, 10)][1]; sel.value = ""; }
+  };
+}
+
+function sqlRenderResult(r) {
+  const out = $("sql-out");
+  if (!r.ok) { banner(out, "bad", r.error || "statement failed"); return; }
+  if (r.columns) {
+    const rows = r.rows || [];
+    if (!rows.length) { banner(out, "info", "0 rows"); return; }
+    let html = "<table><tr>" + r.columns.map(c => "<th>" + esc(c) + "</th>").join("") + "</tr>";
+    rows.forEach(row => {
+      html += "<tr>" + row.map(v => {
+        const disp = (v === null || v === undefined) ? "" : String(v);
+        const short = disp.length > 120 ? disp.slice(0, 120) + "..." : disp;
+        return "<td title='" + esc(disp) + "'>" + esc(short) + "</td>";
+      }).join("") + "</tr>";
+    });
+    out.innerHTML = html + "</table>" +
+      '<div class="small">' + rows.length + " row(s)" + (r.truncated ? " (capped)" : "") + "</div>";
+  } else {
+    banner(out, "ok", (r.command || "ok") + " - " + (r.rows_affected || 0) + " row(s) affected");
+  }
+}
+
+$("sql-run").onclick = async () => {
+  const sql = $("sql-editor").value.trim();
+  if (!sql) { $("sql-status").textContent = "type a statement first"; return; }
+  $("sql-run").disabled = true;
+  $("sql-status").textContent = "running...";
+  $("sql-out").innerHTML = '<div class="hint">running... (synapse.execute calls the LLM and can take a few seconds)</div>';
+  const r = await api("/api/sql", "POST", { sql });
+  $("sql-run").disabled = false;
+  $("sql-status").textContent = r.ok ? "done" : "error";
+  sqlRenderResult(r);
+};
+
+sqlInitSnippets();
 
 // ---- boot ----
 bootstrap(false);
