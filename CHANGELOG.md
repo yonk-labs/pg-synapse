@@ -20,6 +20,13 @@ script.
   could park a backend thread for up to `max_iterations * per-request timeout`.
   A zero budget means "no wall-clock limit". Elapsed runs return
   `OutcomeStatus::TimedOut`.
+- **A statement cancel can stop a runaway agent.** The executor loop consults
+  an optional host interrupt probe (`ExecutionContext::interrupt_check`) at the
+  top of every LLM turn; the pgrx host wires it to the backend's
+  `QueryCancelPending` / `ProcDiePending` flags (read without processing, so no
+  longjmp through the tokio `block_on`). `pg_cancel_backend()` /
+  `statement_timeout` now abort the run between iterations with
+  `ExecutorError::Cancelled`, complementing the wall-clock ceiling above.
 - **Transient LLM failures are retried in production.** The pgrx host now wires
   `RetryConfig::default()` into the kernel build, so a single transient
   5xx / rate-limit / network blip mid-loop no longer aborts the run. Retries
