@@ -132,6 +132,10 @@ impl<'a> LoopHarness<'a> {
         &mut self,
         provider: Arc<dyn LlmProvider>,
     ) -> Result<TurnResult, ExecutorError> {
+        // Between-iteration cancellation: every executor turn passes through
+        // here, so a host interrupt (e.g. a Postgres statement cancel) aborts
+        // the loop before the next LLM call rather than running to the budget.
+        self.check_interrupt()?;
         let req = self.build_request(provider.model_name());
         let mut req_payload = serde_json::json!({
             "iteration": self.iteration,
@@ -232,6 +236,17 @@ impl<'a> LoopHarness<'a> {
             }
             Err(e) => Err(ExecutorError::Tool(e)),
         }
+    }
+
+    /// Consult the host interrupt probe (if any). Returns
+    /// [`ExecutorError::Cancelled`] when the host signals the run should abort.
+    pub(crate) fn check_interrupt(&self) -> Result<(), ExecutorError> {
+        if let Some(check) = &self.ctx.interrupt_check {
+            if let Some(reason) = check() {
+                return Err(ExecutorError::Cancelled(reason));
+            }
+        }
+        Ok(())
     }
 
     /// Check the configured cost cap. Returns an error if `cost_so_far`
@@ -508,6 +523,7 @@ mod tests {
             cost_cap_usd,
             caller_role: Some("pg_synapse_user".into()),
             trace_level: TraceLevel::default(),
+            interrupt_check: None,
         }
     }
 

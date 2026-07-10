@@ -73,6 +73,7 @@ pub struct Runtime {
     embedding_providers: HashMap<String, Arc<dyn EmbeddingProvider>>,
     agents: HashMap<String, AgentRow>,
     default_embedding_profile: Option<String>,
+    interrupt_check: Option<crate::types::InterruptCheck>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -198,6 +199,7 @@ impl Runtime {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_default(),
+            interrupt_check: self.interrupt_check.clone(),
         };
 
         // Enforce the per-agent wall-clock budget here, at the single
@@ -837,6 +839,34 @@ mod tests {
             elapsed < std::time::Duration::from_secs(5),
             "execute should return near the 100ms budget, took {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_aborts_when_interrupt_check_fires() {
+        // The host's interrupt probe signals cancellation; the executor loop
+        // must abort with a Cancelled error rather than calling the LLM and
+        // completing. The probe is consulted at the top of every LLM turn.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.push_text("never reached");
+
+        let check: crate::types::InterruptCheck = Arc::new(|| Some("cancelled by test".into()));
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_interrupt_check(check)
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(agent("a1", "default"))
+            .build()
+            .await
+            .unwrap();
+
+        let err = runtime.execute("a1", "hi").await.unwrap_err();
+        match err {
+            RuntimeError::Executor(crate::error::ExecutorError::Cancelled(reason)) => {
+                assert!(reason.contains("cancelled"), "reason: {reason}");
+            }
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
     }
 
     #[tokio::test]

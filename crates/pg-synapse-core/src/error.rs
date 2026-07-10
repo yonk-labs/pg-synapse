@@ -23,6 +23,12 @@ pub enum ExecutorError {
     #[error("timeout after {0}ms")]
     Timeout(u64),
 
+    /// The execution was cancelled by the host between iterations (e.g. a
+    /// Postgres statement cancel or backend termination). The string carries a
+    /// human-readable reason from the host.
+    #[error("execution cancelled: {0}")]
+    Cancelled(String),
+
     /// The execution would exceed its configured USD cost cap.
     #[error("cost cap ${cap} exceeded at ${spent}")]
     CostCapExceeded {

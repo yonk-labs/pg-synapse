@@ -102,6 +102,7 @@ mod tests {
             cost_cap_usd,
             caller_role: None,
             trace_level: TraceLevel::default(),
+            interrupt_check: None,
         }
     }
 
