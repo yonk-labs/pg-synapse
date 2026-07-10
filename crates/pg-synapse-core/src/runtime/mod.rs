@@ -28,7 +28,7 @@ use crate::plugin::Registry;
 use crate::tool::ToolRegistry;
 use crate::types::{
     AgentRow, EmbeddingProfileRow, EmbeddingVector, ExecutionContext, ExecutorOutcome,
-    LlmProfileRow,
+    LlmProfileRow, OutcomeStatus,
 };
 
 /// Source of agent rows, LLM/embedding profile rows, and secret values.
@@ -73,6 +73,7 @@ pub struct Runtime {
     embedding_providers: HashMap<String, Arc<dyn EmbeddingProvider>>,
     agents: HashMap<String, AgentRow>,
     default_embedding_profile: Option<String>,
+    interrupt_check: Option<crate::types::InterruptCheck>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -198,9 +199,28 @@ impl Runtime {
                 .as_deref()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_default(),
+            interrupt_check: self.interrupt_check.clone(),
         };
 
-        executor.execute(ctx).await.map_err(RuntimeError::from)
+        // Enforce the per-agent wall-clock budget here, at the single
+        // chokepoint every execution passes through. The executor loop itself
+        // only knows about iteration and cost caps; without this wrapper a hung
+        // provider call would park the caller (a Postgres backend thread, in
+        // the pgrx host) for up to `max_iterations * per-request timeout`.
+        // A zero budget means "no wall-clock limit"; guard against the
+        // degenerate `timeout(ZERO)` that would elapse instantly.
+        let budget = ctx.timeout;
+        if budget.is_zero() {
+            return executor.execute(ctx).await.map_err(RuntimeError::from);
+        }
+        match tokio::time::timeout(budget, executor.execute(ctx)).await {
+            Ok(result) => result.map_err(RuntimeError::from),
+            Err(_elapsed) => Ok(ExecutorOutcome {
+                status: OutcomeStatus::TimedOut,
+                duration_ms: budget.as_millis() as u64,
+                ..Default::default()
+            }),
+        }
     }
 
     /// Embed `text` with the named profile (or the default profile if
@@ -788,6 +808,65 @@ mod tests {
 
         let outcome = runtime.execute("a1", "hi").await.unwrap();
         assert_eq!(outcome.output, "fine");
+    }
+
+    #[tokio::test]
+    async fn execute_times_out_when_run_exceeds_wall_clock_budget() {
+        // The provider hangs far longer than the agent's timeout. Execution
+        // must return a TimedOut outcome promptly rather than blocking for the
+        // full provider delay.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.set_response_delay(std::time::Duration::from_secs(30));
+        mock.push_text("never reached");
+
+        let mut a = agent("a1", "default");
+        a.timeout_ms = 100;
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(outcome.status, crate::types::OutcomeStatus::TimedOut);
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "execute should return near the 100ms budget, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_aborts_when_interrupt_check_fires() {
+        // The host's interrupt probe signals cancellation; the executor loop
+        // must abort with a Cancelled error rather than calling the LLM and
+        // completing. The probe is consulted at the top of every LLM turn.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.push_text("never reached");
+
+        let check: crate::types::InterruptCheck = Arc::new(|| Some("cancelled by test".into()));
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_interrupt_check(check)
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(agent("a1", "default"))
+            .build()
+            .await
+            .unwrap();
+
+        let err = runtime.execute("a1", "hi").await.unwrap_err();
+        match err {
+            RuntimeError::Executor(crate::error::ExecutorError::Cancelled(reason)) => {
+                assert!(reason.contains("cancelled"), "reason: {reason}");
+            }
+            other => panic!("expected Cancelled, got {other:?}"),
+        }
     }
 
     #[tokio::test]

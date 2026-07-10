@@ -10,10 +10,12 @@
 //! `Service::call` wrapper or a `tower::Layer` upstream of the executor; the
 //! executor itself only knows about iteration and cost caps.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
+use futures::future::FutureExt;
 
 use crate::error::{ExecutorError, ToolError};
 use crate::llm::LlmProvider;
@@ -22,6 +24,18 @@ use crate::types::{
     CompletionRequest, CompletionResponse, EventKind, ExecutionContext, ExecutionEvent,
     ExecutorOutcome, Message, OutcomeStatus, Role, ToolCall, ToolCtx, ToolDefinition, ToolOutput,
 };
+
+/// Best-effort extraction of a human-readable message from a caught panic
+/// payload (`Box<dyn Any + Send>`), which is a `&str` or `String` in practice.
+fn panic_reason(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_owned()
+    }
+}
 
 /// Result of one LLM turn.
 pub(crate) enum TurnResult {
@@ -118,6 +132,10 @@ impl<'a> LoopHarness<'a> {
         &mut self,
         provider: Arc<dyn LlmProvider>,
     ) -> Result<TurnResult, ExecutorError> {
+        // Between-iteration cancellation: every executor turn passes through
+        // here, so a host interrupt (e.g. a Postgres statement cancel) aborts
+        // the loop before the next LLM call rather than running to the budget.
+        self.check_interrupt()?;
         let req = self.build_request(provider.model_name());
         let mut req_payload = serde_json::json!({
             "iteration": self.iteration,
@@ -186,7 +204,22 @@ impl<'a> LoopHarness<'a> {
         }
         self.record_event(EventKind::ToolStart, start_payload);
 
-        let result = tool.run(tc.args.clone(), &tool_ctx).await;
+        // Contain a panicking plugin: a tool that hits an `unwrap`/`panic!`
+        // must degrade to a tool-error fed back to the model, not unwind out
+        // of the executor (which, in the pgrx host, would abort the whole
+        // transaction). SQL tools already convert Postgres `ereport` via
+        // `PgTryBuilder` upstream, so any unwind reaching here is a pure-Rust
+        // panic that is safe to catch and turn into a typed error.
+        let result = match AssertUnwindSafe(tool.run(tc.args.clone(), &tool_ctx))
+            .catch_unwind()
+            .await
+        {
+            Ok(r) => r,
+            Err(panic) => Err(ToolError::Execution {
+                name: tc.name.clone(),
+                reason: format!("tool panicked: {}", panic_reason(&panic)),
+            }),
+        };
         match result {
             Ok(output) => {
                 let mut end_payload =
@@ -203,6 +236,17 @@ impl<'a> LoopHarness<'a> {
             }
             Err(e) => Err(ExecutorError::Tool(e)),
         }
+    }
+
+    /// Consult the host interrupt probe (if any). Returns
+    /// [`ExecutorError::Cancelled`] when the host signals the run should abort.
+    pub(crate) fn check_interrupt(&self) -> Result<(), ExecutorError> {
+        if let Some(check) = &self.ctx.interrupt_check {
+            if let Some(reason) = check() {
+                return Err(ExecutorError::Cancelled(reason));
+            }
+        }
+        Ok(())
     }
 
     /// Check the configured cost cap. Returns an error if `cost_so_far`
@@ -479,6 +523,7 @@ mod tests {
             cost_cap_usd,
             caller_role: Some("pg_synapse_user".into()),
             trace_level: TraceLevel::default(),
+            interrupt_check: None,
         }
     }
 

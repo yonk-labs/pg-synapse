@@ -119,6 +119,7 @@ mod tests {
             cost_cap_usd,
             caller_role: None,
             trace_level: TraceLevel::default(),
+            interrupt_check: None,
         }
     }
 
@@ -229,6 +230,55 @@ mod tests {
             err_msg.is_some(),
             "expected a Tool-role error message in the trace"
         );
+    }
+
+    /// A tool that panics inside `run`. Models a buggy plugin that hits an
+    /// `unwrap`/`panic!` on unexpected input.
+    struct PanicTool {
+        schema: ToolSchema,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::Tool for PanicTool {
+        fn name(&self) -> &str {
+            "boom"
+        }
+        fn schema(&self) -> &ToolSchema {
+            &self.schema
+        }
+        async fn run(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &crate::types::ToolCtx,
+        ) -> Result<ToolOutput, ToolError> {
+            panic!("simulated plugin bug");
+        }
+    }
+
+    #[tokio::test]
+    async fn panicking_tool_is_contained_not_fatal() {
+        // Turn 1: model calls a tool that panics.
+        // Turn 2: model (having seen the error fed back) emits final text.
+        // The panic must NOT unwind out of the executor (which, in the pgrx
+        // host, would abort the whole transaction).
+        let mock = MockLlmProvider::new("m");
+        mock.push_tool_call("c1", "boom", serde_json::json!({}));
+        mock.push_text("recovered after the tool blew up");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let mut reg = ToolRegistry::new();
+        reg.add(PanicTool {
+            schema: ToolSchema::default(),
+        });
+        let ctx = ctx_with(llm, reg, 10, None);
+
+        let outcome = ConversationExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::Completed);
+        assert_eq!(outcome.output, "recovered after the tool blew up");
+        let fed_back = outcome.messages.iter().any(|m| {
+            m.role == crate::types::Role::Tool
+                && m.content.as_deref().is_some_and(|c| c.contains("ERROR:"))
+        });
+        assert!(fed_back, "panic should be fed back as a tool error message");
     }
 
     #[tokio::test]

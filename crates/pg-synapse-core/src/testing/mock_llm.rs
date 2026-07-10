@@ -67,6 +67,7 @@ pub struct MockLlmProvider {
     queue: Mutex<VecDeque<MockResponse>>,
     model: String,
     capabilities: Mutex<ProviderCapabilities>,
+    response_delay: Mutex<std::time::Duration>,
 }
 
 impl MockLlmProvider {
@@ -79,12 +80,20 @@ impl MockLlmProvider {
             queue: Mutex::new(VecDeque::new()),
             model: model.into(),
             capabilities: Mutex::new(ProviderCapabilities::default()),
+            response_delay: Mutex::new(std::time::Duration::ZERO),
         }
     }
 
     /// Replace the capabilities this mock advertises.
     pub fn set_capabilities(&self, caps: ProviderCapabilities) -> &Self {
         *self.capabilities.lock().unwrap() = caps;
+        self
+    }
+
+    /// Make every [`MockLlmProvider::complete`] call sleep for `delay` before
+    /// returning. Used to exercise wall-clock timeout and cancellation paths.
+    pub fn set_response_delay(&self, delay: std::time::Duration) -> &Self {
+        *self.response_delay.lock().unwrap() = delay;
         self
     }
 
@@ -162,6 +171,10 @@ impl MockLlmProvider {
 #[async_trait]
 impl LlmProvider for MockLlmProvider {
     async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
+        let delay = *self.response_delay.lock().unwrap();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         let next = self.queue.lock().unwrap().pop_front();
         match next {
             Some(MockResponse::Text(text)) => Ok(CompletionResponse {

@@ -32,6 +32,7 @@ pub struct RuntimeBuilder {
     inline_agents: Vec<AgentRow>,
     inline_secrets: HashMap<String, String>,
     retry_config: Option<RetryConfig>,
+    interrupt_check: Option<crate::types::InterruptCheck>,
 }
 
 impl RuntimeBuilder {
@@ -48,6 +49,7 @@ impl RuntimeBuilder {
             inline_agents: vec![],
             inline_secrets: HashMap::new(),
             retry_config: None,
+            interrupt_check: None,
         }
     }
 
@@ -105,6 +107,15 @@ impl RuntimeBuilder {
     /// caller explicitly supplies a config here.
     pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
         self.retry_config = Some(config);
+        self
+    }
+
+    /// Supply a host cancellation probe, checked by the executor loop between
+    /// LLM turns. The pgrx host wires this to the backend's pending-interrupt
+    /// flags so a statement cancel can stop a runaway agent. Threaded into
+    /// every [`crate::types::ExecutionContext`] this runtime builds.
+    pub fn with_interrupt_check(mut self, check: crate::types::InterruptCheck) -> Self {
+        self.interrupt_check = Some(check);
         self
     }
 
@@ -181,6 +192,7 @@ impl RuntimeBuilder {
             embedding_providers,
             agents: agent_index,
             default_embedding_profile: self.default_embedding_profile,
+            interrupt_check: self.interrupt_check,
         })
     }
 }

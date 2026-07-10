@@ -6,11 +6,15 @@
 //! executive brief. It is a documented SHIM: real lede integration is deferred
 //! to v0.2. Two code paths:
 //!
-//! 1. **lede CLI present on PATH:** shells to `lede --max-tokens <n>`, feeds
+//! 1. **lede CLI, opt-in:** when `PG_SYNAPSE_LEDE_CLI` is set to `1` or `true`
+//!    AND a `lede` binary is on PATH, shells to `lede --max-chars <n>`, feeds
 //!    `text` on stdin, captures stdout. Subprocess errors are wrapped in
-//!    [`ToolError::Execution`].
+//!    [`ToolError::Execution`]. The char budget is estimated from the token
+//!    budget as `max_tokens * 4`. This path is opt-in because `lede`'s CLI is
+//!    an external contract that can drift; auto-detecting it made behavior
+//!    depend on host state and broke hermetic tests.
 //!
-//! 2. **No lede CLI (typical dev/test):** deterministic extractive compression
+//! 2. **Default (shim):** deterministic extractive compression
 //!    in pure Rust. Sentences are split on `. ! ?` boundaries, scored by
 //!    length-normalized keyword salience (words >4 chars that appear more than
 //!    once in the full text), then selected greedily in original order until
@@ -263,19 +267,26 @@ impl Tool for LedeCompressTool {
 
         let input_chars = text.len();
 
-        // Check if lede CLI is available.
-        let lede_on_path = std::process::Command::new("which")
+        // The CLI path is opt-in: `lede`'s CLI is an external contract that can
+        // drift, so auto-detecting it would make behavior depend on host state.
+        // Only use it when explicitly enabled AND the binary is present.
+        let use_cli = matches!(
+            std::env::var("PG_SYNAPSE_LEDE_CLI").as_deref(),
+            Ok("1") | Ok("true")
+        ) && std::process::Command::new("which")
             .arg("lede")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-        if lede_on_path {
-            // Shell to lede CLI.
+        if use_cli {
+            // Shell to lede CLI. `lede` takes a character budget, not tokens;
+            // estimate chars from the token budget (~4 chars per token).
             use std::io::Write;
+            let max_chars = max_tokens.saturating_mul(4);
             let mut child = std::process::Command::new("lede")
-                .arg("--max-tokens")
-                .arg(max_tokens.to_string())
+                .arg("--max-chars")
+                .arg(max_chars.to_string())
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())

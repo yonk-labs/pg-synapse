@@ -97,6 +97,33 @@ pub fn rebuild_kernel() {
     }
 }
 
+/// Report a pending Postgres cancel/terminate so the executor loop can abort
+/// between LLM turns. Reads the interrupt flags without processing them (no
+/// longjmp through the tokio `block_on`): returning `Some` aborts the run
+/// cleanly via `ExecutorError::Cancelled`, and Postgres services the interrupt
+/// itself at its next `CHECK_FOR_INTERRUPTS`. Runs on the backend thread, where
+/// the current-thread runtime drives the agent future.
+fn backend_interrupt() -> Option<String> {
+    #[allow(unsafe_code)]
+    // SAFETY: QueryCancelPending / ProcDiePending are sig_atomic_t globals set
+    // by Postgres signal handlers. We read (copy) them on the backend thread,
+    // the same access pattern as pgrx's own `interrupt_pending()`. No reference
+    // to the mutable static is taken.
+    let (cancel, die) = unsafe {
+        (
+            pgrx::pg_sys::QueryCancelPending != 0,
+            pgrx::pg_sys::ProcDiePending != 0,
+        )
+    };
+    if die {
+        Some("backend termination requested".to_owned())
+    } else if cancel {
+        Some("statement cancelled".to_owned())
+    } else {
+        None
+    }
+}
+
 async fn build_kernel_from_db() -> Result<Kernel, String> {
     use pg_synapse_core::Runtime;
 
@@ -104,7 +131,17 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     let spi_exec: Arc<dyn pg_synapse_tools_sql::SqlExecutor> =
         Arc::new(crate::spi_executor::SpiSqlExecutor);
 
+    // Wrap every LLM provider in the jittered-backoff retry layer so a single
+    // transient 5xx / rate-limit / network blip mid-loop does not abort the
+    // run. Retries are bounded by the per-agent wall-clock budget enforced in
+    // the kernel, so they cannot extend an execution past its timeout.
+    // TODO: expose max_retries/base_delay as GUCs to tune or disable (NOTES.md).
     let builder = Runtime::builder()
+        .with_retry_config(pg_synapse_core::RetryConfig::default())
+        // Let a Postgres statement cancel / backend terminate stop a runaway
+        // agent between LLM turns (the wall-clock timeout is the hard ceiling;
+        // this is the responsive path before it).
+        .with_interrupt_check(std::sync::Arc::new(backend_interrupt))
         .with_plugin(pg_synapse_provider_openai::OpenAiProviderFactory)
         .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec));
 
