@@ -298,11 +298,14 @@ unit tests were added to `plugins/pg-synapse-tools-fs/tests/fs.rs`.
 
 `lede_compress` is a documented shim tool. Two code paths:
 
-1. **lede CLI on PATH:** spawns `lede --max-tokens <n>`, feeds `text` on stdin,
-   captures stdout. Wrapped in `ToolError::Execution` on non-zero exit. This is
-   the only subprocess in the crate; `#![forbid(unsafe_code)]` holds.
+1. **lede CLI (opt-in):** when `PG_SYNAPSE_LEDE_CLI` is `1`/`true` and a `lede`
+   binary is on PATH, spawns `lede --max-chars <n>` (char budget estimated as
+   `max_tokens * 4`), feeds `text` on stdin, captures stdout. Wrapped in
+   `ToolError::Execution` on non-zero exit. This is the only subprocess in the
+   crate; `#![forbid(unsafe_code)]` holds. Opt-in because the external CLI can
+   drift; auto-detection would make behavior host-dependent.
 
-2. **Extractive shim (no lede CLI):** splits text on `. ! ?` boundaries,
+2. **Extractive shim (default):** splits text on `. ! ?` boundaries,
    scores each sentence by length-normalized keyword salience (words >4 chars
    with frequency >1 in the full text), selects greedily in score order until
    the approximate token budget (words * 1.3) is reached, returns sentences in
