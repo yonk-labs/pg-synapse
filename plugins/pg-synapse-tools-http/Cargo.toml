@@ -16,6 +16,7 @@ serde        = { workspace = true }
 serde_json   = { workspace = true }
 schemars     = { workspace = true }
 reqwest      = { workspace = true }
+tokio        = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
