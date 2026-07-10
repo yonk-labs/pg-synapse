@@ -91,6 +91,60 @@
   .pline { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
   .pline.pass { color: var(--green); }
   .pline.fail { color: var(--red); }
+
+  /* ---- architecture visualization ---- */
+  #p-arch svg { width: 100%; height: auto; display: block; margin-top: 4px; }
+  .viz-boundary { fill: rgba(78,161,255,.05); stroke: var(--border); stroke-width: 1.5;
+                  stroke-dasharray: 3 5; }
+  .viz-boxtitle { fill: var(--muted); font-size: 14px; font-weight: 700; letter-spacing: .08em;
+                  text-transform: uppercase; }
+  .viz-node { fill: var(--panel2); stroke: var(--border); stroke-width: 1.5; }
+  .viz-nodeg.hot .viz-node { stroke: var(--accent); stroke-width: 2.5;
+                             filter: drop-shadow(0 0 7px rgba(78,161,255,.6)); }
+  .viz-title { fill: var(--text); font-size: 15px; font-weight: 600; text-anchor: middle; }
+  .viz-sub { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); text-anchor: middle; }
+  .viz-iter { fill: var(--accent); font-size: 11.5px; font-family: var(--mono); text-anchor: middle; }
+  .viz-edge { fill: none; stroke: #45526b; stroke-width: 2; marker-end: url(#viz-arrow); }
+  .viz-edge.faint { opacity: .38; stroke-dasharray: 5 6; }
+  .viz-edge.faint.hot { opacity: 1; stroke: var(--accent); stroke-dasharray: none; }
+  .viz-edge.ghost { opacity: 0; transition: opacity .25s; }
+  .viz-edge.ghost.on { opacity: 1; }
+  .viz-edge.flowing { stroke: var(--accent); stroke-dasharray: 7 9;
+                      animation: vizflow .8s linear infinite; }
+  @keyframes vizflow { to { stroke-dashoffset: -32; } }
+  .viz-elabel { fill: var(--muted); font-size: 10.5px; font-family: var(--mono); text-anchor: middle; }
+  .viz-hud { fill: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  .viz-cap { fill: var(--text); }
+  .viz-ring { fill: none; stroke: #45526b; stroke-width: 2; stroke-dasharray: 4 7; }
+  .viz-ring-arrow { fill: #45526b; }
+  .viz-ring.spin { animation: vizspin 1s linear infinite; }
+  @keyframes vizspin { to { stroke-dashoffset: -22; } }
+  .viz-plabel { font-size: 11px; font-weight: 600; font-family: var(--mono);
+                paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+  /* guardrail kill sequence */
+  .viz-clock { fill: none; stroke: var(--red); stroke-width: 3.5; stroke-dasharray: 352;
+               transform-box: fill-box; transform-origin: center; transform: rotate(-90deg); }
+  .viz-edge.severed { stroke: var(--red); stroke-dasharray: 12 14; marker-end: none; animation: none; }
+  #viz.killed .viz-edge:not(.severed), #viz.killed .viz-nodeg:not(#n-kernel),
+  #viz.killed .viz-elabel, #viz.killed .viz-boundary, #viz.killed .viz-boxtitle { opacity: .3; }
+  #viz.killed #n-kernel { opacity: .8; }
+  .viz-nodeg.flash .viz-node { stroke: var(--red); stroke-width: 3;
+                               filter: drop-shadow(0 0 10px rgba(248,81,73,.8)); }
+  .viz-shake { animation: vizshake .42s linear; transform-box: fill-box; transform-origin: center; }
+  @keyframes vizshake { 10% { transform: translate(-5px,2px); } 30% { transform: translate(5px,-3px); }
+    50% { transform: translate(-4px,-2px); } 70% { transform: translate(4px,3px); }
+    90% { transform: translate(-2px,1px); } }
+  .viz-shake-panel { animation: vizpshake .36s linear; }
+  @keyframes vizpshake { 20% { transform: translate(-4px,1px); } 40% { transform: translate(4px,-2px); }
+    60% { transform: translate(-3px,2px); } 80% { transform: translate(3px,-1px); } }
+  #viz-banner { display: none; }
+  #viz-banner.show { display: block; animation: vizslam .28s cubic-bezier(.2,1.4,.4,1);
+                     transform-box: fill-box; transform-origin: center; }
+  @keyframes vizslam { from { transform: scale(1.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  #viz-banner rect { fill: rgba(13,17,23,.93); stroke-width: 3; }
+  #viz-banner-title { font-family: var(--mono); font-size: 27px; font-weight: 800;
+                      letter-spacing: .04em; text-anchor: middle; }
+  #viz-banner-sub { font-family: var(--mono); font-size: 13.5px; fill: var(--text); text-anchor: middle; }
 </style>
 </head>
 <body>
@@ -174,6 +228,121 @@
 
 </div>
 <div id="right">
+
+  <div class="panel" id="p-arch">
+    <div class="row" style="justify-content:space-between;align-items:baseline">
+      <h2>The data path</h2>
+      <button id="btn-viz-replay" disabled>Replay last run</button>
+    </div>
+    <p class="sub">Live map of a run: SQL client to the kernel agent loop, round trips to the
+      LLM, tools reading and writing your tables, audit trail persisted. Completed runs replay
+      their real message trace; guardrail terminations play the kill sequence.</p>
+    <svg id="viz" viewBox="0 0 960 420" role="img" aria-label="pg_synapse architecture diagram">
+      <defs>
+        <marker id="viz-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5"
+                markerHeight="6.5" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#556275"></path>
+        </marker>
+      </defs>
+
+      <!-- HUD -->
+      <text id="viz-step" class="viz-hud" x="16" y="30"></text>
+      <text id="viz-caption" class="viz-hud viz-cap" x="16" y="50"></text>
+      <text id="viz-tokens" class="viz-hud" x="944" y="30" text-anchor="end">tokens 0 in / 0 out</text>
+      <text id="viz-cost" class="viz-hud" x="944" y="50" text-anchor="end">cost $0.000000</text>
+      <g id="viz-meter" style="display:none">
+        <text id="viz-meter-label" class="viz-hud" x="944" y="72" text-anchor="end">cost cap</text>
+        <rect x="784" y="78" width="160" height="9" rx="4" fill="none" stroke="#45526b"></rect>
+        <rect id="viz-meter-fill" x="784" y="78" width="0" height="9" rx="4" fill="var(--orange)"></rect>
+      </g>
+
+      <!-- postgres boundary -->
+      <rect class="viz-boundary" x="212" y="66" width="470" height="340" rx="12"></rect>
+      <text class="viz-boxtitle" x="228" y="382">Postgres</text>
+      <text class="viz-sub" x="228" y="398" style="text-anchor:start">pg_synapse extension</text>
+
+      <!-- edges -->
+      <g id="viz-edges">
+        <path id="e-insert" class="viz-edge faint" d="M 90 186 C 100 96, 300 70, 506 120"></path>
+        <path id="e-queue" class="viz-edge ghost" d="M 566 180 L 566 292"></path>
+        <path id="e-cancel" class="viz-edge ghost" d="M 164 348 L 236 322 L 224 314 L 302 280"></path>
+        <path id="e-exec" class="viz-edge" d="M 164 214 L 288 214"></path>
+        <path id="e-result" class="viz-edge" d="M 288 258 L 164 258"></path>
+        <path id="e-llm-req" class="viz-edge" d="M 412 214 L 764 214"></path>
+        <path id="e-llm-resp" class="viz-edge" d="M 764 258 L 412 258"></path>
+        <path id="e-tool-call" class="viz-edge" d="M 397 189 C 440 158, 468 150, 506 150"></path>
+        <path id="e-tool-rows" class="viz-edge" d="M 506 172 C 465 185, 438 194, 407 202"></path>
+        <path id="e-trace" class="viz-edge" d="M 397 283 C 440 306, 466 316, 506 320"></path>
+        <path id="e-other" class="viz-edge faint" d="M 370 299 C 400 400, 620 412, 764 348"></path>
+        <path id="p-ring" d="M 350 192 a 44 44 0 1 1 -0.01 0" fill="none" stroke="none"></path>
+      </g>
+
+      <!-- edge labels -->
+      <text class="viz-elabel" x="226" y="205">execute(agent, input)</text>
+      <text class="viz-elabel" x="226" y="273">final result</text>
+      <text class="viz-elabel" x="588" y="205">completion request</text>
+      <text class="viz-elabel" x="588" y="273">assistant turn</text>
+      <text class="viz-elabel" x="440" y="147">sql_query / sql_exec</text>
+      <text class="viz-elabel" x="472" y="207">rows</text>
+      <text class="viz-elabel" x="446" y="322">messages + traces</text>
+      <text class="viz-elabel" x="310" y="76">INSERT + trigger (event demos)</text>
+
+      <!-- nodes -->
+      <g id="n-client" class="viz-nodeg">
+        <rect class="viz-node" x="16" y="190" width="148" height="92" rx="10"></rect>
+        <text class="viz-title" x="90" y="216">SQL client</text>
+        <text class="viz-sub" x="90" y="236">SELECT synapse.</text>
+        <text class="viz-sub" x="90" y="250">execute(agent, input)</text>
+      </g>
+      <g id="n-kernel" class="viz-nodeg">
+        <circle class="viz-node" cx="350" cy="236" r="66"></circle>
+        <circle id="viz-clock" class="viz-clock" cx="350" cy="236" r="56" style="display:none"></circle>
+        <circle id="viz-ring" class="viz-ring" cx="350" cy="236" r="44"></circle>
+        <polygon class="viz-ring-arrow" points="346,186 346,198 360,192"></polygon>
+        <text class="viz-title" x="350" y="226">agent loop</text>
+        <text class="viz-sub" x="350" y="242">kernel runtime</text>
+        <text id="viz-iter" class="viz-iter" x="350" y="260"></text>
+      </g>
+      <g id="n-tables" class="viz-nodeg">
+        <rect class="viz-node" x="506" y="96" width="160" height="84" rx="10"></rect>
+        <text class="viz-title" x="586" y="124">your tables</text>
+        <text class="viz-sub" x="586" y="144">demo.*, perf.*,</text>
+        <text class="viz-sub" x="586" y="158">etl.*, support.*</text>
+      </g>
+      <g id="n-trace" class="viz-nodeg">
+        <rect class="viz-node" x="506" y="292" width="160" height="84" rx="10"></rect>
+        <text class="viz-title" x="586" y="320">audit + queue</text>
+        <text class="viz-sub" x="586" y="340">executions, messages,</text>
+        <text class="viz-sub" x="586" y="354">traces, agent_queue</text>
+      </g>
+      <g id="n-llm" class="viz-nodeg">
+        <rect class="viz-node" x="764" y="182" width="180" height="104" rx="10"></rect>
+        <text class="viz-title" x="854" y="212">LLM endpoint</text>
+        <text id="viz-llm-model" class="viz-sub" x="854" y="234">OpenAI-compatible</text>
+        <text class="viz-sub" x="854" y="250">external, yours</text>
+      </g>
+      <g id="n-other" class="viz-nodeg">
+        <rect class="viz-node" x="764" y="316" width="180" height="64" rx="10"></rect>
+        <text class="viz-title" x="854" y="340">other tools</text>
+        <text class="viz-sub" x="854" y="360">http_*, calculator, time</text>
+      </g>
+      <g id="n-dba" class="viz-nodeg" style="display:none">
+        <rect class="viz-node" x="16" y="322" width="148" height="60" rx="10"></rect>
+        <text class="viz-title" x="90" y="346" style="font-size:13px">another session</text>
+        <text class="viz-sub" x="90" y="364">pg_cancel_backend()</text>
+      </g>
+
+      <!-- animated packets land here -->
+      <g id="viz-packets"></g>
+
+      <!-- guardrail banner -->
+      <g id="viz-banner">
+        <rect id="viz-banner-box" x="190" y="168" width="580" height="104" rx="14"></rect>
+        <text id="viz-banner-title" x="480" y="214"></text>
+        <text id="viz-banner-sub" x="480" y="248"></text>
+      </g>
+    </svg>
+  </div>
 
   <div class="panel" id="p-run">
     <h2>4. Run an agent loop</h2>
@@ -295,6 +464,430 @@ function pretty(v) {
 }
 function banner(el, cls, text) { el.innerHTML = '<div class="banner ' + cls + '">' + esc(text) + '</div>'; }
 
+// ---- architecture visualization ----
+// A timed replay of a completed run's real trace (synapse.messages), animated
+// as packets moving along the SVG edges. Guardrail terminations (cost cap,
+// timeout, pg_cancel_backend) play a distinct kill sequence instead.
+
+const VIZ = { token: 0, lastRun: null, inlineAnim: null };
+const VIZ_SQL_TOOLS = { sql_query: "read", sql_exec: "write" };
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function vizSleep(ms, token) {
+  return new Promise(res => setTimeout(() => res(token === VIZ.token), ms));
+}
+function vizCaption(text) { $("viz-caption").textContent = text || ""; }
+function vizStep(i, n) { $("viz-step").textContent = i ? ("step " + i + " / " + n) : ""; }
+function vizHud(tin, tout, cost) {
+  $("viz-tokens").textContent = "tokens " + tin + " in / " + tout + " out";
+  $("viz-cost").textContent = cost == null ? "cost n/a" : ("cost $" + Number(cost).toFixed(6));
+}
+function vizIter(n) { $("viz-iter").textContent = n ? ("iteration " + n) : ""; }
+function vizHot(ids, on) {
+  for (const id of ids || []) { const el = $(id); if (el) el.classList.toggle("hot", on); }
+}
+function vizClearHot() {
+  document.querySelectorAll("#p-arch .hot").forEach(el => el.classList.remove("hot"));
+}
+function vizGhost(id, on) { const el = $(id); if (el) el.classList.toggle("on", on); }
+function vizFlow(on) {
+  for (const id of ["e-exec", "e-llm-req", "e-llm-resp"]) $(id).classList.toggle("flowing", on);
+  $("n-kernel").classList.toggle("hot", on);
+  $("viz-ring").classList.toggle("spin", on);
+}
+
+function vizReset() {
+  VIZ.token++;
+  $("viz-packets").innerHTML = "";
+  vizClearHot();
+  vizFlow(false);
+  vizGhost("e-queue", false);
+  vizGhost("e-cancel", false);
+  $("e-insert").classList.remove("hot");
+  // kill-sequence leftovers
+  $("viz").classList.remove("killed");
+  $("viz-banner").classList.remove("show");
+  $("n-kernel").classList.remove("flash", "viz-shake");
+  $("p-arch").classList.remove("viz-shake-panel");
+  for (const id of ["e-llm-req", "e-llm-resp"]) $(id).classList.remove("severed");
+  $("viz-meter").style.display = "none";
+  $("viz-meter-fill").setAttribute("width", 0);
+  $("viz-clock").style.display = "none";
+  $("viz-clock").setAttribute("stroke-dashoffset", 0);
+  $("n-dba").style.display = "none";
+  vizStep(0, 0); vizCaption(""); vizIter(0); vizHud(0, 0, 0);
+}
+
+// Animate a packet (dot + optional label) along an SVG path. Resolves with the
+// final point on success, or false if a newer animation superseded this one.
+// opts: color, label, reverse, dur, r, stopFrac (sever mid-flight at fraction).
+function vizPacket(pathId, opts) {
+  const token = VIZ.token;
+  return new Promise(resolve => {
+    const path = $(pathId);
+    if (!path || typeof path.getTotalLength !== "function") { resolve(false); return; }
+    const len = path.getTotalLength();
+    const g = $("viz-packets");
+    const dot = document.createElementNS(SVG_NS, "circle");
+    dot.setAttribute("r", opts.r || 7);
+    dot.setAttribute("fill", opts.color || "var(--accent)");
+    g.appendChild(dot);
+    let label = null;
+    if (opts.label) {
+      label = document.createElementNS(SVG_NS, "text");
+      label.setAttribute("class", "viz-plabel");
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("fill", opts.color || "var(--accent)");
+      label.textContent = opts.label;
+      g.appendChild(label);
+    }
+    const dur = opts.dur || 650;
+    const stopFrac = opts.stopFrac || 1;
+    const t0 = performance.now();
+    let last = path.getPointAtLength(opts.reverse ? len : 0);
+    // Position at the path start immediately so the packet never flashes at
+    // the SVG origin before the first animation frame.
+    dot.setAttribute("cx", last.x); dot.setAttribute("cy", last.y);
+    if (label) { label.setAttribute("x", last.x); label.setAttribute("y", last.y - 12); }
+    function frame(now) {
+      if (token !== VIZ.token) { dot.remove(); if (label) label.remove(); resolve(false); return; }
+      const t = Math.min(1, (now - t0) / dur);
+      const e = (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2) * stopFrac;
+      last = path.getPointAtLength((opts.reverse ? 1 - e : e) * len);
+      dot.setAttribute("cx", last.x); dot.setAttribute("cy", last.y);
+      if (label) { label.setAttribute("x", last.x); label.setAttribute("y", last.y - 12); }
+      if (t < 1) { requestAnimationFrame(frame); return; }
+      dot.remove(); if (label) label.remove();
+      resolve({ x: last.x, y: last.y });
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+// Expanding shockwave plus a red X remnant that stays on screen.
+function vizBurst(x, y) {
+  const g = $("viz-packets");
+  const ring = document.createElementNS(SVG_NS, "circle");
+  ring.setAttribute("cx", x); ring.setAttribute("cy", y); ring.setAttribute("r", 7);
+  ring.setAttribute("fill", "none"); ring.setAttribute("stroke", "var(--red)");
+  ring.setAttribute("stroke-width", 3);
+  g.appendChild(ring);
+  const t0 = performance.now(), dur = 380;
+  function frame(now) {
+    const t = Math.min(1, (now - t0) / dur);
+    ring.setAttribute("r", 7 + 24 * t);
+    ring.setAttribute("opacity", String(1 - t));
+    if (t < 1) requestAnimationFrame(frame); else ring.remove();
+  }
+  requestAnimationFrame(frame);
+  const cross = document.createElementNS(SVG_NS, "path");
+  cross.setAttribute("d", "M " + (x - 8) + " " + (y - 8) + " L " + (x + 8) + " " + (y + 8) +
+                          " M " + (x + 8) + " " + (y - 8) + " L " + (x - 8) + " " + (y + 8));
+  cross.setAttribute("stroke", "var(--red)"); cross.setAttribute("stroke-width", 3.5);
+  cross.setAttribute("stroke-linecap", "round"); cross.setAttribute("fill", "none");
+  g.appendChild(cross);
+}
+
+function vizToolStep(name) {
+  const rw = VIZ_SQL_TOOLS[name];
+  if (rw) {
+    const write = rw === "write";
+    return { path: "e-tool-call", color: write ? "var(--orange)" : "var(--accent)", label: name,
+      hot: ["n-kernel", "n-tables"],
+      caption: "kernel runs " + name + ": " + (write ? "WRITE into" : "READ from") + " your tables" };
+  }
+  return { path: "e-other", color: "var(--yellow)", label: name, hot: ["n-kernel", "n-other"],
+    caption: "kernel calls tool '" + name + "'" };
+}
+
+function vizBuildSteps(env, messages) {
+  const status = env.status || "unknown";
+  const steps = [{ path: "e-exec", color: "var(--accent)", label: "execute()",
+    hot: ["n-client", "n-kernel"], caption: "SQL client calls synapse.execute(agent, input)" }];
+  let iter = 0;
+  if (messages && messages.length) {
+    for (const m of messages) {
+      if (m.role === "assistant") {
+        iter++;
+        steps.push({ ring: true, n: iter, caption: "kernel loop, iteration " + iter });
+        steps.push({ path: "e-llm-req", color: "var(--accent)", label: "prompt",
+          hot: ["n-kernel", "n-llm"],
+          caption: "iteration " + iter + ": completion request to the LLM" });
+        if (m.tool_name) {
+          steps.push({ path: "e-llm-resp", color: "var(--yellow)", label: "call " + m.tool_name,
+            tokens: true, hot: ["n-llm", "n-kernel"],
+            caption: "LLM decides: call tool '" + m.tool_name + "'" });
+          steps.push(vizToolStep(m.tool_name));
+        } else {
+          steps.push({ path: "e-llm-resp", color: "var(--green)", label: "final answer",
+            tokens: true, hot: ["n-llm", "n-kernel"],
+            caption: "LLM returns the final answer, the loop exits" });
+        }
+      } else if (m.role === "tool") {
+        if (VIZ_SQL_TOOLS[m.tool_name]) {
+          steps.push({ path: "e-tool-rows", color: "var(--green)", label: "rows",
+            hot: ["n-tables", "n-kernel"],
+            caption: "'" + m.tool_name + "' result goes back into the loop" });
+        } else {
+          steps.push({ path: "e-other", reverse: true, color: "var(--green)", label: "result",
+            hot: ["n-other", "n-kernel"],
+            caption: "'" + (m.tool_name || "tool") + "' result goes back into the loop" });
+        }
+      }
+    }
+  } else {
+    // No persisted message trace: reconstruct from the envelope's tool_calls.
+    steps.push({ ring: true, n: 1, caption: "kernel loop running" });
+    steps.push({ path: "e-llm-req", color: "var(--accent)", label: "prompt",
+      hot: ["n-kernel", "n-llm"], caption: "completion request to the LLM" });
+    for (const tc of env.tool_calls || []) {
+      const name = (tc && (tc.name || tc.tool)) || String(tc);
+      steps.push({ path: "e-llm-resp", color: "var(--yellow)", label: "call " + name, tokens: true,
+        hot: ["n-llm", "n-kernel"], caption: "LLM decides: call tool '" + name + "'" });
+      const ts = vizToolStep(name);
+      steps.push(ts);
+      steps.push(VIZ_SQL_TOOLS[name]
+        ? { path: "e-tool-rows", color: "var(--green)", label: "rows", hot: ["n-tables", "n-kernel"],
+            caption: "'" + name + "' result goes back into the loop" }
+        : { path: "e-other", reverse: true, color: "var(--green)", label: "result",
+            hot: ["n-other", "n-kernel"], caption: "'" + name + "' result goes back into the loop" });
+      steps.push({ path: "e-llm-req", color: "var(--accent)", label: "prompt",
+        hot: ["n-kernel", "n-llm"], caption: "next completion request to the LLM" });
+    }
+    steps.push({ path: "e-llm-resp", color: "var(--green)", label: "final answer", tokens: true,
+      hot: ["n-llm", "n-kernel"], caption: "LLM returns the final answer" });
+  }
+  steps.push({ path: "e-trace", color: "var(--yellow)", label: "trace",
+    hot: ["n-kernel", "n-trace"],
+    caption: "messages + trace events persist to synapse.messages / synapse.traces" });
+  const ok = status === "completed";
+  steps.push({ path: "e-result", color: ok ? "var(--green)" : "var(--red)",
+    label: ok ? "result" : status, hot: ["n-kernel", "n-client"],
+    caption: "SELECT returns the outcome envelope (status: " + status + ")" });
+  return steps;
+}
+
+function vizKillKind(status) {
+  if (status === "cost_cap_exceeded") return "cost";
+  if (status === "timed_out") return "timeout";
+  if (status === "cancelled") return "cancel";
+  if (status === "max_iterations") return "generic";
+  return null;
+}
+
+async function vizPlay(run) {
+  if (!run) return;
+  const env = run.envelope || {};
+  const kind = run.killKind || vizKillKind(env.status);
+  if (kind) { vizPlayKill(kind, run); return; }
+  vizReset();
+  const token = VIZ.token;
+  const steps = vizBuildSteps(env, run.messages || []);
+  const trips = steps.filter(s => s.tokens).length || 1;
+  const totIn = Number(env.tokens_in) || 0;
+  const totOut = Number(env.tokens_out) || 0;
+  const totCost = env.cost_usd == null ? null : Number(env.cost_usd);
+  let tin = 0, tout = 0, cost = 0, seen = 0;
+  vizHud(0, 0, totCost == null ? null : 0);
+  const dur = Math.max(300, Math.min(750, Math.round(14000 / steps.length)));
+  for (let i = 0; i < steps.length; i++) {
+    if (token !== VIZ.token) return;
+    const s = steps[i];
+    vizStep(i + 1, steps.length);
+    vizCaption(s.caption || "");
+    vizHot(s.hot, true);
+    if (s.ring) {
+      vizIter(s.n);
+      vizHot(["n-kernel"], true);
+      await vizPacket("p-ring", { color: "var(--accent)", dur: Math.round(dur * 0.7), r: 5.5 });
+      vizHot(["n-kernel"], false);
+    } else {
+      await vizPacket(s.path, { color: s.color, label: s.label, reverse: s.reverse, dur });
+    }
+    if (token !== VIZ.token) return;
+    if (s.tokens) {
+      seen++;
+      if (seen === trips) { tin = totIn; tout = totOut; cost = totCost == null ? 0 : totCost; }
+      else {
+        tin += Math.floor(totIn / trips); tout += Math.floor(totOut / trips);
+        if (totCost != null) cost += totCost / trips;
+      }
+      vizHud(tin, tout, totCost == null ? null : cost);
+    }
+    vizHot(s.hot, false);
+    if (!(await vizSleep(110, token))) return;
+  }
+}
+
+// The guardrail kill sequence: an escalating runaway loop, then a hard stop.
+async function vizPlayKill(kind, run) {
+  vizReset();
+  const token = VIZ.token;
+  const env = run.envelope || {};
+  const status = env.status || (kind === "cancel" ? "cancelled" : "stopped");
+  const agentRow = ((BOOT && BOOT.agents) || []).find(a => a.name === run.agent);
+  const spent = env.cost_usd == null ? null : Number(env.cost_usd);
+  const cap = agentRow && agentRow.cost_cap_usd ? Number(agentRow.cost_cap_usd) : null;
+  const ms = env.duration_ms != null ? Number(env.duration_ms)
+    : (agentRow && agentRow.timeout_ms ? Number(agentRow.timeout_ms) : null);
+  const totIn = Number(env.tokens_in) || 0;
+  const totOut = Number(env.tokens_out) || 0;
+
+  vizCaption("replaying the runaway loop: watch the guardrail");
+  await vizPacket("e-exec", { color: "var(--accent)", label: "execute()", dur: 600 });
+  if (token !== VIZ.token) return;
+  if (kind === "cost") {
+    $("viz-meter").style.display = "block";
+    $("viz-meter-label").textContent =
+      cap != null ? ("cost cap $" + cap.toFixed(2)) : "cost cap";
+  }
+  if (kind === "timeout") $("viz-clock").style.display = "block";
+
+  const durs = [480, 360, 260, 190];
+  vizHot(["n-kernel", "n-llm"], true);
+  for (let i = 0; i < durs.length; i++) {
+    vizIter(i + 1);
+    vizCaption(kind === "cost" ? ("iteration " + (i + 1) + ": cost climbing toward the cap...")
+      : kind === "timeout" ? ("iteration " + (i + 1) + ": the wall clock is draining...")
+      : ("iteration " + (i + 1) + ": the loop keeps going..."));
+    const d = durs[i];
+    if (!(await vizPacket("e-llm-req", { color: "var(--accent)", label: "prompt", dur: d }))) return;
+    if (!(await vizPacket("e-llm-resp", { color: "var(--yellow)", label: "keep going", dur: Math.round(d * 0.9) }))) return;
+    if (!(await vizPacket("p-ring", { color: "var(--red)", dur: Math.round(d * 0.7), r: 5.5 }))) return;
+    const f = (i + 1) / durs.length;
+    vizHud(Math.round(totIn * f), Math.round(totOut * f), spent == null ? null : spent * f);
+    if (kind === "cost") $("viz-meter-fill").setAttribute("width", Math.round(160 * f));
+    if (kind === "timeout") $("viz-clock").setAttribute("stroke-dashoffset", Math.round(352 * f));
+  }
+
+  // The cut.
+  let pt;
+  if (kind === "cancel") {
+    $("n-dba").style.display = "block";
+    vizGhost("e-cancel", true);
+    vizCaption("another session: SELECT pg_cancel_backend(" + (run.pid || "pid") + ")");
+    if (!(await vizSleep(420, token))) return;
+    pt = await vizPacket("e-cancel", { color: "var(--red)", label: "SIGINT", dur: 280, r: 8 });
+  } else {
+    pt = await vizPacket("e-llm-req",
+      { color: "var(--accent)", label: "prompt", dur: 420, stopFrac: 0.55 });
+  }
+  if (!pt || token !== VIZ.token) return;
+
+  vizBurst(pt.x, pt.y);
+  for (const id of ["e-llm-req", "e-llm-resp"]) {
+    $(id).classList.remove("flowing");
+    $(id).classList.add("severed");
+  }
+  const kernel = $("n-kernel");
+  kernel.classList.add("flash", "viz-shake");
+  $("p-arch").classList.add("viz-shake-panel");
+  setTimeout(() => {
+    kernel.classList.remove("viz-shake");
+    $("p-arch").classList.remove("viz-shake-panel");
+  }, 450);
+  vizClearHot();
+  $("viz").classList.add("killed");
+
+  let title, sub, color;
+  if (kind === "cost") {
+    title = "COST CAP EXCEEDED"; color = "var(--orange)";
+    sub = spent != null
+      ? ("$" + spent.toFixed(6) + (cap != null ? " of $" + cap.toFixed(2) + " budget" : " spent, budget gone"))
+      : "cost_cap_usd guardrail tripped";
+  } else if (kind === "timeout") {
+    title = "WALL-CLOCK TIMEOUT"; color = "var(--red)";
+    sub = ms != null ? (ms + " ms elapsed, timeout_ms guardrail tripped") : "timeout_ms guardrail tripped";
+  } else if (kind === "cancel") {
+    title = "CANCELLED"; color = "var(--accent)";
+    sub = "pg_cancel_backend(" + (run.pid != null ? "pid " + run.pid : "backend pid") + ") from another session";
+  } else {
+    title = "STOPPED"; color = "var(--yellow)";
+    sub = "status: " + status;
+  }
+  $("viz-banner-box").setAttribute("stroke", color);
+  $("viz-banner-title").setAttribute("fill", color);
+  $("viz-banner-title").textContent = title;
+  $("viz-banner-sub").textContent = sub;
+  const bnr = $("viz-banner");
+  bnr.classList.remove("show");
+  void bnr.getBoundingClientRect();
+  bnr.classList.add("show");
+  vizStep(0, 0);
+  vizCaption("guardrail tripped: the loop is dead, the database is fine");
+}
+
+function vizRunLive() {
+  vizReset();
+  vizFlow(true);
+  vizCaption("run in flight: synapse.execute() is looping inside the Postgres backend");
+}
+function vizLiveInfo(text) { vizCaption("run in flight: " + text); }
+
+function vizRemember(envelope, messages, agent, extra) {
+  VIZ.lastRun = Object.assign({ envelope: envelope || {}, messages: messages || [], agent }, extra || {});
+  $("btn-viz-replay").disabled = false;
+}
+$("btn-viz-replay").onclick = () => { if (VIZ.lastRun) vizPlay(VIZ.lastRun); };
+
+// Trigger-path animations (queue insert, inline gate, drain).
+async function vizQueueInsert() {
+  vizReset();
+  const token = VIZ.token;
+  vizGhost("e-queue", true);
+  $("e-insert").classList.add("hot");
+  vizCaption("INSERT commits instantly; the trigger enqueues an agent job");
+  vizHot(["n-client", "n-tables"], true);
+  await vizPacket("e-insert", { color: "var(--accent)", label: "INSERT", dur: 800 });
+  if (token !== VIZ.token) return;
+  vizHot(["n-client"], false);
+  vizHot(["n-trace"], true);
+  await vizPacket("e-queue", { color: "var(--orange)", label: "queue job", dur: 650 });
+  if (token !== VIZ.token) return;
+  vizCaption("job waiting in synapse.agent_queue; drain the queue to run the agent");
+  setTimeout(() => {
+    if (token !== VIZ.token) return;
+    vizClearHot(); vizGhost("e-queue", false); $("e-insert").classList.remove("hot");
+  }, 2200);
+}
+
+function vizInlineStart() {
+  vizReset();
+  const token = VIZ.token;
+  $("e-insert").classList.add("hot");
+  vizHot(["n-client", "n-tables"], true);
+  vizCaption("INSERT held inside its transaction; the policy agent decides");
+  VIZ.inlineAnim = (async () => {
+    await vizPacket("e-insert", { color: "var(--accent)", label: "INSERT", dur: 800 });
+    if (token !== VIZ.token) return;
+    await vizPacket("e-tool-rows", { color: "var(--orange)", label: "trigger", dur: 550 });
+    if (token !== VIZ.token) return;
+    vizFlow(true);
+  })();
+  return token;
+}
+
+async function vizInlineEnd(token, r) {
+  if (token !== VIZ.token) return;
+  if (VIZ.inlineAnim) { await VIZ.inlineAnim; VIZ.inlineAnim = null; }
+  if (token !== VIZ.token) return;
+  vizFlow(false);
+  if (r.ok && r.committed) {
+    vizCaption("agent accepted: transaction COMMITTED");
+    await vizPacket("e-tool-call", { color: "var(--green)", label: "COMMIT", dur: 650 });
+  } else if (r.ok && r.rolled_back) {
+    vizCaption("agent rejected: transaction ROLLED BACK");
+    await vizPacket("e-insert", { reverse: true, color: "var(--red)", label: "ROLLBACK", dur: 800 });
+  } else {
+    vizCaption("insert failed: " + (r.error || "unknown error"));
+  }
+  if (token !== VIZ.token) return;
+  setTimeout(() => {
+    if (token !== VIZ.token) return;
+    vizClearHot(); $("e-insert").classList.remove("hot");
+  }, 1800);
+}
+
 // ---- bootstrap ----
 
 async function bootstrap(keepForms) {
@@ -317,6 +910,11 @@ async function bootstrap(keepForms) {
     sel.innerHTML = agentNames.map(n => '<option>' + esc(n) + '</option>').join("");
     if (agentNames.includes(prev)) sel.value = prev;
   }
+
+  const vizProf = data.profiles.find(p => p.name === "vllm-default");
+  const vizModel = (vizProf && vizProf.model) || data.default_llm.model || "OpenAI-compatible";
+  $("viz-llm-model").textContent =
+    vizModel.length > 26 ? vizModel.slice(0, 25) + "..." : vizModel;
 
   $("agent-executor").innerHTML = data.executors.map(e => '<option>' + esc(e) + '</option>').join("");
   $("agent-profile").innerHTML = data.profiles.map(p => '<option>' + esc(p.name) + '</option>').join("");
@@ -448,6 +1046,16 @@ function renderRunResult(run) {
     setRunStatusChip(run.cancelled ? "cancelled" : "failed", run.cancelled ? "cancelled" : "failed", run.error || "");
     $("run-output").innerHTML = "";
     banner($("run-output"), run.cancelled ? "info" : "bad", run.error || "run failed");
+    if (run.cancelled) {
+      // pg_cancel_backend kills the statement, so no envelope lands; replay
+      // the kill sequence from the run metadata we do have.
+      vizRemember({}, [], run.agent, { killKind: "cancel", pid: run.backend_pid });
+      vizPlay(VIZ.lastRun);
+    } else {
+      vizReset();
+      vizCaption("run failed before the loop finished: " + (run.error || "unknown error"));
+      $("btn-viz-replay").disabled = !VIZ.lastRun;
+    }
     return;
   }
   const status = env.status || "unknown";
@@ -458,6 +1066,8 @@ function renderRunResult(run) {
   else if (env.output) banner($("run-output"), "ok", env.output);
   renderMessages(run.messages || []);
   renderTraceEvents(run.traces || []);
+  vizRemember(env, run.messages || [], run.agent, run.backend_pid ? { pid: run.backend_pid } : null);
+  vizPlay(VIZ.lastRun);
   refreshTables();
 }
 
@@ -470,6 +1080,7 @@ async function pollRun() {
     const secs = ((Date.now() - run.started_at_ms) / 1000).toFixed(1);
     setRunStatusChip("running", "running",
       secs + "s elapsed" + (run.backend_pid ? ", backend pid " + run.backend_pid : ""));
+    vizLiveInfo(secs + "s elapsed" + (run.backend_pid ? ", backend pid " + run.backend_pid : ""));
     pollTimer = setTimeout(pollRun, 600);
   } else {
     $("btn-run").disabled = false;
@@ -487,10 +1098,17 @@ async function startRun(agent, input) {
   $("trace").innerHTML = "";
   $("events-details").style.display = "none";
   const r = await api("/api/execute", "POST", { agent, input });
-  if (!r.ok) { setRunStatusChip("failed", "failed", r.error || ""); return; }
+  if (!r.ok) {
+    setRunStatusChip("failed", "failed", r.error || "");
+    vizReset();
+    vizCaption("run failed to start: " + (r.error || "unknown error"));
+    return;
+  }
   currentRun = r.run_id;
   $("btn-run").disabled = true;
   $("btn-cancel").disabled = false;
+  $("btn-viz-replay").disabled = true;
+  vizRunLive();
   setRunStatusChip("running", "running", "starting...");
   pollRun();
 }
@@ -527,12 +1145,15 @@ $("btn-insert-ticket").onclick = async () => {
   banner($("event-status"), r.ok ? "ok" : "bad",
     r.ok ? "ticket " + r.id + " committed instantly; enrichment job queued. Drain the queue to run the agent."
          : r.error);
+  if (r.ok) vizQueueInsert();
   refreshTables();
 };
 
 async function insertOrder(customer, amount) {
   banner($("event-status"), "info", "INSERT INTO demo.orders (" + customer + ", " + amount + ") ... agent is deciding");
+  const vizToken = vizInlineStart();
   const r = await api("/api/demo/order", "POST", { customer, amount });
+  vizInlineEnd(vizToken, r);
   if (r.ok && r.committed) {
     banner($("event-status"), "ok", "order " + r.id + " COMMITTED (agent accepted)");
   } else if (r.ok && r.rolled_back) {
@@ -548,7 +1169,19 @@ $("btn-insert-bad-order").onclick = () => insertOrder("bad_actor", -50);
 
 $("btn-drain").onclick = async () => {
   banner($("event-status"), "info", "draining queue (the agent runs now)...");
+  vizReset();
+  vizGhost("e-queue", true);
+  vizHot(["n-trace", "n-kernel"], true);
+  vizCaption("drain_queue(): queued jobs run through the agent loop now");
+  vizPacket("e-trace", { reverse: true, color: "var(--orange)", label: "job", dur: 700 });
+  vizFlow(true);
   const r = await api("/api/drain", "POST");
+  vizFlow(false);
+  vizClearHot();
+  vizGhost("e-queue", false);
+  vizCaption(r.ok
+    ? "drain complete: " + r.processed + " job(s); click the execution row below to replay the loop"
+    : "drain failed");
   banner($("event-status"), r.ok ? "ok" : "bad",
     r.ok ? "drain complete: " + r.processed + " job(s) processed" : r.error);
   refreshTables();
@@ -586,6 +1219,9 @@ async function refreshTables() {
       if (d.execution.output) banner($("run-output"), "ok", d.execution.output);
       renderMessages(d.messages || []);
       renderTraceEvents(d.traces || []);
+      // The executions row doubles as the outcome envelope for the replay.
+      vizRemember(d.execution, d.messages || [], d.execution.agent_name, null);
+      vizPlay(VIZ.lastRun);
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
   });
