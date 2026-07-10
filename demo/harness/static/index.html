@@ -73,9 +73,9 @@
             box-shadow: -16px 0 32px rgba(0,0,0,.5); }
   #detail.open { display: flex; }
   /* center + enlarge the detail panel over the diagram for readability */
-  #detail.detail-max { left: 50%; right: auto; top: 3%; bottom: 3%; width: 74%; max-width: 940px;
-                       transform: translateX(-50%); border-radius: 10px;
-                       box-shadow: 0 0 0 100vmax rgba(3,7,15,.66); }
+  #detail.detail-max { position: fixed; left: 50%; right: auto; top: 5vh; bottom: 5vh; height: 90vh;
+                       width: 74%; max-width: 940px; transform: translateX(-50%); border-radius: 10px;
+                       z-index: 50; box-shadow: 0 0 0 100vmax rgba(3,7,15,.66); }
   #detail.detail-max #detail-body { font-size: 15px; line-height: 1.55; }
   #detail.detail-max .ab-prompt { max-height: none; font-size: 13.5px; }
   #detail-head { flex: none; display: flex; justify-content: space-between; align-items: center;
