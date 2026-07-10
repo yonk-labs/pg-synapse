@@ -106,6 +106,14 @@
   .tab.active { color: var(--accent); border-color: var(--accent); }
   .tab.adv { display: none; }
   body.show-adv .tab.adv { display: inline-block; }
+  /* expand the active tab panel over the hero diagram for a focused view */
+  .tab-max { order: 99; margin-left: auto; align-self: center; background: none;
+             border: 1px solid var(--border); border-radius: 6px; color: var(--muted);
+             padding: 4px 11px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  .tab-max:hover { color: var(--text); border-color: var(--accent); }
+  body.tabs-max .tab-max { color: var(--accent); border-color: var(--accent); }
+  body.tabs-max #stage { display: none; }
+  body.tabs-max #tabpanels { min-height: 0; }
   #tabpanels { flex: 1 1 0; min-height: 190px; position: relative; }
   .tabpanel { display: none; height: 100%; overflow: auto; padding: 2px 4px 0 0; }
   .tabpanel.active { display: block; }
@@ -428,6 +436,7 @@
     <button class="tab adv" data-tab="data">Tables</button>
     <button class="tab adv" data-tab="probes">Probes</button>
     <button class="tab adv" data-tab="config">Config</button>
+    <button class="tab-max" id="tab-max" title="Expand this panel over the diagram (Esc to restore)">&#10530; Expand</button>
   </div>
 
   <div class="tabpanels" id="tabpanels">
@@ -2071,6 +2080,15 @@ $("dock-toggle").onclick = () => {
   const collapsed = dock.classList.toggle("collapsed");
   $("dock-toggle").textContent = collapsed ? "show" : "hide";
 };
+// Expand the active tab panel over the hero diagram for a focused demo view.
+function setTabsMax(on) {
+  document.body.classList.toggle("tabs-max", on);
+  $("tab-max").innerHTML = on ? "⤡ Show diagram" : "⤢ Expand";
+}
+$("tab-max").onclick = () => setTabsMax(!document.body.classList.contains("tabs-max"));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("tabs-max")) setTabsMax(false);
+});
 
 // ---- NL tab: talk to the database via db_architect ----
 
