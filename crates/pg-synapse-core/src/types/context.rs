@@ -12,6 +12,13 @@ use crate::memory::MemoryProvider;
 use crate::tool::ToolRegistry;
 use crate::types::trace::TraceLevel;
 
+/// Host-supplied cancellation probe, consulted by the executor loop between
+/// LLM turns. Returns `Some(reason)` when the run should be aborted (e.g. a
+/// Postgres statement cancel), or `None` to continue. The pgrx host wires this
+/// to the backend's pending-interrupt flags so `pg_cancel_backend` and
+/// `statement_timeout` can stop a runaway agent between iterations.
+pub type InterruptCheck = Arc<dyn Fn() -> Option<String> + Send + Sync>;
+
 /// Everything an executor needs for one run.
 ///
 /// Holds `Arc`s to trait objects, so it is not `Clone` by `derive`; use
@@ -76,6 +83,11 @@ pub struct ExecutionContext {
 
     /// Trace verbosity for this run (resolved from agent override or global GUC).
     pub trace_level: TraceLevel,
+
+    /// Optional host cancellation probe, checked between LLM turns. `None`
+    /// disables between-iteration interrupt checking (the default for hosts and
+    /// tests that do not supply one).
+    pub interrupt_check: Option<InterruptCheck>,
 }
 
 impl ExecutionContext {
@@ -106,6 +118,7 @@ impl ExecutionContext {
             cost_cap_usd: self.cost_cap_usd,
             caller_role: self.caller_role.clone(),
             trace_level: self.trace_level,
+            interrupt_check: self.interrupt_check.clone(),
         }
     }
 }
@@ -136,6 +149,7 @@ mod tests {
             cost_cap_usd: Some(0.10),
             caller_role: Some("pg_synapse_user".into()),
             trace_level: TraceLevel::default(),
+            interrupt_check: None,
         }
     }
 

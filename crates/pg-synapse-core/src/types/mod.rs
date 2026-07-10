@@ -19,7 +19,7 @@ pub mod tool;
 pub mod trace;
 
 pub use compression::{Compressed, CompressionBudget};
-pub use context::ExecutionContext;
+pub use context::{ExecutionContext, InterruptCheck};
 pub use diagnostics::{DiagnosticsBundle, export_diagnostics};
 pub use embedding::EmbeddingVector;
 pub use llm::{
