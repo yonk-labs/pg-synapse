@@ -18,8 +18,12 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use pg_synapse_core::LlmProvider;
-use pg_synapse_core::types::{CompletionRequest, Message, Role};
-use pg_synapse_provider_openai::OpenAiProvider;
+use pg_synapse_core::Runtime;
+use pg_synapse_core::runtime::test_utils::MockProfileSource;
+use pg_synapse_core::types::{
+    AgentRow, CompletionRequest, LlmProfileRow, Message, OutcomeStatus, Role,
+};
+use pg_synapse_provider_openai::{OpenAiProvider, OpenAiProviderFactory};
 
 fn endpoint() -> Option<(String, String)> {
     let base = std::env::var("PG_SYNAPSE_TEST_LLM_BASE_URL").ok()?;
@@ -60,6 +64,59 @@ async fn live_completes_against_configured_endpoint() {
     let txt = resp.content.unwrap_or_default();
     eprintln!("LIVE LLM responded: {txt:?}");
     assert!(!txt.is_empty(), "empty response from live LLM");
+}
+
+/// Full agent loop through the kernel `Runtime` against the live endpoint.
+/// Exercises `execute_inner` (including the wall-clock timeout wrapper) and the
+/// conversation executor end to end, not just the provider in isolation.
+#[tokio::test]
+async fn live_agent_run_completes_within_budget() {
+    let Some((base, model)) = endpoint() else {
+        eprintln!("SKIP: PG_SYNAPSE_TEST_LLM_BASE_URL not set");
+        return;
+    };
+    let source = MockProfileSource::new()
+        .with_llm_profile(LlmProfileRow {
+            name: "default".into(),
+            provider: "openai".into(),
+            model: model.clone(),
+            api_key_secret: None,
+            base_url: Some(base.clone()),
+            params: serde_json::Value::Null,
+        })
+        .with_agent(AgentRow {
+            name: "greeter".into(),
+            system_prompt: "You are terse. Answer in a single word.".into(),
+            soul: None,
+            executor_name: "conversation".into(),
+            llm_profile_main: Some("default".into()),
+            llm_profile_small: None,
+            llm_profile_judge: None,
+            embedding_profile: None,
+            tools: vec![],
+            max_iterations: 4,
+            timeout_ms: 60_000,
+            cost_cap_usd: None,
+            trace_level: None,
+        });
+
+    let runtime = Runtime::builder()
+        .with_plugin(OpenAiProviderFactory)
+        .load_profiles_from(source)
+        .build()
+        .await
+        .expect("runtime builds with openai plugin");
+
+    let outcome = runtime
+        .execute("greeter", "Reply with a one-word greeting.")
+        .await
+        .expect("live agent run failed");
+    eprintln!(
+        "LIVE agent outcome: status={:?} output={:?}",
+        outcome.status, outcome.output
+    );
+    assert_eq!(outcome.status, OutcomeStatus::Completed);
+    assert!(!outcome.output.is_empty(), "agent produced no output");
 }
 
 #[tokio::test]
