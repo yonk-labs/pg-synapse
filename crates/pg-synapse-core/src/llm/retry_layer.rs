@@ -190,6 +190,13 @@ impl LlmProvider for RetryProvider {
     fn model_name(&self) -> &str {
         self.inner.model_name()
     }
+
+    fn capabilities(&self) -> crate::llm::ProviderCapabilities {
+        // Forward the inner provider's capabilities. Without this the trait
+        // default (all-false) would hide tool_use / json_mode / etc., and the
+        // runtime pre-flight would reject every tool-using agent.
+        self.inner.capabilities()
+    }
 }
 
 #[cfg(test)]
@@ -374,5 +381,24 @@ mod tests {
         let mock = Arc::new(MockLlmProvider::new("gpt-test"));
         let retry = RetryProvider::new(mock, RetryConfig::default());
         assert_eq!(retry.model_name(), "gpt-test");
+    }
+
+    #[test]
+    fn capabilities_delegate_to_inner() {
+        // The wrapper must forward the inner provider's capabilities, not fall
+        // back to the all-false trait default. Otherwise the runtime pre-flight
+        // sees tool_use=false and rejects every tool-using agent.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.set_capabilities(crate::llm::ProviderCapabilities {
+            tool_use: true,
+            json_mode: true,
+            ..Default::default()
+        });
+        let retry = RetryProvider::new(mock, RetryConfig::default());
+        assert!(retry.capabilities().tool_use, "tool_use must be forwarded");
+        assert!(
+            retry.capabilities().json_mode,
+            "json_mode must be forwarded"
+        );
     }
 }
