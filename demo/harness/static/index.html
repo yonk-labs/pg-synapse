@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg_synapse demo</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2d3646;
+    --text: #d7dee8; --muted: #8b98a9; --accent: #4ea1ff; --green: #3fb950;
+    --red: #f85149; --orange: #d29922; --yellow: #e3b341; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 14px 22px;
+           border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 18px; margin: 0; }
+  header h1 span { color: var(--accent); }
+  header .ver { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  header .conn { margin-left: auto; font-size: 12px; color: var(--muted); }
+  main { display: grid; grid-template-columns: 420px 1fr; gap: 16px; padding: 16px 22px; align-items: start; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+           padding: 14px 16px; margin-bottom: 16px; }
+  .panel h2 { margin: 0 0 4px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em;
+              color: var(--accent); }
+  .panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input[type=text], input[type=password], input[type=number], textarea, select {
+    width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; font-family: var(--mono); font-size: 12.5px; }
+  textarea { resize: vertical; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+           border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #1f4b7a; border-color: #2e6db3; }
+  button.danger { background: #5a1e1e; border-color: #8a2f2f; }
+  button:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > * { flex: 0 0 auto; }
+  .grow { flex: 1 1 auto !important; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .chip { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+          font-family: var(--mono); border: 1px solid var(--border); }
+  .chip.completed { color: var(--green); border-color: var(--green); }
+  .chip.running { color: var(--accent); border-color: var(--accent); }
+  .chip.errored, .chip.failed { color: var(--red); border-color: var(--red); }
+  .chip.timed_out { color: var(--orange); border-color: var(--orange); }
+  .chip.cost_cap_exceeded { color: var(--red); border-color: var(--red); }
+  .chip.max_iterations { color: var(--yellow); border-color: var(--yellow); }
+  .chip.cancelled { color: var(--orange); border-color: var(--orange); }
+  .toolgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; margin-top: 4px; }
+  .toolgrid label { display: flex; gap: 6px; align-items: center; margin: 2px 0; color: var(--text);
+                    font-family: var(--mono); font-size: 12px; cursor: pointer; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; margin: 10px 0; }
+  .stats .stat { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .stats .stat b { display: block; font-size: 15px; color: var(--text); }
+  #trace { margin-top: 10px; }
+  .msg { border: 1px solid var(--border); border-left-width: 4px; border-radius: 6px;
+         padding: 8px 10px; margin: 6px 0; background: var(--panel2);
+         opacity: 0; transform: translateY(6px); transition: opacity .25s, transform .25s; }
+  .msg.show { opacity: 1; transform: none; }
+  .msg .role { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+               font-family: var(--mono); margin-bottom: 4px; }
+  .msg.system { border-left-color: var(--muted); } .msg.system .role { color: var(--muted); }
+  .msg.user { border-left-color: var(--accent); } .msg.user .role { color: var(--accent); }
+  .msg.assistant { border-left-color: var(--green); } .msg.assistant .role { color: var(--green); }
+  .msg.tool { border-left-color: var(--yellow); } .msg.tool .role { color: var(--yellow); }
+  .msg pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word;
+             font-family: var(--mono); font-size: 12px; color: var(--text); max-height: 220px; overflow: auto; }
+  .msg .toolname { font-family: var(--mono); color: var(--yellow); font-size: 12px; }
+  .banner { border-radius: 6px; padding: 10px 12px; margin: 8px 0; font-family: var(--mono); font-size: 12.5px; }
+  .banner.ok { background: #12261a; border: 1px solid var(--green); color: var(--green); }
+  .banner.bad { background: #2b1214; border: 1px solid var(--red); color: #ff8a80; }
+  .banner.info { background: #10233a; border: 1px solid var(--accent); color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; margin-top: 6px; }
+  th, td { border-bottom: 1px solid var(--border); padding: 4px 6px; text-align: left;
+           max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  .scenario { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 8px 0;
+              background: var(--panel2); }
+  .scenario h3 { margin: 0 0 4px; font-size: 13.5px; }
+  .scenario p { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+  .small { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .probe-out { border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
+               padding: 8px 10px; margin-top: 8px; max-height: 320px; overflow: auto; }
+  .pline { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
+  .pline.pass { color: var(--green); }
+  .pline.fail { color: var(--red); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>pg_synapse</span> live demo</h1>
+  <span class="ver" id="ver"></span>
+  <span class="conn" id="conn">connecting...</span>
+</header>
+<main>
+<div id="left">
+
+  <div class="panel" id="p-llm">
+    <h2>1. LLM endpoint</h2>
+    <p class="sub">External OpenAI-compatible endpoint (vLLM, llama.cpp, OpenAI). Stored in
+      <code>synapse.llm_profiles</code> via <code>synapse.llm_profile_set()</code>.</p>
+    <label>base_url</label>
+    <input type="text" id="llm-base-url" placeholder="http://host:8000/v1">
+    <label>model</label>
+    <input type="text" id="llm-model" placeholder="model id">
+    <label>api key (optional, stored via synapse.secret_set)</label>
+    <input type="password" id="llm-key" placeholder="none">
+    <div class="row" style="margin-top:10px">
+      <button id="btn-llm-test">Test</button>
+      <button class="primary" id="btn-llm-save">Save profile 'vllm-default'</button>
+    </div>
+    <div id="llm-status"></div>
+  </div>
+
+  <div class="panel" id="p-scenarios">
+    <h2>2. Load a demo</h2>
+    <p class="sub">One click seeds schema plus data, registers the agents, and prefills a
+      suggested run.</p>
+    <div id="scenario-list"></div>
+  </div>
+
+  <div class="panel" id="p-agent">
+    <h2>3. Agent editor</h2>
+    <p class="sub">Natural-language instructions plus tool allow-list and safety caps.
+      Persisted with <code>synapse.agent_create()</code>.</p>
+    <label>existing agents</label>
+    <div class="row">
+      <select id="agent-select" class="grow"></select>
+      <button id="btn-agent-load">Load</button>
+      <button class="danger" id="btn-agent-drop">Drop</button>
+    </div>
+    <label>name</label>
+    <input type="text" id="agent-name" placeholder="my_agent">
+    <label>system prompt (the instructions)</label>
+    <textarea id="agent-prompt" rows="8" placeholder="You are ..."></textarea>
+    <div class="grid2">
+      <div>
+        <label>executor</label>
+        <select id="agent-executor"></select>
+      </div>
+      <div>
+        <label>llm profile</label>
+        <select id="agent-profile"></select>
+      </div>
+    </div>
+    <label>tool allow-list</label>
+    <div class="toolgrid" id="agent-tools"></div>
+    <div class="grid3">
+      <div>
+        <label>max_iterations</label>
+        <input type="number" id="agent-maxiter" value="10" min="1">
+      </div>
+      <div>
+        <label>timeout_ms</label>
+        <input type="number" id="agent-timeout" value="60000" min="0" step="1000">
+      </div>
+      <div>
+        <label>cost_cap_usd (0 = none)</label>
+        <input type="number" id="agent-costcap" value="0" min="0" step="0.01">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="primary" id="btn-agent-save">Save agent</button>
+      <span id="agent-status" class="small"></span>
+    </div>
+  </div>
+
+</div>
+<div id="right">
+
+  <div class="panel" id="p-run">
+    <h2>4. Run an agent loop</h2>
+    <p class="sub"><code>SELECT synapse.execute(agent, input)</code> through the harness; the
+      trace below comes from <code>synapse.messages</code> and <code>synapse.traces</code>.</p>
+    <div class="row">
+      <select id="run-agent" style="width:220px"></select>
+      <input type="text" id="run-input" class="grow" placeholder="ask the agent something">
+      <button class="primary" id="btn-run">Run</button>
+      <button class="danger" id="btn-cancel" disabled>Cancel</button>
+    </div>
+    <div id="run-status" style="margin-top:10px"></div>
+    <div class="stats" id="run-stats"></div>
+    <div id="run-output"></div>
+    <div id="trace"></div>
+    <details id="events-details" style="display:none">
+      <summary>structured trace events (synapse.traces)</summary>
+      <div id="trace-events"></div>
+    </details>
+  </div>
+
+  <div class="panel" id="p-watch" style="display:none">
+    <h2 id="watch-title">Scenario watch</h2>
+    <p class="sub">Live view of the loaded scenario: probe buttons (EXPLAIN, end-state
+      checks) and the tables the agent touches.</p>
+    <div class="row" id="watch-probes"></div>
+    <div id="watch-probe-out"></div>
+    <div id="watch-tables"></div>
+  </div>
+
+  <div class="panel" id="p-events">
+    <h2>5. Event triggers</h2>
+    <p class="sub">Agents attached to tables with <code>synapse.attach_agent_trigger()</code>.
+      Queue mode enriches rows after commit; inline mode can ROLL BACK the write.</p>
+
+    <div class="grid2">
+      <div>
+        <h3 style="margin:6px 0 2px;font-size:13px">Queue mode: demo.tickets</h3>
+        <div class="row" style="margin:6px 0">
+          <button id="btn-attach-queue">Attach enrich_agent</button>
+          <button id="btn-detach-queue">Detach</button>
+        </div>
+        <input type="text" id="ticket-subject" placeholder="subject" value="API rate limit exceeded">
+        <input type="text" id="ticket-body" style="margin-top:6px" placeholder="body"
+               value="Getting 429 errors on all endpoints since 10 AM. Production impacted.">
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="btn-insert-ticket">INSERT ticket</button>
+          <button id="btn-drain">Drain queue now</button>
+        </div>
+      </div>
+      <div>
+        <h3 style="margin:6px 0 2px;font-size:13px">Inline mode: demo.orders</h3>
+        <div class="row" style="margin:6px 0">
+          <button id="btn-attach-inline">Attach policy_agent</button>
+          <button id="btn-detach-inline">Detach</button>
+        </div>
+        <input type="text" id="order-customer" placeholder="customer" value="alice@acme.com">
+        <input type="number" id="order-amount" style="margin-top:6px" placeholder="amount" value="150" step="0.01">
+        <div class="row" style="margin-top:8px">
+          <button class="primary" id="btn-insert-order">INSERT order</button>
+          <button class="danger" id="btn-insert-bad-order">INSERT bad order (-50)</button>
+        </div>
+      </div>
+    </div>
+    <div id="event-status"></div>
+
+    <div class="grid2" style="margin-top:10px">
+      <div>
+        <div class="small">demo.tickets</div>
+        <div id="tbl-tickets"></div>
+      </div>
+      <div>
+        <div class="small">demo.orders</div>
+        <div id="tbl-orders"></div>
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <div class="small">synapse.agent_queue (latest 20)</div>
+      <div id="tbl-queue"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="p-history">
+    <h2>Execution history</h2>
+    <p class="sub">Everything is audited in <code>synapse.executions</code>. Click a row to
+      reload its trace.</p>
+    <div id="tbl-executions"></div>
+  </div>
+
+</div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let BOOT = null;
+let currentRun = null;
+let pollTimer = null;
+let currentScenario = null;
+
+async function api(path, method, body) {
+  const opts = { method: method || "GET", headers: {} };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(path, opts);
+  let data = null;
+  try { data = await resp.json(); } catch (e) { data = { ok: false, error: "bad response" }; }
+  return data;
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function pretty(v) {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") { try { return JSON.stringify(JSON.parse(v), null, 2); } catch (e) { return v; } }
+  return JSON.stringify(v, null, 2);
+}
+function banner(el, cls, text) { el.innerHTML = '<div class="banner ' + cls + '">' + esc(text) + '</div>'; }
+
+// ---- bootstrap ----
+
+async function bootstrap(keepForms) {
+  const data = await api("/api/bootstrap");
+  if (!data.ok) { $("conn").textContent = "db unreachable: " + (data.error || ""); return; }
+  BOOT = data;
+  $("conn").textContent = "connected";
+  $("ver").textContent = "extension v" + data.version;
+
+  if (!keepForms) {
+    const prof = data.profiles.find(p => p.name === "vllm-default");
+    $("llm-base-url").value = prof ? (prof.base_url || "") : data.default_llm.base_url;
+    $("llm-model").value = prof ? prof.model : data.default_llm.model;
+    if (prof) banner($("llm-status"), "info", "profile 'vllm-default' exists (" + prof.model + ")");
+  }
+
+  const agentNames = data.agents.map(a => a.name);
+  for (const sel of [$("agent-select"), $("run-agent")]) {
+    const prev = sel.value;
+    sel.innerHTML = agentNames.map(n => '<option>' + esc(n) + '</option>').join("");
+    if (agentNames.includes(prev)) sel.value = prev;
+  }
+
+  $("agent-executor").innerHTML = data.executors.map(e => '<option>' + esc(e) + '</option>').join("");
+  $("agent-profile").innerHTML = data.profiles.map(p => '<option>' + esc(p.name) + '</option>').join("");
+  const checked = new Set([...document.querySelectorAll("#agent-tools input:checked")].map(i => i.value));
+  $("agent-tools").innerHTML = data.tools.map(t =>
+    '<label title="' + esc(t.description) + '"><input type="checkbox" value="' + esc(t.name) + '"' +
+    (checked.has(t.name) ? " checked" : "") + '> ' + esc(t.name) + '</label>').join("");
+
+  renderScenarios(data.scenarios);
+  refreshTables();
+}
+
+// ---- LLM profile ----
+
+$("btn-llm-test").onclick = async () => {
+  banner($("llm-status"), "info", "probing " + $("llm-base-url").value + "/models ...");
+  const r = await api("/api/profile/test", "POST", {
+    base_url: $("llm-base-url").value, api_key: $("llm-key").value });
+  if (r.ok) {
+    const list = (r.models || []).slice(0, 5).join(", ");
+    banner($("llm-status"), "ok", "endpoint reachable (HTTP " + r.status + ")" + (list ? ". models: " + list : ""));
+  } else {
+    banner($("llm-status"), "bad", "endpoint check failed: " + (r.error || ("HTTP " + r.status)));
+  }
+};
+
+$("btn-llm-save").onclick = async () => {
+  const r = await api("/api/profile", "POST", {
+    name: "vllm-default", base_url: $("llm-base-url").value,
+    model: $("llm-model").value, api_key: $("llm-key").value });
+  if (r.ok) { banner($("llm-status"), "ok", "saved llm profile 'vllm-default'"); bootstrap(true); }
+  else banner($("llm-status"), "bad", r.error || "save failed");
+};
+
+// ---- agent editor ----
+
+function fillAgentForm(a) {
+  $("agent-name").value = a.name;
+  $("agent-prompt").value = a.system_prompt;
+  $("agent-executor").value = a.executor_name;
+  if (a.llm_profile_main) $("agent-profile").value = a.llm_profile_main;
+  $("agent-maxiter").value = a.max_iterations;
+  $("agent-timeout").value = a.timeout_ms;
+  $("agent-costcap").value = a.cost_cap_usd || 0;
+  for (const box of document.querySelectorAll("#agent-tools input"))
+    box.checked = (a.tools || []).includes(box.value);
+  $("agent-status").textContent = "loaded '" + a.name + "'";
+}
+
+$("btn-agent-load").onclick = () => {
+  const a = BOOT.agents.find(x => x.name === $("agent-select").value);
+  if (a) fillAgentForm(a);
+};
+
+$("btn-agent-drop").onclick = async () => {
+  const name = $("agent-select").value;
+  if (!name) return;
+  await api("/api/agent/drop", "POST", { name });
+  $("agent-status").textContent = "dropped '" + name + "'";
+  bootstrap(true);
+};
+
+$("btn-agent-save").onclick = async () => {
+  const tools = [...document.querySelectorAll("#agent-tools input:checked")].map(i => i.value);
+  const r = await api("/api/agent", "POST", {
+    name: $("agent-name").value.trim(),
+    system_prompt: $("agent-prompt").value,
+    executor: $("agent-executor").value,
+    llm_profile: $("agent-profile").value,
+    tools,
+    max_iterations: parseInt($("agent-maxiter").value, 10) || 10,
+    timeout_ms: parseInt($("agent-timeout").value, 10) || 60000,
+    cost_cap_usd: parseFloat($("agent-costcap").value) || 0,
+  });
+  $("agent-status").textContent = r.ok ? "saved '" + $("agent-name").value + "'" : (r.error || "save failed");
+  if (r.ok) { await bootstrap(true); $("run-agent").value = $("agent-name").value.trim(); }
+};
+
+// ---- run panel ----
+
+function setRunStatusChip(label, cls, extra) {
+  $("run-status").innerHTML =
+    '<span class="chip ' + cls + '">' + esc(label) + '</span> <span class="small">' + esc(extra || "") + '</span>';
+}
+
+function renderStats(env) {
+  const cost = env.cost_usd == null ? "n/a" : ("$" + Number(env.cost_usd).toFixed(6));
+  $("run-stats").innerHTML =
+    '<div class="stat">tokens in<b>' + esc(env.tokens_in ?? 0) + '</b></div>' +
+    '<div class="stat">tokens out<b>' + esc(env.tokens_out ?? 0) + '</b></div>' +
+    '<div class="stat">cost<b>' + esc(cost) + '</b></div>' +
+    '<div class="stat">duration<b>' + esc(env.duration_ms ?? 0) + ' ms</b></div>' +
+    '<div class="stat">tool calls<b>' + (env.tool_calls ? env.tool_calls.length : 0) + '</b></div>';
+}
+
+function renderMessages(messages) {
+  const trace = $("trace");
+  trace.innerHTML = "";
+  messages.forEach((m, i) => {
+    const div = document.createElement("div");
+    div.className = "msg " + esc(m.role);
+    let html = '<div class="role">' + esc(m.role) + '</div>';
+    if (m.tool_name && m.role === "assistant")
+      html += '<div class="toolname">calls tool: ' + esc(m.tool_name) + '</div>' +
+              '<pre>' + esc(pretty(m.tool_input)) + '</pre>';
+    if (m.content) html += '<pre>' + esc(m.content) + '</pre>';
+    if (m.role === "tool") {
+      if (m.tool_name) html += '<div class="toolname">' + esc(m.tool_name) + ' returned</div>';
+      if (m.tool_output != null) html += '<pre>' + esc(pretty(m.tool_output)) + '</pre>';
+    }
+    div.innerHTML = html;
+    trace.appendChild(div);
+    setTimeout(() => div.classList.add("show"), 90 * i);
+  });
+}
+
+function renderTraceEvents(traces) {
+  if (!traces || !traces.length) { $("events-details").style.display = "none"; return; }
+  $("events-details").style.display = "block";
+  $("trace-events").innerHTML = "<table><tr><th>#</th><th>event</th><th>payload</th></tr>" +
+    traces.map(t => "<tr><td>" + esc(t.seq) + "</td><td>" + esc(t.event) + "</td><td title='" +
+      esc(JSON.stringify(t.payload)) + "'>" + esc(JSON.stringify(t.payload)) + "</td></tr>").join("") +
+    "</table>";
+}
+
+function renderRunResult(run) {
+  const env = run.envelope || {};
+  if (run.phase === "failed") {
+    setRunStatusChip(run.cancelled ? "cancelled" : "failed", run.cancelled ? "cancelled" : "failed", run.error || "");
+    $("run-output").innerHTML = "";
+    banner($("run-output"), run.cancelled ? "info" : "bad", run.error || "run failed");
+    return;
+  }
+  const status = env.status || "unknown";
+  setRunStatusChip(status, status, env.error ? env.error : "");
+  renderStats(env);
+  $("run-output").innerHTML = "";
+  if (env.error) banner($("run-output"), "bad", env.error);
+  else if (env.output) banner($("run-output"), "ok", env.output);
+  renderMessages(run.messages || []);
+  renderTraceEvents(run.traces || []);
+  refreshTables();
+}
+
+async function pollRun() {
+  if (!currentRun) return;
+  const r = await api("/api/run/" + currentRun);
+  if (!r.ok) return;
+  const run = r.run;
+  if (run.phase === "running" || run.phase === "starting") {
+    const secs = ((Date.now() - run.started_at_ms) / 1000).toFixed(1);
+    setRunStatusChip("running", "running",
+      secs + "s elapsed" + (run.backend_pid ? ", backend pid " + run.backend_pid : ""));
+    pollTimer = setTimeout(pollRun, 600);
+  } else {
+    $("btn-run").disabled = false;
+    $("btn-cancel").disabled = true;
+    renderRunResult(run);
+    currentRun = null;
+  }
+}
+
+async function startRun(agent, input) {
+  $("run-agent").value = agent;
+  $("run-input").value = input;
+  $("run-stats").innerHTML = "";
+  $("run-output").innerHTML = "";
+  $("trace").innerHTML = "";
+  $("events-details").style.display = "none";
+  const r = await api("/api/execute", "POST", { agent, input });
+  if (!r.ok) { setRunStatusChip("failed", "failed", r.error || ""); return; }
+  currentRun = r.run_id;
+  $("btn-run").disabled = true;
+  $("btn-cancel").disabled = false;
+  setRunStatusChip("running", "running", "starting...");
+  pollRun();
+}
+
+$("btn-run").onclick = () => startRun($("run-agent").value, $("run-input").value);
+$("btn-cancel").onclick = async () => {
+  if (!currentRun) return;
+  const r = await api("/api/run/" + currentRun + "/cancel", "POST");
+  if (r.ok) setRunStatusChip("running", "running", "cancel signalled to backend pid " + r.pid + "...");
+};
+
+// ---- event triggers ----
+
+$("btn-attach-queue").onclick = async () => {
+  const r = await api("/api/trigger/attach", "POST", { table: "demo.tickets", agent: "enrich_agent", mode: "queue" });
+  banner($("event-status"), r.ok ? "ok" : "bad", r.ok ? "queue trigger attached to demo.tickets" : r.error);
+};
+$("btn-detach-queue").onclick = async () => {
+  const r = await api("/api/trigger/detach", "POST", { table: "demo.tickets" });
+  banner($("event-status"), r.ok ? "ok" : "bad", r.ok ? "trigger detached from demo.tickets" : r.error);
+};
+$("btn-attach-inline").onclick = async () => {
+  const r = await api("/api/trigger/attach", "POST", { table: "demo.orders", agent: "policy_agent", mode: "inline" });
+  banner($("event-status"), r.ok ? "ok" : "bad", r.ok ? "inline trigger attached to demo.orders" : r.error);
+};
+$("btn-detach-inline").onclick = async () => {
+  const r = await api("/api/trigger/detach", "POST", { table: "demo.orders" });
+  banner($("event-status"), r.ok ? "ok" : "bad", r.ok ? "trigger detached from demo.orders" : r.error);
+};
+
+$("btn-insert-ticket").onclick = async () => {
+  const r = await api("/api/demo/ticket", "POST", {
+    subject: $("ticket-subject").value, body: $("ticket-body").value });
+  banner($("event-status"), r.ok ? "ok" : "bad",
+    r.ok ? "ticket " + r.id + " committed instantly; enrichment job queued. Drain the queue to run the agent."
+         : r.error);
+  refreshTables();
+};
+
+async function insertOrder(customer, amount) {
+  banner($("event-status"), "info", "INSERT INTO demo.orders (" + customer + ", " + amount + ") ... agent is deciding");
+  const r = await api("/api/demo/order", "POST", { customer, amount });
+  if (r.ok && r.committed) {
+    banner($("event-status"), "ok", "order " + r.id + " COMMITTED (agent accepted)");
+  } else if (r.ok && r.rolled_back) {
+    banner($("event-status"), "bad", "TRANSACTION ROLLED BACK. " + r.reason);
+  } else {
+    banner($("event-status"), "bad", r.error || "insert failed");
+  }
+  refreshTables();
+}
+$("btn-insert-order").onclick = () =>
+  insertOrder($("order-customer").value, parseFloat($("order-amount").value));
+$("btn-insert-bad-order").onclick = () => insertOrder("bad_actor", -50);
+
+$("btn-drain").onclick = async () => {
+  banner($("event-status"), "info", "draining queue (the agent runs now)...");
+  const r = await api("/api/drain", "POST");
+  banner($("event-status"), r.ok ? "ok" : "bad",
+    r.ok ? "drain complete: " + r.processed + " job(s) processed" : r.error);
+  refreshTables();
+};
+
+// ---- tables ----
+
+function renderTable(el, rows, clickCb) {
+  if (!rows || !rows.length) { el.innerHTML = '<div class="hint">no rows</div>'; return; }
+  const cols = Object.keys(rows[0]);
+  let html = "<table><tr>" + cols.map(c => "<th>" + esc(c) + "</th>").join("") + "</tr>";
+  rows.forEach((r, i) => {
+    html += '<tr' + (clickCb ? ' style="cursor:pointer" data-i="' + i + '"' : '') + '>' +
+      cols.map(c => "<td title='" + esc(r[c]) + "'>" + esc(r[c]) + "</td>").join("") + "</tr>";
+  });
+  el.innerHTML = html + "</table>";
+  if (clickCb) el.querySelectorAll("tr[data-i]").forEach(tr =>
+    tr.onclick = () => clickCb(rows[parseInt(tr.dataset.i, 10)]));
+}
+
+async function refreshTables() {
+  refreshWatch();
+  for (const [key, elId] of [["tickets", "tbl-tickets"], ["orders", "tbl-orders"], ["queue", "tbl-queue"]]) {
+    const r = await api("/api/table/" + key);
+    if (r.ok) renderTable($(elId), r.rows);
+    else $(elId).innerHTML = '<div class="hint">not loaded yet (load the Transaction bouncer demo)</div>';
+  }
+  const ex = await api("/api/table/executions");
+  if (ex.ok) renderTable($("tbl-executions"), ex.rows, async (row) => {
+    const d = await api("/api/execution/" + row.execution_id);
+    if (d.ok && d.execution) {
+      setRunStatusChip(d.execution.status, d.execution.status, "history: " + row.execution_id);
+      renderStats(d.execution);
+      $("run-output").innerHTML = "";
+      if (d.execution.output) banner($("run-output"), "ok", d.execution.output);
+      renderMessages(d.messages || []);
+      renderTraceEvents(d.traces || []);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  });
+}
+
+// ---- scenario watch panel ----
+
+function renderWatch(s) {
+  currentScenario = s;
+  $("p-watch").style.display = "block";
+  $("watch-title").textContent = "Scenario watch: " + s.title;
+  $("watch-probe-out").innerHTML = "";
+  $("watch-probes").innerHTML = (s.probes || []).map(p =>
+    '<button data-probe="' + esc(p.key) + '">' + esc(p.label) + '</button>').join("");
+  $("watch-probes").querySelectorAll("[data-probe]").forEach(btn => btn.onclick = async () => {
+    const r = await api("/api/probe/" + btn.dataset.probe);
+    const lines = r.ok ? r.lines : [r.error || "probe failed"];
+    $("watch-probe-out").innerHTML = '<div class="probe-out">' + lines.map(l =>
+      '<div class="pline' + (l.startsWith("PASS") ? " pass" : l.startsWith("FAIL") ? " fail" : "") +
+      '">' + esc(l) + '</div>').join("") + '</div>';
+  });
+  $("watch-tables").innerHTML = (s.watch_tables || []).map(t =>
+    '<div style="margin-top:8px"><div class="small">' + esc(t) + '</div>' +
+    '<div id="watch-tbl-' + esc(t) + '"></div></div>').join("");
+  refreshWatch();
+}
+
+async function refreshWatch() {
+  if (!currentScenario) return;
+  for (const t of currentScenario.watch_tables || []) {
+    const r = await api("/api/table/" + t);
+    const el = $("watch-tbl-" + t);
+    if (!el) continue;
+    if (r.ok) renderTable(el, r.rows);
+    else el.innerHTML = '<div class="hint">not available: ' + esc(r.error || "") + '</div>';
+  }
+}
+
+// ---- scenarios ----
+
+function renderScenarios(list) {
+  $("scenario-list").innerHTML = list.map(s =>
+    '<div class="scenario"><h3>' + esc(s.title) + '</h3><p>' + esc(s.description) + '</p>' +
+    '<div class="row"><button class="primary" data-load="' + esc(s.id) + '">Load</button>' +
+    (s.suggested_runs || []).map((r, i) =>
+      '<button data-run="' + esc(s.id) + ':' + i + '">' + esc(r.label) + '</button>').join("") +
+    '</div><div id="scen-status-' + esc(s.id) + '"></div></div>').join("");
+
+  document.querySelectorAll("[data-load]").forEach(btn => btn.onclick = async () => {
+    const id = btn.dataset.load;
+    const st = $("scen-status-" + id);
+    banner(st, "info", "loading scenario (seeding schema, data, agents)...");
+    const r = await api("/api/scenario/" + id, "POST");
+    if (r.ok) {
+      banner(st, "ok", "loaded. agents registered: see the run panel.");
+      await bootstrap(true);
+      const s = r.scenario;
+      renderWatch(s);
+      if (s.suggested_runs && s.suggested_runs.length) {
+        $("run-agent").value = s.suggested_runs[0].agent;
+        $("run-input").value = s.suggested_runs[0].input;
+      }
+    } else banner(st, "bad", r.error || "load failed");
+  });
+
+  document.querySelectorAll("[data-run]").forEach(btn => btn.onclick = () => {
+    const [id, i] = btn.dataset.run.split(":");
+    const s = BOOT.scenarios.find(x => x.id === id);
+    const run = s.suggested_runs[parseInt(i, 10)];
+    startRun(run.agent, run.input);
+  });
+}
+
+// ---- boot ----
+bootstrap(false);
+setInterval(() => { if (!document.hidden && !currentRun) refreshTables(); }, 4000);
+</script>
+</body>
+</html>
