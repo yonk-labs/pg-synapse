@@ -72,6 +72,12 @@
             display: none; flex-direction: column; overflow: hidden; z-index: 5;
             box-shadow: -16px 0 32px rgba(0,0,0,.5); }
   #detail.open { display: flex; }
+  /* center + enlarge the detail panel over the diagram for readability */
+  #detail.detail-max { left: 50%; right: auto; top: 3%; bottom: 3%; width: 74%; max-width: 940px;
+                       transform: translateX(-50%); border-radius: 10px;
+                       box-shadow: 0 0 0 100vmax rgba(3,7,15,.66); }
+  #detail.detail-max #detail-body { font-size: 15px; line-height: 1.55; }
+  #detail.detail-max .ab-prompt { max-height: none; font-size: 13.5px; }
   #detail-head { flex: none; display: flex; justify-content: space-between; align-items: center;
                  border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px; }
   #detail-title { color: var(--accent); font-size: 15px; font-weight: 600; text-transform: uppercase;
@@ -123,6 +129,9 @@
   #dock { flex: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
           display: flex; flex-direction: column; height: 210px; overflow: hidden; }
   #dock.collapsed { height: 42px; }
+  /* expand the schema tree over the hero for a full-screen explorer */
+  body.dock-max #stage, body.dock-max #tabpanels, body.dock-max .tabbar { display: none; }
+  body.dock-max #dock { flex: 1 1 auto; height: auto; }
   #dock-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 9px 12px;
                border-bottom: 1px solid var(--border); font-size: 13px; }
   #dock-head b { color: var(--accent); text-transform: uppercase; letter-spacing: .05em; font-size: 12.5px; }
@@ -419,7 +428,8 @@
   <aside id="detail" class="panel">
     <div id="detail-head">
       <span id="detail-title"></span>
-      <button id="detail-close" class="link">close</button>
+      <span><button id="detail-max" class="link" title="Center and expand (Esc to restore)">expand</button>
+      <button id="detail-close" class="link">close</button></span>
     </div>
     <div id="detail-body"></div>
   </aside>
@@ -646,7 +656,8 @@
       <b>Schema tree</b>
       <span class="small">live: refreshes after every run</span>
       <button id="dock-refresh">refresh</button>
-      <button id="dock-toggle" class="link" style="margin-left:auto">hide</button>
+      <button id="dock-max" class="link" style="margin-left:auto">expand</button>
+      <button id="dock-toggle" class="link">hide</button>
     </div>
     <div id="dock-body">
       <div id="tree"><div class="hint">loading...</div></div>
@@ -1876,8 +1887,16 @@ function openDetail(title, html) {
   $("detail-body").innerHTML = html;
   $("detail").classList.add("open");
 }
-function closeDetail() { $("detail").classList.remove("open"); }
+function setDetailMax(on) {
+  $("detail").classList.toggle("detail-max", on);
+  $("detail-max").textContent = on ? "restore" : "expand";
+}
+function closeDetail() { $("detail").classList.remove("open"); setDetailMax(false); }
 $("detail-close").onclick = closeDetail;
+$("detail-max").onclick = () => setDetailMax(!$("detail").classList.contains("detail-max"));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("detail").classList.contains("detail-max")) setDetailMax(false);
+});
 
 function wireHeroNodes() {
   const map = {
@@ -1897,6 +1916,7 @@ function openPromptBuilder() {
   openDetail("Prompt builder", '' +
     '<div class="detail-note">Compose a run. This is exactly <code>SELECT synapse.execute(agent, input)</code>.</div>' +
     '<label>agent</label><select id="pb-agent"></select>' +
+    '<label>executor <span class="small" style="text-transform:none;color:var(--muted)">(loop strategy; updates the agent)</span></label><select id="pb-executor"></select>' +
     '<label>input</label><textarea id="pb-input" rows="4" placeholder="ask the agent something"></textarea>' +
     '<div class="pb-sql" id="pb-sql"></div>' +
     '<div class="row" style="margin-top:8px"><button class="primary" id="pb-run">Run</button>' +
@@ -1905,17 +1925,35 @@ function openPromptBuilder() {
   const sel = $("pb-agent");
   sel.innerHTML = ((BOOT && BOOT.agents) || []).map(a => '<option>' + esc(a.name) + '</option>').join("");
   if ($("run-agent").value) sel.value = $("run-agent").value;
+  $("pb-executor").innerHTML = ((BOOT && BOOT.executors) || []).map(e => '<option>' + esc(e) + '</option>').join("");
+  const agentOf = (n) => ((BOOT && BOOT.agents) || []).find(x => x.name === n);
   const renderSql = () => {
     const inp = ($("pb-input").value || "").replace(/'/g, "''");
     $("pb-sql").innerHTML = "<code>SELECT synapse.execute('" + esc(sel.value) + "', '" + esc(inp) + "');</code>";
   };
-  const upd = () => { renderAgentBox(sel.value); renderSql(); };
+  const upd = () => {
+    const a = agentOf(sel.value);
+    if (a && $("pb-executor")) $("pb-executor").value = a.executor_name;
+    renderAgentBox(sel.value); renderSql();
+  };
   sel.onchange = upd;
   $("pb-input").oninput = renderSql;
   $("pb-guard").textContent = CONNECTED ? "" : "connect an endpoint first";
-  $("pb-run").onclick = () => {
+  $("pb-run").onclick = async () => {
     if (!requireConnected($("pb-guard"))) return;
-    startRun(sel.value, $("pb-input").value);
+    const name = sel.value, chosen = $("pb-executor").value, a = agentOf(name);
+    if (a && chosen && chosen !== a.executor_name) {
+      $("pb-guard").textContent = "switching executor to " + chosen + "...";
+      await api("/api/agent", "POST", {
+        name: a.name, system_prompt: a.system_prompt, executor: chosen,
+        llm_profile: a.llm_profile_main, tools: a.tools || [],
+        max_iterations: a.max_iterations, timeout_ms: a.timeout_ms,
+        cost_cap_usd: a.cost_cap_usd || 0,
+      });
+      await bootstrap(true);
+      $("pb-guard").textContent = "";
+    }
+    startRun(name, $("pb-input").value);
   };
   upd();
 }
@@ -2080,14 +2118,28 @@ $("dock-toggle").onclick = () => {
   const collapsed = dock.classList.toggle("collapsed");
   $("dock-toggle").textContent = collapsed ? "show" : "hide";
 };
-// Expand the active tab panel over the hero diagram for a focused demo view.
+// Expand the active tab panel, or the schema tree, over the hero diagram.
 function setTabsMax(on) {
   document.body.classList.toggle("tabs-max", on);
   $("tab-max").innerHTML = on ? "⤡ Show diagram" : "⤢ Expand";
+  if (on) setDockMax(false);
+}
+function setDockMax(on) {
+  document.body.classList.toggle("dock-max", on);
+  $("dock-max").textContent = on ? "restore" : "expand";
+  if (on) {
+    document.body.classList.remove("tabs-max");
+    $("tab-max").innerHTML = "⤢ Expand";
+    $("dock").classList.remove("collapsed");
+    $("dock-toggle").textContent = "hide";
+  }
 }
 $("tab-max").onclick = () => setTabsMax(!document.body.classList.contains("tabs-max"));
+$("dock-max").onclick = () => setDockMax(!document.body.classList.contains("dock-max"));
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.body.classList.contains("tabs-max")) setTabsMax(false);
+  if (e.key !== "Escape") return;
+  if (document.body.classList.contains("tabs-max")) setTabsMax(false);
+  if (document.body.classList.contains("dock-max")) setDockMax(false);
 });
 
 // ---- NL tab: talk to the database via db_architect ----
