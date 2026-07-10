@@ -17,8 +17,15 @@ fn json(out: ToolOutput) -> serde_json::Value {
     }
 }
 
+/// The SSRF guard blocks loopback by default; these tests legitimately target a
+/// local mock server, so they opt in via the operator allowlist.
+fn allow_loopback() {
+    pg_synapse_tools_http::allow_host("127.0.0.1");
+}
+
 #[tokio::test]
 async fn http_get_returns_status_and_body() {
+    allow_loopback();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/hello"))
@@ -42,6 +49,7 @@ async fn http_get_returns_status_and_body() {
 
 #[tokio::test]
 async fn http_get_passes_headers_through() {
+    allow_loopback();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/h"))
@@ -69,6 +77,7 @@ async fn http_get_passes_headers_through() {
 #[tokio::test]
 async fn http_get_returns_404_as_data_not_error() {
     // Non-2xx responses are not errors: they're real data the agent must see.
+    allow_loopback();
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/missing"))
@@ -92,6 +101,7 @@ async fn http_get_returns_404_as_data_not_error() {
 
 #[tokio::test]
 async fn http_post_sends_json_body() {
+    allow_loopback();
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/echo"))
@@ -120,6 +130,7 @@ async fn http_post_sends_json_body() {
 
 #[tokio::test]
 async fn http_head_returns_status_and_headers() {
+    allow_loopback();
     let server = MockServer::start().await;
     Mock::given(method("HEAD"))
         .and(path("/probe"))
@@ -168,6 +179,7 @@ async fn network_error_surfaces_as_execution_error() {
     // Bind a TCP listener then drop it, freeing the port. The HTTP client
     // pointed at the freed port will fail to connect with a deterministic
     // ConnectionRefused (or equivalent) reqwest error.
+    allow_loopback();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
