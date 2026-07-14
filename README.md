@@ -79,6 +79,23 @@ Each example has a repeatable `run.sh` and a captured `EXAMPLE_OUTPUT.md`.
 
 See `examples/README.md` for the index.
 
+## Containerized demo
+
+`demo/` is a self-contained playground: Postgres 17 with the extension baked
+in, a thin axum harness, and a single-page web UI that drives the whole
+`synapse.*` surface. Built for a live talk (LLM endpoint configured in the
+UI at runtime). From the repo root:
+
+```bash
+docker compose up --build
+# then open http://localhost:8080
+```
+
+Ships six one-click scenarios, including three where the agent acts on the
+database itself: an autonomous index tuner, a DBA that files tickets, and
+LLM-powered ETL. See `demo/README.md` for build details and the suggested
+talk flow.
+
 ## Workspace layout
 
 ```

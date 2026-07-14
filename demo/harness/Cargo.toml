@@ -1,0 +1,21 @@
+[package]
+name        = "pg-synapse-demo-harness"
+description = "Containerized demo harness for pg_synapse: axum backend + static web UI"
+version     = "0.1.1"
+edition     = "2021"
+license     = "MIT OR Apache-2.0"
+publish     = false
+
+# NOTE: this crate deliberately declares its own edition/version instead of
+# inheriting from the workspace, so its Docker image can build it standalone
+# (the build context is demo/harness only, with no workspace root present).
+
+[dependencies]
+axum         = "0.8"
+tokio        = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-postgres = "0.7"
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+thiserror    = "2"
+uuid         = { version = "1", features = ["v4", "serde"] }
+reqwest      = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

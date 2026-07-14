@@ -1,0 +1,39 @@
+# pg_synapse containerized demo: Postgres 17 with the extension baked in,
+# plus the axum harness serving the web UI on http://localhost:8080.
+#
+#   docker compose up --build
+#
+# The LLM endpoint is NOT part of this stack: point the UI's endpoint form at
+# any reachable OpenAI-compatible server (vLLM, llama.cpp, OpenAI) that
+# supports tool calls.
+
+services:
+  db:
+    build:
+      context: .
+      dockerfile: demo/db/Dockerfile
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: synapse_demo
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d synapse_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  harness:
+    build:
+      context: demo/harness
+    environment:
+      DATABASE_URL: "host=db port=5432 user=postgres password=postgres dbname=synapse_demo"
+      # Prefill for the UI endpoint form (the repo's documented test LLM).
+      DEFAULT_LLM_BASE_URL: "http://192.168.1.193:8000/v1"
+      DEFAULT_LLM_MODEL: "Intel/Qwen3-Coder-Next-int4-AutoRound"
+    ports:
+      # Override the host port with HARNESS_PORT=nnnn docker compose up.
+      - "${HARNESS_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy

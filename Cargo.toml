@@ -12,6 +12,7 @@ members = [
     "plugins/pg-synapse-tools-sql",
     "crates/pg-synapse-sidecar", "plugins/pg-synapse-tools-fs", "plugins/pg-synapse-tools-lede", "plugins/pg-synapse-tools-calc", "plugins/pg-synapse-tools-clock", "plugins/pg-synapse-tools-delegate",
     "plugins/pg-synapse-compaction",
+    "demo/harness",
 ]
 
 [workspace.package]
