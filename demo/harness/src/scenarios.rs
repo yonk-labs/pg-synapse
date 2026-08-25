@@ -185,6 +185,51 @@ pub const SCENARIOS: &[Scenario] = &[
         probes: &[],
         sql: include_str!("../scenarios/guardrails.sql"),
     },
+    Scenario {
+        id: "leads",
+        title: "Sales lead scoring",
+        description: "Seeds inbound leads with messy free-text notes. The agent reads \
+                      each, judges budget/intent/timeline, and writes a hot/warm/cold \
+                      score plus a one-line reason: an SDR's prioritization pass in SQL.",
+        watch_tables: &[],
+        suggested_runs: &[SuggestedRun {
+            agent: "sales_lead_scorer",
+            input: "Score all the unscored leads in sales.leads.",
+            label: "Score the leads",
+        }],
+        probes: &[],
+        sql: include_str!("../scenarios/leads.sql"),
+    },
+    Scenario {
+        id: "invoices",
+        title: "AR collections",
+        description: "Seeds open invoices, some past due. The agent finds the overdue \
+                      ones, marks them overdue, and drafts a tone-appropriate dunning \
+                      reminder for each while leaving in-terms invoices alone.",
+        watch_tables: &[],
+        suggested_runs: &[SuggestedRun {
+            agent: "collections_agent",
+            input: "Review the open invoices and chase the ones that are overdue.",
+            label: "Chase overdue invoices",
+        }],
+        probes: &[],
+        sql: include_str!("../scenarios/invoices.sql"),
+    },
+    Scenario {
+        id: "inventory",
+        title: "Inventory reorder",
+        description: "Seeds a product catalog with stock levels, some below their \
+                      reorder point. The agent finds them and raises a restock order \
+                      for each: an ops reorder pass.",
+        watch_tables: &[],
+        suggested_runs: &[SuggestedRun {
+            agent: "reorder_agent",
+            input: "Check stock levels and reorder anything at or below its reorder point.",
+            label: "Reorder low stock",
+        }],
+        probes: &[],
+        sql: include_str!("../scenarios/inventory.sql"),
+    },
 ];
 
 pub fn find(id: &str) -> Option<&'static Scenario> {

@@ -1,5 +1,7 @@
 //! JSON HTTP endpoints wrapping the `synapse.*` SQL surface.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
@@ -57,9 +59,9 @@ const TABLE_QUERIES: &[(&str, &str)] = &[
     ),
     (
         "executions",
-        "SELECT to_jsonb(x)::text FROM (SELECT execution_id, agent_name, left(input, 60) AS input, \
-         status, tokens_in, tokens_out, cost_usd, duration_ms, started_at \
-         FROM synapse.executions ORDER BY started_at DESC LIMIT 20) x",
+        "SELECT to_jsonb(x)::text FROM (SELECT execution_id, agent_name, left(input, 80) AS input, \
+         status, caller_role, tokens_in, tokens_out, cost_usd, duration_ms, started_at \
+         FROM synapse.executions ORDER BY started_at DESC LIMIT 50) x",
     ),
     (
         "signals",
@@ -280,6 +282,311 @@ pub async fn profile_test(Json(req): Json<ProfileTestReq>) -> Result<Json<Value>
     })))
 }
 
+// ---- sidecar probe (remote PG demo) ----
+
+#[derive(Deserialize)]
+pub struct SidecarProbeReq {
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub query: String,
+}
+
+/// Run a `sql_query` tool_call on the sidecar and return its parsed reply
+/// (`{"output": ...}` or `{"error": ...}`). The v1 `tool_call` endpoint is not
+/// admin-gated, so no token is needed for reads.
+async fn sidecar_query(http: &reqwest::Client, base: &str, q: &str) -> Value {
+    let body = json!({"tool": "sql_query", "input": {"query": q}});
+    match http
+        .post(format!("{base}/v1/tool_call"))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r.json().await.unwrap_or(Value::Null),
+        Err(e) => json!({"error": e.to_string()}),
+    }
+}
+
+/// Server-side proxy to a running `pg-synapse-sidecar`. The browser page calls
+/// this same-origin endpoint so there is no CORS dance; the harness relays to
+/// the sidecar's v1 HTTP API. It proves remote-PG access end to end: sidecar
+/// health, the remote server's own identity (`current_database()` /
+/// `inet_server_addr()`), and a live SQL read, all executed by the sidecar
+/// against its remote database.
+pub async fn sidecar_probe(Json(req): Json<SidecarProbeReq>) -> Result<Json<Value>, HarnessError> {
+    let base = {
+        let b = req.base_url.trim().trim_end_matches('/');
+        if b.is_empty() {
+            "http://localhost:8088".to_owned()
+        } else {
+            b.to_owned()
+        }
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?;
+
+    let health = match http.get(format!("{base}/v1/health")).send().await {
+        Ok(r) => {
+            let s = r.status().as_u16();
+            let b: Value = r.json().await.unwrap_or(Value::Null);
+            json!({"ok": (200..300).contains(&(s as i32)), "status": s, "body": b})
+        }
+        Err(e) => json!({"ok": false, "error": e.to_string()}),
+    };
+    if !health.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(Json(json!({
+            "ok": false, "target": base, "health": health,
+            "error": format!("sidecar unreachable at {base}"),
+        })));
+    }
+
+    let version: Value = match http.get(format!("{base}/v1/version")).send().await {
+        Ok(r) => r.json().await.unwrap_or(Value::Null),
+        Err(e) => json!({"error": e.to_string()}),
+    };
+
+    // The remote server's own identity: this is the managed DB the sidecar
+    // is connected to, reported by that server itself.
+    let identity = sidecar_query(
+        &http,
+        &base,
+        "SELECT current_database() AS database, \
+         coalesce(host(inet_server_addr()), 'local socket') AS server_addr, \
+         inet_server_port() AS server_port, \
+         substring(version() from 'PostgreSQL [0-9.]+') AS version",
+    )
+    .await;
+
+    let q = if req.query.trim().is_empty() {
+        "SELECT table_name FROM information_schema.tables \
+         WHERE table_schema = 'synapse' ORDER BY table_name"
+            .to_owned()
+    } else {
+        req.query.trim().to_owned()
+    };
+    let rows = sidecar_query(&http, &base, &q).await;
+
+    Ok(Json(json!({
+        "ok": true, "target": base,
+        "health": health, "version": version,
+        "identity": identity, "rows": rows, "query": q,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct SidecarExecReq {
+    #[serde(default)]
+    pub base_url: String,
+    pub agent: String,
+    pub input: String,
+}
+
+/// Proxy an agent run to the sidecar's `POST /v1/execute`. Both the harness and
+/// the sidecar are host processes, so this path reaches the LLM even in
+/// environments where the in-database extension (a container) cannot. Returns
+/// the sidecar's outcome envelope.
+pub async fn sidecar_execute(Json(req): Json<SidecarExecReq>) -> Result<Json<Value>, HarnessError> {
+    let base = {
+        let b = req.base_url.trim().trim_end_matches('/');
+        if b.is_empty() {
+            "http://localhost:8088".to_owned()
+        } else {
+            b.to_owned()
+        }
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    match http
+        .post(format!("{base}/v1/execute"))
+        .json(&json!({"agent": req.agent, "input": req.input}))
+        .send()
+        .await
+    {
+        Ok(r) => {
+            let status = r.status().as_u16();
+            let env: Value = r.json().await.unwrap_or(Value::Null);
+            Ok(Json(json!({"ok": (200..300).contains(&(status as i32)),
+                           "status": status, "envelope": env})))
+        }
+        Err(e) => Ok(Json(json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+// ---- workload generator (add / reset / start / stop synthetic data) ----
+
+/// Whitelisted workload targets: (name, insert-N-rows SQL binding $1::int =
+/// count, reset SQL). Powers "add X records", "reset", and the continuous
+/// start/stop generator so agents can be shown working on real, growing load.
+const WORKLOADS: &[(&str, &str, &str, &str)] = &[
+    (
+        "orders",
+        "INSERT INTO perf.orders (customer_id, amount) \
+         SELECT (random()*20000)::int, round((random()*500)::numeric, 2) \
+         FROM generate_series(1, $1::int)",
+        "TRUNCATE perf.orders RESTART IDENTITY",
+        "perf.orders",
+    ),
+    (
+        "leads",
+        "INSERT INTO sales.leads (company, note) \
+         SELECT 'Lead '||g, (ARRAY[\
+           'Enterprise, budget approved, wants a demo this quarter',\
+           'solo founder, no budget, just browsing',\
+           'mid-market, evaluating us against a competitor',\
+           'existing customer, exec sponsor, urgent expansion',\
+           'downloaded a whitepaper, no reply to follow-ups'])[1+floor(random()*5)] \
+         FROM generate_series(1, $1::int) g",
+        "TRUNCATE sales.leads RESTART IDENTITY",
+        "sales.leads",
+    ),
+    (
+        "invoices",
+        "INSERT INTO finance.invoices (customer, amount, due_date) \
+         SELECT 'Cust '||g, round((random()*20000)::numeric, 2), \
+                CURRENT_DATE - (floor(random()*120)::int - 30) \
+         FROM generate_series(1, $1::int) g",
+        "TRUNCATE finance.collection_messages, finance.invoices RESTART IDENTITY",
+        "finance.invoices",
+    ),
+    (
+        "contacts",
+        "INSERT INTO etl.raw_contacts (note) \
+         SELECT (ARRAY[\
+           'Call from J. Doe at ACME (j@acme.com), Germany, wants a renewal',\
+           'angry email: maria@techflow.es, Spain, wants a refund',\
+           'met someone from Globex, U.K., interested in a demo',\
+           'support req: Tanaka, Japan, cannot export dashboards',\
+           'prospect jqp@gmail.com, the states, asking about pricing'])[1+floor(random()*5)] \
+         FROM generate_series(1, $1::int) g",
+        "TRUNCATE etl.contacts, etl.raw_contacts RESTART IDENTITY",
+        "etl.raw_contacts",
+    ),
+];
+
+fn workload_find(
+    target: &str,
+) -> Option<&'static (&'static str, &'static str, &'static str, &'static str)> {
+    WORKLOADS.iter().find(|(n, _, _, _)| *n == target)
+}
+
+#[derive(Deserialize)]
+pub struct WorkloadReq {
+    pub target: String,
+    #[serde(default)]
+    pub count: i32,
+    #[serde(default)]
+    pub rate: i32,
+}
+
+/// Add `count` synthetic rows to a target in one shot.
+pub async fn workload_seed(
+    State(state): State<AppState>,
+    Json(req): Json<WorkloadReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let w = workload_find(&req.target)
+        .ok_or_else(|| HarnessError::BadRequest(format!("unknown workload '{}'", req.target)))?;
+    let n = req.count.clamp(1, 100_000);
+    let client = db::connect(&state.db_url).await?;
+    client.execute(w.1, &[&n]).await?;
+    Ok(Json(json!({"ok": true, "target": req.target, "added": n})))
+}
+
+/// Reset a target's table(s) to empty (and stop its generator if running).
+pub async fn workload_reset(
+    State(state): State<AppState>,
+    Json(req): Json<WorkloadReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let w = workload_find(&req.target)
+        .ok_or_else(|| HarnessError::BadRequest(format!("unknown workload '{}'", req.target)))?;
+    let existing = state.workloads.lock().unwrap().remove(&req.target);
+    if let Some(flag) = existing {
+        flag.store(true, Ordering::SeqCst);
+    }
+    let client = db::connect(&state.db_url).await?;
+    client.batch_execute(w.2).await?;
+    Ok(Json(json!({"ok": true, "target": req.target})))
+}
+
+/// Start a continuous generator inserting `rate` rows/second until stopped.
+pub async fn workload_start(
+    State(state): State<AppState>,
+    Json(req): Json<WorkloadReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let w = workload_find(&req.target)
+        .ok_or_else(|| HarnessError::BadRequest(format!("unknown workload '{}'", req.target)))?;
+    let insert = w.1;
+    let rate = if req.rate <= 0 {
+        25
+    } else {
+        req.rate.min(5000)
+    };
+    let flag = Arc::new(AtomicBool::new(false));
+    let prev = state
+        .workloads
+        .lock()
+        .unwrap()
+        .insert(req.target.clone(), flag.clone());
+    if let Some(old) = prev {
+        old.store(true, Ordering::SeqCst);
+    }
+    let db_url = state.db_url.clone();
+    tokio::spawn(async move {
+        let client = match db::connect(&db_url).await {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        while !flag.load(Ordering::SeqCst) {
+            let _ = client.execute(insert, &[&rate]).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+    Ok(Json(
+        json!({"ok": true, "target": req.target, "rate": rate}),
+    ))
+}
+
+/// Stop a running generator.
+pub async fn workload_stop(
+    State(state): State<AppState>,
+    Json(req): Json<WorkloadReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let existing = state.workloads.lock().unwrap().remove(&req.target);
+    let stopped = existing.is_some();
+    if let Some(flag) = existing {
+        flag.store(true, Ordering::SeqCst);
+    }
+    Ok(Json(
+        json!({"ok": true, "target": req.target, "stopped": stopped}),
+    ))
+}
+
+/// Which targets exist and which are currently generating.
+pub async fn workload_status(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let running: Vec<String> = state.workloads.lock().unwrap().keys().cloned().collect();
+    // Live row count per target (-1 when the table is not seeded yet). Table
+    // names come from the WORKLOADS whitelist, so the format! is injection-safe.
+    let client = db::connect(&state.db_url).await?;
+    let mut counts = serde_json::Map::new();
+    for (name, _, _, table) in WORKLOADS {
+        let sql = format!(
+            "SELECT CASE WHEN to_regclass('{table}') IS NULL THEN -1 \
+             ELSE (SELECT count(*) FROM {table}) END"
+        );
+        let c: i64 = match client.query_one(&sql, &[]).await {
+            Ok(row) => row.get(0),
+            Err(_) => -1,
+        };
+        counts.insert((*name).to_string(), json!(c));
+    }
+    let targets: Vec<&str> = WORKLOADS.iter().map(|(n, _, _, _)| *n).collect();
+    Ok(Json(
+        json!({"ok": true, "running": running, "targets": targets, "counts": counts}),
+    ))
+}
+
 // ---- agents ----
 
 #[derive(Deserialize)]
@@ -425,6 +732,16 @@ pub async fn execute(
 ) -> Result<Json<Value>, HarnessError> {
     if req.agent.trim().is_empty() {
         return Err(HarnessError::BadRequest("agent is required".to_owned()));
+    }
+    // Task agents (etl_agent, index_tuner, ...) crash the model with an empty
+    // prompt (HTTP 400 "concatenate str (not NoneType)"). Every agent needs
+    // something to act on; guide the caller to a real task instead.
+    if req.input.trim().is_empty() {
+        return Err(HarnessError::BadRequest(
+            "This agent needs a task to run. Load a Demo to prefill a suggested run, \
+             or type what you want it to do."
+                .to_owned(),
+        ));
     }
     let client = db::connect(&state.db_url).await?;
     require_agent_endpoint(&client, &req.agent).await?;

@@ -45,20 +45,25 @@ WHERE NOT EXISTS (SELECT 1 FROM support.tickets);
 
 SELECT synapse.agent_create(
   'triage_agent',
-  $$You are a support triage assistant. For each ticket id given:
+  $$You are a support triage assistant. You read a support ticket and classify
+it, then record your decision.
 
-1. Call sql_query with
-   query: SELECT t.id, t.subject, t.body, c.email, c.tier FROM support.tickets t JOIN support.customers c ON c.id=t.customer_id WHERE t.id = $1
-   params: [<ticket id>]
-2. Decide category in {api, billing, account, howto, other} and priority in {low, normal, high, urgent}. Enterprise tier urgent issues escalate (escalated=true). All others do not escalate.
-3. Call sql_exec with
-   query: UPDATE support.tickets SET category=$1, priority=$2, escalated=$3 WHERE id=$4
-   params: ["<cat>", "<prio>", <bool>, <ticket id>]
-4. Reply with a one-line summary of what you did.
+The data:
+- support.tickets(id, subject, body, customer_id, category, priority, escalated)
+- support.customers(id, email, tier) - tier is 'enterprise', 'pro', or 'free'.
 
-Always pass values through the params array using $1, $2, ... placeholders.
-Never inline literal values into the SQL string; parameter binding is the
-supported and injection-safe path.$$,
+For each ticket id you are given:
+- Read the ticket and its customer (join on customer_id) so you can see the
+  subject, body, and the customer's tier.
+- Decide a category (one of: api, billing, account, howto, other) and a
+  priority (one of: low, normal, high, urgent) from what the ticket says.
+- Escalate (escalated = true) only when an enterprise-tier customer has an
+  urgent issue; otherwise do not escalate.
+- Write the category, priority, and escalated flag back onto that ticket row.
+- Reply with a one-line summary of what you decided.
+
+Pass values through the params array ($1, $2, ...); never inline literals into
+the SQL. Run ONE statement per tool call and never end it with a semicolon.$$,
   'conversation',
   'vllm-default',
   ARRAY['sql_query', 'sql_exec'],

@@ -39,27 +39,26 @@ INSERT INTO etl.raw_contacts (note) VALUES
 
 SELECT synapse.agent_create(
   'etl_agent',
-  $$You are a data normalization agent. You turn messy free-text contact
-notes into clean structured rows. Plain SQL cannot do this; you can.
+  $$You are a data normalization agent. You turn messy free-text contact notes
+into clean structured rows, using the model's language understanding to do what
+plain SQL cannot.
 
-Workflow:
-1. Find unprocessed rows. Call sql_query with
-   query: SELECT r.id, r.note FROM etl.raw_contacts r LEFT JOIN etl.contacts c ON c.raw_id = r.id WHERE c.id IS NULL ORDER BY r.id
-   params: []
-2. For EACH row, extract and normalize from the note text:
-   - name: the person's full name, title case
-   - company: the organization, or null if none
-   - email: the email address
-   - country_code: ISO 3166-1 alpha-2 (Deutschland -> DE, SPAIN -> ES,
-     U.K. -> GB, Japan -> JP, "the states" -> US)
-   - intent: one of {renewal, complaint, sales_lead, support}
-3. Insert each clean row. Call sql_exec with
-   query: INSERT INTO etl.contacts (raw_id, name, company, email, country_code, intent) VALUES ($1, $2, $3, $4, $5, $6)
-   params: [<raw id>, "<name>", "<company or null>", "<email>", "<CC>", "<intent>"]
-4. Reply with one line per processed row: "row <id>: <name> / <CC> / <intent>".
+The data:
+- etl.raw_contacts(id, note) holds the messy notes.
+- etl.contacts(raw_id, name, company, email, country_code, intent) is the clean
+  target; raw_id references the source row.
 
-Always pass values through the params array with $1, $2, ... placeholders.
-Never inline values into the SQL string.$$,
+How to work:
+- Find the raw_contacts rows that do not yet have a matching contacts row.
+- For each one, read the note and extract: the person's full name (title case),
+  the company (or null), the email, the country as an ISO 3166-1 alpha-2 code
+  (e.g. Germany -> DE, Spain -> ES, the U.K. -> GB, Japan -> JP, the US -> US),
+  and the intent as one of: renewal, complaint, sales_lead, support.
+- Write each clean row into etl.contacts. Pass extracted values through the
+  params array ($1, $2, ...); never inline them into the SQL string.
+- Finish with one short line per processed row: "row <id>: <name> / <CC> / <intent>".
+
+Run ONE statement per tool call and never end a statement with a semicolon.$$,
   'conversation',
   'vllm-default',
   ARRAY['sql_query', 'sql_exec'],
