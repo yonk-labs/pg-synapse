@@ -117,27 +117,24 @@
              border: 1px solid var(--border); border-radius: 6px; color: var(--muted);
              padding: 4px 11px; font-size: 12px; cursor: pointer; white-space: nowrap; }
   .tab-max:hover { color: var(--text); border-color: var(--accent); }
-  body.tabs-max .tab-max { color: var(--accent); border-color: var(--accent); }
+  #tab-min { order: 98; }
+  #tab-max { margin-left: 6px; }
+  body.tabs-max #tab-max { color: var(--accent); border-color: var(--accent); }
   body.tabs-max #stage { display: none; }
   body.tabs-max #tabpanels { min-height: 0; }
+  /* Shrink: collapse the panel so the diagram gets the room. */
+  body.tabs-min #tabpanels { display: none; }
+  body.tabs-min #tab-min { color: var(--accent); border-color: var(--accent); }
   #tabpanels { flex: 1 1 0; min-height: 190px; position: relative; }
   .tabpanel { display: none; height: 100%; overflow: auto; padding: 2px 4px 0 0; }
   .tabpanel.active { display: block; }
   .tabpanel > .sub:first-child { margin-top: 0; }
 
-  /* bottom dock: schema tree */
-  #dock { flex: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-          display: flex; flex-direction: column; height: 210px; overflow: hidden; }
-  #dock.collapsed { height: 42px; }
-  /* expand the schema tree over the hero for a full-screen explorer */
-  body.dock-max #stage, body.dock-max #tabpanels, body.dock-max .tabbar { display: none; }
-  body.dock-max #dock { flex: 1 1 auto; height: auto; }
-  #dock-head { flex: none; display: flex; align-items: center; gap: 10px; padding: 9px 12px;
-               border-bottom: 1px solid var(--border); font-size: 13px; }
-  #dock-head b { color: var(--accent); text-transform: uppercase; letter-spacing: .05em; font-size: 12.5px; }
-  #dock.collapsed #dock-head { border-bottom: none; }
-  #dock-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 300px 1fr; }
-  #dock.collapsed #dock-body { display: none; }
+  /* schema tree (Tree tab) */
+  #p-tree.active { display: flex; flex-direction: column; }
+  #tree-bar { flex: none; display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  #tree-grid { flex: 1 1 auto; min-height: 170px; display: grid; grid-template-columns: 320px 1fr;
+               border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   #tree { overflow-y: auto; border-right: 1px solid var(--border); padding: 6px 10px; }
   #tree-detail { overflow: auto; padding: 6px 12px; }
   #tree-detail .td-h { color: var(--green); font-family: var(--mono); font-size: 13px; margin-bottom: 4px; }
@@ -145,6 +142,8 @@
   .tschema { color: var(--accent); cursor: pointer; padding: 3px 0; user-select: none; }
   .ttable { color: var(--text); cursor: pointer; padding: 2px 0 2px 18px; }
   .ttable:hover, .tschema:hover { color: #7ec0ff; }
+  #tree-detail tr.trow { cursor: pointer; }
+  #tree-detail tr.trow:hover td { background: var(--panel2); }
   .ttable.sel { color: var(--green); font-weight: 600; }
   .tcount { color: var(--muted); }
 
@@ -214,6 +213,70 @@
               background: var(--panel2); }
   .scenario h3 { margin: 0 0 4px; font-size: 13.5px; }
   .scenario p { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+  /* generic modal (60% wide x 80% tall) */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(3,7,15,.7); z-index: 200;
+                   display: none; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal-box { width: 60vw; min-width: 520px; max-width: 1040px; height: 80vh; background: var(--panel);
+               border: 1px solid var(--border); border-radius: 10px; display: flex; flex-direction: column;
+               box-shadow: 0 24px 70px rgba(0,0,0,.65); overflow: hidden; }
+  .modal-head { flex: none; display: flex; align-items: center; justify-content: space-between;
+                padding: 11px 16px; border-bottom: 1px solid var(--border); }
+  .modal-title { color: var(--accent); font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; }
+  .modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 16px; font-size: 13.5px; line-height: 1.5; }
+  @media (max-width: 720px) { .modal-box { width: 92vw; min-width: 0; } }
+
+  /* AR collections: customer mini-app (list + detail card + message thread) */
+  .ar-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .ar-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border: 1px solid var(--border);
+            border-radius: 8px; background: var(--panel2); cursor: pointer; font-family: var(--mono); font-size: 12.5px; }
+  .ar-row:hover { border-color: var(--accent); }
+  .ar-name { font-weight: 600; min-width: 110px; }
+  .ar-amt { color: var(--text); min-width: 90px; }
+  .ar-due { color: var(--muted); margin-left: auto; }
+  .ar-badge { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid; text-transform: uppercase;
+              letter-spacing: .04em; white-space: nowrap; }
+  .ar-badge.cur { color: var(--green); border-color: var(--green); }
+  .ar-badge.over { color: var(--red); border-color: var(--red); background: rgba(248,81,73,.12); }
+  .ar-badge.big { font-size: 13px; padding: 4px 13px; }
+  @keyframes ar-flip { 0% { transform: scale(1.6); filter: brightness(1.9); } 100% { transform: scale(1); filter: none; } }
+  .ar-badge.flip { animation: ar-flip .7s ease-out; }
+  .ar-card { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-top: 10px; background: var(--panel2); }
+  .ar-card-head { display: flex; align-items: center; justify-content: space-between; }
+  .ar-card-name { font-size: 16px; font-weight: 600; }
+  .ar-thread { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .ar-msg { border-left: 3px solid var(--accent); padding: 6px 10px; background: var(--panel2); border-radius: 0 6px 6px 0; }
+  .ar-msg-meta { color: var(--muted); margin-bottom: 2px; }
+  .ar-msg-body { white-space: pre-wrap; }
+
+  /* collapsible demo cards */
+  details.scenario { padding: 0; }
+  details.scenario > summary { list-style: none; cursor: pointer; padding: 9px 12px;
+                               display: flex; align-items: center; gap: 9px; user-select: none; }
+  details.scenario > summary::-webkit-details-marker { display: none; }
+  details.scenario > summary::before { content: "\25B8"; color: var(--muted); font-size: 11px; flex: none; }
+  details.scenario[open] > summary::before { content: "\25BE"; }
+  details.scenario > summary:hover { background: rgba(255,255,255,.02); }
+  details.scenario > summary:hover .scen-title { color: #7ec0ff; }
+  .scen-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+  .scen-body { padding: 0 12px 10px 30px; }
+  .scen-badge { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em;
+                color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+  .scen-badge.on { color: var(--green); border-color: var(--green); }
+  .scen-watch { font-size: 12px; color: var(--text); background: rgba(78,161,255,.07); border-left: 2px solid var(--accent);
+                border-radius: 3px; padding: 4px 9px; margin: 0 0 8px; }
+  .scen-watch b { color: var(--accent); }
+  .scen-inspect-note { font-size: 12px; color: var(--muted); margin: 4px 0 2px; }
+  .scen-actions { margin-bottom: 4px; }
+  .scen-wl { margin: 6px 0; align-items: center; }
+  .scen-wl-count { color: var(--accent); }
+  .scen-inspect { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
+  .snap-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .snap-plabel { font-size: 11.5px; color: var(--muted); margin-bottom: 3px; }
+  .snap-cols { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .snap-cols:has(.snap-col + .snap-col) { grid-template-columns: 1fr 1fr; }
+  .snap-which { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; color: var(--yellow); margin-bottom: 2px; }
+  .snap-col .probe-out { margin-top: 0; max-height: 220px; }
   .small { font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
   details summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 6px 0; }
   .hint { color: var(--muted); font-size: 12px; }
@@ -222,6 +285,38 @@
   .pline { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; }
   .pline.pass { color: var(--green); }
   .pline.fail { color: var(--red); }
+
+  /* formatted agent answers (Talk to DB) */
+  .nl-answer { background: var(--panel2); border: 1px solid var(--green); border-radius: 6px;
+               padding: 8px 12px; margin: 8px 0; color: var(--text); }
+  .nl-answer p { margin: 6px 0; }
+  .nl-answer .md-h { margin: 8px 0 4px; font-size: 13.5px; color: var(--accent); text-transform: none; letter-spacing: 0; }
+  .nl-answer .md-list { margin: 6px 0; padding-left: 22px; }
+  .nl-answer .md-list li { margin: 2px 0; }
+  .nl-answer code { background: var(--bg); border: 1px solid var(--border); border-radius: 3px;
+                    padding: 0 4px; font-family: var(--mono); font-size: 12px; color: var(--green); }
+  .nl-answer .ab-prompt { margin: 6px 0; }
+  table.md-table { width: auto; border-collapse: collapse; margin: 8px 0; font-family: var(--mono); font-size: 12px; }
+  table.md-table th, table.md-table td { border: 1px solid var(--border); padding: 4px 10px;
+                    text-align: left; white-space: nowrap; max-width: none; overflow: visible; text-overflow: clip; }
+  table.md-table th { color: var(--muted); background: var(--bg); font-weight: 600; }
+
+  /* Workload tab */
+  .wl-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0;
+             background: var(--panel2); }
+  .wl-head { display: flex; align-items: center; gap: 10px; }
+  .wl-count { margin-left: auto; font-family: var(--mono); color: var(--accent); }
+  .wl-card .muted { color: var(--muted); }
+
+  /* Log tab: agent run history */
+  table.log-table td, table.log-table th { max-width: 340px; }
+  .log-table .lg-when { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
+  .log-table .lg-who { font-family: var(--mono); color: var(--accent); }
+  .log-table .lg-num { font-family: var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+  tr.log-row { cursor: pointer; }
+  tr.log-row:hover td { background: var(--panel2); }
+  tr.log-row.sel td { background: #10233a; }
+  #log-trace .msg { opacity: 1; transform: none; }
 
   /* ---- architecture visualization ---- */
   #p-arch svg { width: 100%; height: 100%; display: block; }
@@ -234,6 +329,9 @@
                              filter: drop-shadow(0 0 7px rgba(78,161,255,.6)); }
   .viz-title { fill: var(--text); font-size: 18px; font-weight: 600; text-anchor: middle; }
   .viz-sub { fill: var(--muted); font-size: 12.5px; font-family: var(--mono); text-anchor: middle; }
+  /* live annotation of what a run touched, shown inside the diagram boxes */
+  .viz-sub.viz-live { fill: var(--yellow); }
+  .viz-nodeg.viz-touched .viz-node { stroke: var(--yellow); stroke-width: 2.2; }
   .viz-iter { fill: var(--accent); font-size: 13px; font-family: var(--mono); text-anchor: middle; }
   .viz-edge { fill: none; stroke: #45526b; stroke-width: 2; marker-end: url(#viz-arrow); }
   .viz-edge.faint { opacity: .38; stroke-dasharray: 5 6; }
@@ -276,6 +374,25 @@
   #viz-banner-title { font-family: var(--mono); font-size: 27px; font-weight: 800;
                       letter-spacing: .04em; text-anchor: middle; }
   #viz-banner-sub { font-family: var(--mono); font-size: 13.5px; fill: var(--text); text-anchor: middle; }
+
+  /* ---- viz2: sidecar / RDS deployment diagram (hero flip) ---- */
+  /* Beat `#p-arch svg { display: block }` (higher specificity) so the flip hides one. */
+  #p-arch #viz2 { display: none; }
+  body.viz-sidecar #p-arch #viz { display: none; }
+  body.viz-sidecar #p-arch #viz2 { display: block; }
+  #viz2 .viz2-t { font-size: 15px; font-weight: 650; fill: var(--text); text-anchor: middle; }
+  #viz2 .viz2-s { font-size: 11px; font-family: var(--mono); fill: var(--muted); text-anchor: middle; }
+  #viz2 .viz2-xs { font-size: 10px; font-family: var(--mono); fill: var(--muted); text-anchor: middle; }
+  #viz2 .viz2-leg { font-size: 10.5px; font-family: var(--mono); fill: var(--muted); text-anchor: start; }
+  #viz2 .viz-node.viz2-node-db { stroke: rgba(63, 185, 80, 0.55); fill: rgba(63, 185, 80, 0.05); }
+  #viz2 .viz-node.viz2-node-ext { stroke: rgba(210, 153, 34, 0.65); fill: rgba(210, 153, 34, 0.06); }
+  #viz2 .viz-boundary.viz2-cloud { stroke: rgba(63, 185, 80, 0.45); }
+  #viz2 .viz-edge.viz2-acc { stroke: var(--accent); marker-end: url(#viz2-arrow-acc); }
+  #viz2 .viz-edge.viz2-db { stroke: var(--green); marker-end: url(#viz2-arrow-db); }
+  #viz2 .viz-edge.viz2-ext { stroke: var(--orange); marker-end: url(#viz2-arrow-ext); }
+  #viz2 .viz-elabel.viz2-lacc { fill: var(--accent); }
+  #viz2 .viz-elabel.viz2-ldb { fill: var(--green); }
+  #viz2 .viz-elabel.viz2-lext { fill: var(--orange); }
 </style>
 </head>
 <body>
@@ -311,8 +428,12 @@
   <div id="stage">
   <div class="panel hero" id="p-arch">
     <div class="hero-head">
-      <h2>The data path <span class="hero-hint">click any node to open its panel</span></h2>
+      <h2 id="hero-title">The data path <span class="hero-hint" id="hero-hint">click any node to open its panel</span></h2>
       <div class="row" style="gap:12px">
+        <span class="seg" id="viz-toggle">
+          <button class="seg-btn active" id="viz-view-ext" title="In-database: the agent loop runs inside Postgres">Extension</button>
+          <button class="seg-btn" id="viz-view-side" title="Sidecar: the kernel runs beside a managed Postgres (RDS)">Sidecar / RDS</button>
+        </span>
         <span id="touched" class="small"></span>
         <button id="btn-viz-replay" disabled>Replay last run</button>
       </div>
@@ -387,8 +508,8 @@
       <g id="n-tables" class="viz-nodeg">
         <rect class="viz-node" x="506" y="96" width="160" height="84" rx="10"></rect>
         <text class="viz-title" x="586" y="124">your tables</text>
-        <text class="viz-sub" x="586" y="144">demo.*, perf.*,</text>
-        <text class="viz-sub" x="586" y="158">etl.*, support.*</text>
+        <text class="viz-sub" id="nt-sub1" x="586" y="144">demo.*, perf.*,</text>
+        <text class="viz-sub" id="nt-sub2" x="586" y="158">etl.*, support.*</text>
       </g>
       <g id="n-trace" class="viz-nodeg">
         <rect class="viz-node" x="506" y="292" width="160" height="84" rx="10"></rect>
@@ -405,7 +526,7 @@
       <g id="n-other" class="viz-nodeg">
         <rect class="viz-node" x="764" y="316" width="180" height="64" rx="10"></rect>
         <text class="viz-title" x="854" y="340">other tools</text>
-        <text class="viz-sub" x="854" y="360">http_*, calculator, time</text>
+        <text class="viz-sub" id="no-sub" x="854" y="360">http_*, calculator, time</text>
       </g>
       <g id="n-dba" class="viz-nodeg" style="display:none">
         <rect class="viz-node" x="16" y="322" width="148" height="60" rx="10"></rect>
@@ -423,6 +544,110 @@
         <text id="viz-banner-sub" x="480" y="248"></text>
       </g>
     </svg>
+    <svg id="viz2" viewBox="0 0 960 420" role="img" aria-label="pg_synapse sidecar deployment diagram">
+      <defs>
+        <marker id="viz2-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#556275"></path></marker>
+        <marker id="viz2-arrow-acc" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"></path></marker>
+        <marker id="viz2-arrow-ext" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--orange)"></path></marker>
+        <marker id="viz2-arrow-db" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--green)"></path></marker>
+      </defs>
+
+      <!-- process boundary: the sidecar -->
+      <rect class="viz-boundary" x="192" y="36" width="372" height="368" rx="12"></rect>
+      <text class="viz-boxtitle" x="204" y="56">pg-synapse-sidecar :8088 (axum binary)</text>
+
+      <!-- cloud boundary: managed Postgres -->
+      <rect class="viz-boundary viz2-cloud" x="644" y="264" width="304" height="150" rx="12"></rect>
+      <text class="viz-boxtitle" x="656" y="282">managed cloud Postgres</text>
+      <text class="viz2-xs" x="796" y="297">Amazon RDS &#183; Cloud SQL &#183; Neon &#183; Supabase</text>
+
+      <!-- edges -->
+      <path class="viz-edge viz2-acc" d="M 142 88 L 206 88" fill="none" marker-end="url(#viz2-arrow-acc)"></path>
+      <path class="viz-edge" d="M 378 116 L 378 128" fill="none" marker-end="url(#viz2-arrow)"></path>
+      <path class="viz-edge" d="M 272 184 L 272 196" fill="none" marker-end="url(#viz2-arrow)"></path>
+      <path class="viz-edge" d="M 450 184 L 450 196" fill="none" marker-end="url(#viz2-arrow)"></path>
+      <path class="viz-edge viz2-acc" d="M 546 157 L 660 157" fill="none" marker-end="url(#viz2-arrow-acc)"></path>
+      <path class="viz-edge viz2-ext" d="M 552 233 L 660 233" fill="none" marker-end="url(#viz2-arrow-ext)"></path>
+      <path class="viz-edge viz2-db" d="M 552 300 L 604 300 L 604 330 L 652 330" fill="none" marker-end="url(#viz2-arrow-db)"></path>
+
+      <text class="viz-elabel" x="174" y="77">HTTP</text>
+      <text class="viz-elabel viz2-lacc" x="604" y="145">HTTPS</text>
+      <text class="viz-elabel viz2-lext" x="604" y="222">outbound</text>
+      <text class="viz-elabel viz2-ldb" x="604" y="289">sqlx/libpq</text>
+
+      <!-- client -->
+      <rect class="viz-node" x="8" y="60" width="132" height="56" rx="10"></rect>
+      <text class="viz-title" x="74" y="84">Your app</text>
+      <text class="viz2-s" x="74" y="104">POST /v1/execute</text>
+
+      <!-- sidecar internals -->
+      <rect class="viz-node" x="210" y="64" width="336" height="52" rx="10"></rect>
+      <text class="viz2-t" x="378" y="83">HTTP API v1 (axum)</text>
+      <text class="viz2-s" x="378" y="98">execute &#183; execute_async &#183; status/{id}</text>
+      <text class="viz2-s" x="378" y="111">embed &#183; tool_call &#183; admin/* (token-gated)</text>
+
+      <rect class="viz-node" x="210" y="132" width="336" height="52" rx="10"></rect>
+      <text class="viz2-t" x="378" y="153">pg-synapse-core kernel</text>
+      <text class="viz2-s" x="378" y="171">6 traits &#183; 3 executors &#183; MCP client</text>
+
+      <rect class="viz-node" x="210" y="200" width="124" height="124" rx="10"></rect>
+      <text class="viz2-t" x="272" y="219">Agents</text>
+      <text class="viz2-s" x="272" y="238">index_tuner</text>
+      <text class="viz2-s" x="272" y="251">db_architect</text>
+      <text class="viz2-s" x="272" y="264">triage_agent</text>
+      <text class="viz2-s" x="272" y="277">enrich_agent</text>
+      <text class="viz2-s" x="272" y="290">policy_agent</text>
+      <text class="viz2-s" x="272" y="303">etl_agent</text>
+      <text class="viz2-s" x="272" y="316">dba_advisor</text>
+
+      <rect class="viz-node viz2-node-ext" x="348" y="200" width="204" height="66" rx="10"></rect>
+      <text class="viz2-t" x="450" y="219">external tools</text>
+      <text class="viz2-s" x="450" y="237">http_get &#183; http_post</text>
+      <text class="viz2-s" x="450" y="251">http_head &#183; MCP tool servers</text>
+
+      <rect class="viz-node viz2-node-db" x="348" y="274" width="204" height="52" rx="10"></rect>
+      <text class="viz2-t" x="450" y="293">in-DB tools</text>
+      <text class="viz2-s" x="450" y="312">sql_query &#183; sql_exec</text>
+
+      <rect class="viz-node" x="348" y="334" width="204" height="60" rx="10"></rect>
+      <text class="viz2-t" x="450" y="353">local tools</text>
+      <text class="viz2-s" x="450" y="371">calculator &#183; call_agent</text>
+      <text class="viz2-s" x="450" y="385">get_current_time</text>
+
+      <!-- LLM endpoint -->
+      <rect class="viz-node" x="664" y="130" width="264" height="52" rx="10"></rect>
+      <text class="viz2-t" x="796" y="152">LLM endpoint</text>
+      <text class="viz2-s" x="796" y="170">OpenAI-compatible &#183; HTTPS</text>
+
+      <!-- internet / external services -->
+      <rect class="viz-node viz2-node-ext" x="664" y="210" width="264" height="46" rx="10"></rect>
+      <text class="viz2-t" x="796" y="228">Internet / external services</text>
+      <text class="viz2-s" x="796" y="246">APIs &#183; webhooks &#183; MCP servers</text>
+
+      <!-- managed Postgres internals -->
+      <rect class="viz-node viz2-node-db" x="664" y="306" width="264" height="48" rx="10"></rect>
+      <text class="viz2-t" x="796" y="325">synapse schema</text>
+      <text class="viz2-xs" x="796" y="343">agents &#183; profiles &#183; executions &#183; messages</text>
+
+      <rect class="viz-node viz2-node-db" x="664" y="362" width="264" height="34" rx="10"></rect>
+      <text class="viz2-t" x="796" y="383">your application tables</text>
+
+      <text class="viz2-xs" x="796" y="409">no extension install needed</text>
+
+      <!-- legend -->
+      <line x1="14" y1="196" x2="40" y2="196" stroke="var(--accent)" stroke-width="2.5"></line>
+      <text class="viz2-leg" x="48" y="200">LLM calls (HTTPS)</text>
+      <line x1="14" y1="218" x2="40" y2="218" stroke="var(--orange)" stroke-width="2.5"></line>
+      <text class="viz2-leg" x="48" y="222">external tool egress</text>
+      <line x1="14" y1="240" x2="40" y2="240" stroke="var(--green)" stroke-width="2.5"></line>
+      <text class="viz2-leg" x="48" y="244">SQL over the wire</text>
+
+      <!-- caption -->
+      <text class="viz2-leg" x="14" y="280">Same kernel, new host:</text>
+      <text class="viz2-leg" x="14" y="294">the agent loop runs</text>
+      <text class="viz2-leg" x="14" y="308">outside Postgres and</text>
+      <text class="viz2-leg" x="14" y="322">reaches RDS over the wire.</text>
+    </svg>
     </div>
   </div>
   <aside id="detail" class="panel">
@@ -439,14 +664,19 @@
     <button class="tab active" data-tab="demos">Demos</button>
     <button class="tab" data-tab="run">Run</button>
     <button class="tab" data-tab="nl">Talk to DB</button>
+    <button class="tab" data-tab="agent">Agent</button>
+    <button class="tab" data-tab="workload">Workload</button>
+    <button class="tab" data-tab="log">Log</button>
     <button class="tab" data-tab="schema">Schema</button>
+    <button class="tab" data-tab="tree">Tree</button>
     <button class="tab" data-tab="sql">SQL</button>
     <button class="tab" data-tab="tools">Tools</button>
-    <button class="tab adv" data-tab="agent">Agent</button>
+    <button class="tab" data-tab="install">Install</button>
     <button class="tab adv" data-tab="triggers">Triggers</button>
     <button class="tab adv" data-tab="data">Tables</button>
     <button class="tab adv" data-tab="probes">Probes</button>
     <button class="tab adv" data-tab="config">Config</button>
+    <button class="tab-max" id="tab-min" title="Collapse this panel to give the diagram more room (Esc to restore)">&#8863; Shrink</button>
     <button class="tab-max" id="tab-max" title="Expand this panel over the diagram (Esc to restore)">&#10530; Expand</button>
   </div>
 
@@ -490,6 +720,7 @@
         <div class="row" style="margin-top:6px">
           <button class="primary" id="nl-run">Run</button>
           <span id="nl-status" class="small grow"></span>
+          <button class="link" id="nl-view-agent">&#9432; view/edit db_architect</button>
         </div>
         <div id="nl-out"></div>
       </section>
@@ -532,10 +763,46 @@
 
       <!-- ADVANCED: Agent editor -->
       <section class="tabpanel" data-panel="tools" id="p-tools"></section>
+      <section class="tabpanel" data-panel="install" id="p-install"></section>
+
+      <!-- Workload generator -->
+      <section class="tabpanel" data-panel="workload" id="p-workload">
+        <p class="sub">Give agents something to work on. Add a batch of rows, reset a table, or start a
+          continuous generator (rows/sec) to show an agent working on live, growing load.</p>
+        <div class="row" style="margin-bottom:8px"><button id="wl-refresh">refresh</button>
+          <span id="wl-note" class="small grow"></span></div>
+        <div id="wl-list"><div class="hint">loading...</div></div>
+      </section>
+
+      <!-- Agent run log / trace -->
+      <section class="tabpanel" data-panel="log" id="p-log">
+        <p class="sub">Every run is audited in <code>synapse.executions</code>, with its full message trace in
+          <code>synapse.messages</code>: what ran, when, by which Postgres role, and how it went. Click a row for the trace.</p>
+        <div class="row" style="margin-bottom:6px">
+          <button id="log-refresh">refresh</button>
+          <span id="log-count" class="small grow"></span>
+        </div>
+        <div id="log-list"><div class="hint">loading...</div></div>
+        <div id="log-trace" style="margin-top:12px"></div>
+      </section>
+
+      <!-- Live schema tree -->
+      <section class="tabpanel" data-panel="tree" id="p-tree">
+        <div id="tree-bar">
+          <span class="small">Live schema tree, refreshes after every run. Click a table for its columns and rows.
+            Use Expand (top right) for a full-screen view.</span>
+          <button id="tree-refresh" style="margin-left:auto">refresh</button>
+        </div>
+        <div id="tree-grid">
+          <div id="tree"><div class="hint">loading...</div></div>
+          <div id="tree-detail"><div class="hint">pick a table to see its columns and rows</div></div>
+        </div>
+      </section>
       <section class="tabpanel" data-panel="agent" id="p-agent">
-        <p class="sub">Natural-language instructions plus tool allow-list and safety caps.
-          Persisted with <code>synapse.agent_create()</code>.</p>
-        <label>existing agents</label>
+        <p class="sub">Create a custom agent, or load and edit an existing one. Give it instructions,
+          an executor, a tool allow-list, and safety caps; Save persists it with
+          <code>synapse.agent_create()</code> and it appears in the Run and Talk-to-DB pickers.</p>
+        <label>load an existing agent (or leave blank and fill the form to make a new one)</label>
         <div class="row">
           <select id="agent-select" class="grow"></select>
           <button id="btn-agent-load">Load</button>
@@ -653,21 +920,16 @@
 
     </div>
 
-  <div id="dock">
-    <div id="dock-head">
-      <b>Schema tree</b>
-      <span class="small">live: refreshes after every run</span>
-      <button id="dock-refresh">refresh</button>
-      <button id="dock-max" class="link" style="margin-left:auto">expand</button>
-      <button id="dock-toggle" class="link">hide</button>
-    </div>
-    <div id="dock-body">
-      <div id="tree"><div class="hint">loading...</div></div>
-      <div id="tree-detail"><div class="hint">pick a table to see its columns and rows</div></div>
-    </div>
-  </div>
-
 </main>
+
+<!-- generic centered modal (used for "view agent") -->
+<div id="modal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-head"><span class="modal-title" id="modal-title"></span>
+      <button class="link" id="modal-close">close</button></div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -701,6 +963,64 @@ function pretty(v) {
 }
 function banner(el, cls, text) { el.innerHTML = '<div class="banner ' + cls + '">' + esc(text) + '</div>'; }
 
+// Pull the SQL string out of a tool_input that may be an object {query|sql} or
+// a JSON string. Avoids the "[object Object]" that JSON.parse(obj) produced.
+function sqlOf(ti) {
+  if (ti == null) return "";
+  if (typeof ti === "string") { try { ti = JSON.parse(ti); } catch (e) { return ti; } }
+  if (typeof ti === "object") return ti.query || ti.sql || JSON.stringify(ti);
+  return String(ti);
+}
+
+// Minimal GitHub-flavored markdown -> HTML for agent answers (tables, lists,
+// headings, bold/italic, inline + fenced code). ponytail: covers what the LLM
+// actually emits; not a full CommonMark parser.
+function mdInline(s) {
+  return s
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+}
+function mdToHtml(text) {
+  const L = esc(String(text ?? "")).split(/\r?\n/);
+  const isTbl = r => /^\s*\|.*\|\s*$/.test(r);
+  const cells = r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  let out = "", i = 0;
+  while (i < L.length) {
+    const line = L[i];
+    if (/^\s*```/.test(line)) {
+      const buf = []; i++;
+      while (i < L.length && !/^\s*```/.test(L[i])) { buf.push(L[i]); i++; }
+      i++; out += '<pre class="ab-prompt">' + buf.join("\n") + "</pre>"; continue;
+    }
+    if (isTbl(line) && i + 1 < L.length && /-/.test(L[i + 1]) && /^\s*\|?[\s:|-]+\|?\s*$/.test(L[i + 1])) {
+      const head = cells(line); i += 2; const rows = [];
+      while (i < L.length && isTbl(L[i])) { rows.push(cells(L[i])); i++; }
+      out += '<table class="md-table"><thead><tr>' + head.map(h => "<th>" + mdInline(h) + "</th>").join("") +
+        "</tr></thead><tbody>" + rows.map(r => "<tr>" + r.map(c => "<td>" + mdInline(c) + "</td>").join("") + "</tr>").join("") +
+        "</tbody></table>"; continue;
+    }
+    const h = line.match(/^\s*(#{1,6})\s+(.*)$/);
+    if (h) { out += "<h4 class='md-h'>" + mdInline(h[2]) + "</h4>"; i++; continue; }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const it = [];
+      while (i < L.length && /^\s*[-*]\s+/.test(L[i])) { it.push(L[i].replace(/^\s*[-*]\s+/, "")); i++; }
+      out += "<ul class='md-list'>" + it.map(x => "<li>" + mdInline(x) + "</li>").join("") + "</ul>"; continue;
+    }
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const it = [];
+      while (i < L.length && /^\s*\d+\.\s+/.test(L[i])) { it.push(L[i].replace(/^\s*\d+\.\s+/, "")); i++; }
+      out += "<ol class='md-list'>" + it.map(x => "<li>" + mdInline(x) + "</li>").join("") + "</ol>"; continue;
+    }
+    if (/^\s*$/.test(line)) { i++; continue; }
+    const para = [line]; i++;
+    while (i < L.length && !/^\s*$/.test(L[i]) && !/^\s*```/.test(L[i]) && !/^\s*[-*]\s+/.test(L[i]) &&
+           !/^\s*\d+\.\s+/.test(L[i]) && !/^\s*#{1,6}\s+/.test(L[i]) && !isTbl(L[i])) { para.push(L[i]); i++; }
+    out += "<p>" + para.map(mdInline).join("<br>") + "</p>";
+  }
+  return out;
+}
+
 // ---- tabs + advanced toggle ----
 
 function activateTab(name) {
@@ -708,6 +1028,10 @@ function activateTab(name) {
   document.querySelectorAll(".tabpanel").forEach(p => p.classList.toggle("active", p.dataset.panel === name));
   if (name === "schema" && typeof schemaOnShow === "function") schemaOnShow();
   if (name === "tools" && typeof renderTools === "function") renderTools();
+  if (name === "install" && typeof renderInstall === "function") renderInstall();
+  if (name === "tree" && typeof loadTree === "function") loadTree();
+  if (name === "log" && typeof renderLog === "function") renderLog();
+  if (name === "workload" && typeof renderWorkload === "function") renderWorkload();
 }
 document.querySelectorAll("#tabbar .tab").forEach(t => t.onclick = () => activateTab(t.dataset.tab));
 $("adv-toggle").onchange = () => {
@@ -832,6 +1156,7 @@ function vizReset() {
   $("viz-clock").setAttribute("stroke-dashoffset", 0);
   $("n-dba").style.display = "none";
   vizStep(0, 0); vizCaption(""); vizIter(0); vizHud(0, 0, 0);
+  if (typeof resetTouchedBoxes === "function") resetTouchedBoxes();
 }
 
 // Animate a packet (dot + optional label) along an SVG path. Resolves with the
@@ -991,10 +1316,25 @@ function vizKillKind(status) {
   return null;
 }
 
+// The kernel surfaces a cost cap as {status:"errored", error:"...cost cap..."}
+// rather than a distinct status (timeout/cancel do get their own). Normalize
+// so the chip and the guardrail kill animation read the real outcome.
+function effectiveStatus(env) {
+  const status = (env && env.status) || "unknown";
+  const low = ((env && env.error) || "").toLowerCase();
+  if (status === "errored" || status === "failed") {
+    if (low.includes("cost cap")) return "cost_cap_exceeded";
+    if (low.includes("timed out") || low.includes("timeout")) return "timed_out";
+    if (low.includes("cancel")) return "cancelled";
+    if (low.includes("max") && low.includes("iteration")) return "max_iterations";
+  }
+  return status;
+}
+
 async function vizPlay(run) {
   if (!run) return;
   const env = run.envelope || {};
-  const kind = run.killKind || vizKillKind(env.status);
+  const kind = run.killKind || vizKillKind(effectiveStatus(env));
   if (kind) { vizPlayKill(kind, run); return; }
   vizReset();
   const token = VIZ.token;
@@ -1040,7 +1380,8 @@ async function vizPlayKill(kind, run) {
   vizReset();
   const token = VIZ.token;
   const env = run.envelope || {};
-  const status = env.status || (kind === "cancel" ? "cancelled" : "stopped");
+  const status = effectiveStatus(env) !== "unknown" && effectiveStatus(env) !== "errored"
+    ? effectiveStatus(env) : (kind === "cancel" ? "cancelled" : "stopped");
   const agentRow = ((BOOT && BOOT.agents) || []).find(a => a.name === run.agent);
   const spent = env.cost_usd == null ? null : Number(env.cost_usd);
   const cap = agentRow && agentRow.cost_cap_usd ? Number(agentRow.cost_cap_usd) : null;
@@ -1242,6 +1583,8 @@ async function bootstrap(keepForms) {
   renderScenarios(data.scenarios);
   updateConnState();
   refreshTables();
+  if (typeof ensureCoreAgents === "function") ensureCoreAgents();
+  if (typeof onRunAgentChange === "function") onRunAgentChange();
 }
 
 // ---- LLM profile ----
@@ -1375,8 +1718,8 @@ function renderRunResult(run) {
     }
     return;
   }
-  const status = env.status || "unknown";
-  setRunStatusChip(status, status, env.error ? env.error : "");
+  const status = effectiveStatus(env);
+  setRunStatusChip(status.replace(/_/g, " "), status, env.error ? env.error : "");
   renderStats(env);
   $("run-output").innerHTML = "";
   if (env.error) banner($("run-output"), "bad", env.error);
@@ -1399,21 +1742,62 @@ function tableFromSql(sql) {
   while ((m = re.exec(sql || "")) !== null) names.add(m[1].toLowerCase());
   return names;
 }
+// What a run touched: which tables (via sql_query/sql_exec) and which other
+// tools it called. Shown IN the diagram boxes ("your tables" / "other tools").
+let LAST_TOUCHED = { tables: [], reads: 0, writes: 0, tools: [] };
+
+const NT_DEFAULT = ["demo.*, perf.*,", "etl.*, support.*"];
+const NO_DEFAULT = "http_*, calculator, time";
+function fit(s, n) { s = String(s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+function restoreTablesBox() {
+  const a = $("nt-sub1"), b = $("nt-sub2");
+  if (a) { a.textContent = NT_DEFAULT[0]; a.classList.remove("viz-live"); }
+  if (b) { b.textContent = NT_DEFAULT[1]; b.classList.remove("viz-live"); }
+  const g = $("n-tables"); if (g) g.classList.remove("viz-touched");
+}
+function restoreToolsBox() {
+  const o = $("no-sub");
+  if (o) { o.textContent = NO_DEFAULT; o.classList.remove("viz-live"); }
+  const g = $("n-other"); if (g) g.classList.remove("viz-touched");
+}
+function resetTouchedBoxes() { restoreTablesBox(); restoreToolsBox(); }
+
+function applyTouchedToDiagram() {
+  const { tables, reads, writes, tools } = LAST_TOUCHED;
+  // tables -> "your tables" box
+  const a = $("nt-sub1"), b = $("nt-sub2"), gt = $("n-tables");
+  if (a && b) {
+    if (reads || writes) {
+      const t = tables.length ? tables : [];
+      a.textContent = t.length ? fit(t.slice(0, 2).join(", ") + (t.length > 2 ? "," : ""), 22) : "(unnamed query)";
+      b.textContent = t.length > 2 ? fit(t.slice(2, 4).join(", ") + (t.length > 4 ? "…" : ""), 22)
+                                   : (reads + " read, " + writes + " write");
+      a.classList.add("viz-live"); b.classList.add("viz-live");
+      if (gt) gt.classList.add("viz-touched");
+    } else { restoreTablesBox(); }
+  }
+  // other tools -> "other tools" box
+  const o = $("no-sub"), go = $("n-other");
+  if (o) {
+    if (tools.length) { o.textContent = "called: " + fit(tools.slice(0, 3).join(", "), 20); o.classList.add("viz-live"); if (go) go.classList.add("viz-touched"); }
+    else restoreToolsBox();
+  }
+}
+
 function setTouched(messages) {
   let reads = 0, writes = 0;
-  const tables = new Set();
+  const tables = new Set(), tools = new Set();
   for (const m of messages) {
-    if (m.role !== "assistant" || (m.tool_name !== "sql_query" && m.tool_name !== "sql_exec")) continue;
-    let sql = m.tool_input;
-    try { const j = JSON.parse(m.tool_input); sql = j.sql || m.tool_input; } catch (e) { /* raw */ }
-    if (m.tool_name === "sql_query") reads++; else writes++;
-    tableFromSql(sql).forEach(t => tables.add(t));
+    if (m.role !== "assistant" || !m.tool_name) continue;
+    if (m.tool_name === "sql_query" || m.tool_name === "sql_exec") {
+      if (m.tool_name === "sql_query") reads++; else writes++;
+      tableFromSql(sqlOf(m.tool_input)).forEach(t => tables.add(t));
+    } else { tools.add(m.tool_name); }
   }
-  const el = $("touched");
-  if (!el) return;
-  if (!reads && !writes) { el.textContent = ""; return; }
-  const list = [...tables].slice(0, 4).join(", ") + (tables.size > 4 ? "..." : "");
-  el.textContent = "tables touched: " + (list || "none") + "  (" + reads + " read, " + writes + " write)";
+  LAST_TOUCHED = { tables: [...tables], reads, writes, tools: [...tools] };
+  applyTouchedToDiagram();
+  const el = $("touched"); if (el) el.textContent = "";  // it now lives in the diagram
 }
 
 async function pollRun() {
@@ -1477,6 +1861,29 @@ async function startRun(agent, input, opts) {
   pollRun();
 }
 
+// Compact agents chat; the rest are task agents that expect a specific job and
+// crash the model on empty input. Guide the Run tab accordingly.
+const CONVERSATIONAL = new Set(["db_architect", "data_analyst"]);
+function agentSuggestion(name) {
+  for (const s of ((BOOT && BOOT.scenarios) || []))
+    for (const r of (s.suggested_runs || [])) if (r.agent === name) return r.input;
+  return "";
+}
+function onRunAgentChange() {
+  const name = $("run-agent").value;
+  const sugg = agentSuggestion(name);
+  const inp = $("run-input"), guard = $("run-guard");
+  if (inp) {
+    inp.placeholder = sugg || (CONVERSATIONAL.has(name) ? "ask the agent anything" : "give the agent a task");
+    if (!inp.value.trim() && sugg) inp.value = sugg;  // prefill the suggested task
+  }
+  if (guard && CONNECTED) {
+    guard.textContent = CONVERSATIONAL.has(name)
+      ? "Conversational agent: ask it anything."
+      : (sugg ? "Task agent: prefilled a suggested run; edit or Run." : "Task agent: give it a concrete task, not a chat.");
+  }
+}
+$("run-agent").onchange = onRunAgentChange;
 $("btn-run").onclick = () => startRun($("run-agent").value, $("run-input").value);
 $("btn-cancel").onclick = async () => {
   if (!currentRun) return;
@@ -1628,37 +2035,320 @@ async function refreshWatch() {
 
 // ---- scenarios ----
 
+// Each demo scenario renders as a self-contained card: explainer, Set up /
+// Reset (re-seed), an optional workload, Run, and a before -> after Inspector
+// built from the scenario's probes.
+const SCENARIO_WORKLOAD = { "index-tuner": "orders", "leads": "leads", "invoices": "invoices", "etl": "contacts" };
+// One-line "what to watch" per demo, shown in the explainer.
+const SCENARIO_WATCH = {
+  "index-tuner": "The EXPLAIN plan flips from Seq Scan to Index Scan; the assert goes FAIL → PASS.",
+  "dba-tickets": "One safe fix (an index) is applied; the other three become dba.recommendations tickets. Assert → PASS.",
+  "etl": "5 messy notes become 5 clean rows with normalized country codes and intent.",
+  "triage": "Each ticket gets a category, priority, and escalated flag; an enterprise-urgent one escalates.",
+  "bouncer": "Drive it from the Triggers tab: a negative-amount order is rolled back (inline policy), tickets enqueue enrichment (queue mode). Assert: no bad order commits.",
+  "guardrails": "Watch the Run tab status chip: runs stop with cost_cap_exceeded, timed_out, or cancelled.",
+  "leads": "Each lead gets a hot / warm / cold score and a one-line reason.",
+  "invoices": "Overdue invoices flip to 'overdue' with a dunning note; in-terms invoices are left alone.",
+  "inventory": "Products at or below their reorder point get a restock order; well-stocked SKUs are skipped.",
+};
+// For demos with no before/after DB state, the inspector is guidance instead.
+const SCENARIO_INSPECT_NOTE = {
+  "guardrails": "No before/after DB state here: the point is the runtime stopping a runaway. After Run, watch the " +
+    "Run tab's status chip: cost_cap_exceeded, timed_out, or (for the marathon) hit Cancel. Capped and cancelled runs " +
+    "surface there, not in synapse.executions.",
+  "bouncer": "Drive this one from the Triggers tab (INSERT a good order, then a bad -50 order). The bad order is rolled " +
+    "back inline; watch demo.orders and synapse.agent_queue. The 'Check expected end state' probe below asserts no bad order committed.",
+};
+const LOADED_SCENARIOS = new Set();
+const OPEN_SCEN = new Set(); // which demo cards are expanded (preserved across re-renders)
+const SNAP = {}; // id -> { before: {key:{label,lines}}, after: {...} }
+
+// ---- generic modal + agent viewer ----
+function openModal(title, html) {
+  $("modal-title").textContent = title || "";
+  $("modal-body").innerHTML = html || "";
+  $("modal").classList.add("open");
+}
+function closeModal() { $("modal").classList.remove("open"); }
+$("modal-close").onclick = closeModal;
+$("modal").onclick = (e) => { if (e.target === $("modal")) closeModal(); };
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("modal").classList.contains("open")) closeModal();
+});
+
+function openAgentModal(name) {
+  const a = ((BOOT && BOOT.agents) || []).find(x => x.name === name);
+  if (!a) { openModal("Agent", '<div class="hint">Agent "' + esc(name) + '" is not registered yet. Set up its demo first.</div>'); return; }
+  const tools = (a.tools && a.tools.length) ? a.tools.map(esc).join(", ") : "none";
+  const cap = a.cost_cap_usd ? ("$" + esc(a.cost_cap_usd)) : "none";
+  const arr = (a.tools || []).map(t => "'" + t + "'").join(", ");
+  const sql = "SELECT synapse.agent_create(\n  '" + a.name + "',\n  $$" + (a.system_prompt || "") +
+    "$$,\n  '" + a.executor_name + "',\n  '" + (a.llm_profile_main || "") + "',\n  ARRAY[" + arr +
+    "],\n  " + a.max_iterations + ",\n  " + a.timeout_ms + "\n);";
+  openModal("Agent: " + a.name,
+    '<div class="ab-meta">executor: <b>' + esc(a.executor_name) + '</b>&nbsp;&nbsp; llm profile: ' + esc(a.llm_profile_main || "-") + '</div>' +
+    '<div class="ab-meta">tools: ' + tools + '</div>' +
+    '<div class="ab-meta">' +
+      '<label for="am-maxiter">max_iterations:</label> ' +
+      '<input id="am-maxiter" type="number" min="1" step="1" value="' + esc(a.max_iterations) + '" style="width:64px">' +
+      ' <button id="am-maxiter-save">save</button>' +
+      ' <span id="am-maxiter-status" class="small"></span>' +
+      '&nbsp;&nbsp; timeout: ' + esc(a.timeout_ms) + 'ms&nbsp;&nbsp; cost cap: ' + cap +
+      '&nbsp;&nbsp; trace: ' + esc(a.trace_level || "-") + '</div>' +
+    '<div class="ab-label" style="margin-top:12px">System prompt</div>' +
+    '<pre class="ab-prompt" style="max-height:none; white-space:pre-wrap">' + esc(a.system_prompt || "") + '</pre>' +
+    '<div class="ab-label" style="margin-top:10px">Registered with</div>' +
+    '<pre class="ab-prompt" style="max-height:none">' + esc(sql) + '</pre>');
+  $("am-maxiter-save").onclick = async () => {
+    const val = parseInt($("am-maxiter").value, 10);
+    const status = $("am-maxiter-status");
+    if (!Number.isFinite(val) || val < 1) { status.textContent = "enter a whole number >= 1"; return; }
+    status.textContent = "saving...";
+    const r = await api("/api/agent", "POST", {
+      name: a.name,
+      system_prompt: a.system_prompt,
+      executor: a.executor_name,
+      llm_profile: a.llm_profile_main,
+      tools: a.tools || [],
+      max_iterations: val,
+      timeout_ms: a.timeout_ms,
+      cost_cap_usd: a.cost_cap_usd || 0,
+    });
+    status.textContent = r.ok ? "saved" : (r.error || "save failed");
+    if (r.ok) await bootstrap(true);
+  };
+}
+
+// ---- AR collections: customer mini-app (before/after, message thread) ----
+// Reuses the generic modal + the generic /api/schema/rows endpoint; no
+// bespoke backend route needed. arLastStatus remembers what each invoice's
+// status looked like the last time it was rendered so a refresh after a run
+// can flag a real open -> overdue flip and animate the badge.
+let arSelInvoice = null;
+const arLastStatus = {};
+
+function arModalIsOpen() {
+  return $("modal").classList.contains("open") &&
+    /^(AR collections|Customer: )/.test($("modal-title").textContent);
+}
+async function refreshArModalIfOpen() {
+  if (!arModalIsOpen()) return;
+  if (arSelInvoice != null) await openArCustomer(arSelInvoice); else await renderArList();
+}
+function openArCustomers() {
+  // Deliberately does NOT clear arLastStatus: the modal overlay blocks clicks
+  // on the scenario card behind it, so the real flow is close -> run -> click
+  // "Customers" again, and that reopen is exactly where the flip animation
+  // needs to fire. Only a scenario reset (fresh seed data) clears the memory.
+  arSelInvoice = null;
+  renderArList();
+}
+async function arLoadData() {
+  const [inv, msgs] = await Promise.all([
+    api("/api/schema/rows?schema=finance&table=invoices&limit=200"),
+    api("/api/schema/rows?schema=finance&table=collection_messages&limit=200"),
+  ]);
+  return { invoices: inv.ok ? (inv.rows || []) : [], messages: msgs.ok ? (msgs.rows || []) : [], error: inv.error };
+}
+async function renderArList() {
+  const { invoices, messages, error } = await arLoadData();
+  if (error) { openModal("AR collections - customers", '<div class="hint">' + esc(error) + '</div>'); return; }
+  const msgCount = {};
+  for (const m of messages) msgCount[m.invoice_id] = (msgCount[m.invoice_id] || 0) + 1;
+  const rows = invoices.slice().sort((a, b) => (a.due_date < b.due_date ? -1 : 1));
+  const html = '<div class="ar-list">' + rows.map(r => {
+    const overdue = r.status === "overdue";
+    const flip = arLastStatus[r.id] && arLastStatus[r.id] !== r.status;
+    arLastStatus[r.id] = r.status;
+    return '<div class="ar-row" data-id="' + r.id + '">' +
+      '<span class="ar-name">' + esc(r.customer) + '</span>' +
+      '<span class="ar-amt">$' + esc(r.amount) + '</span>' +
+      '<span class="ar-badge' + (overdue ? " over" : " cur") + (flip ? " flip" : "") + '">' + (overdue ? "Overdue" : "Current") + '</span>' +
+      (msgCount[r.id] ? '<span class="small">&#9993; ' + msgCount[r.id] + '</span>' : '<span></span>') +
+      '<span class="ar-due small">due ' + esc(r.due_date) + '</span>' +
+      '</div>';
+  }).join("") + '</div>';
+  openModal("AR collections - customers", '<div class="small">click a customer to see their full detail and message thread</div>' + html);
+  $("modal-body").querySelectorAll(".ar-row").forEach(el =>
+    el.onclick = () => openArCustomer(parseInt(el.dataset.id, 10)));
+}
+async function openArCustomer(id) {
+  arSelInvoice = id;
+  const { invoices, messages, error } = await arLoadData();
+  if (error) { openModal("Customer", '<div class="hint">' + esc(error) + '</div>'); return; }
+  const r = invoices.find(x => x.id === id);
+  if (!r) { openModal("Customer", '<div class="hint">invoice not found (was the scenario reset?)</div>'); return; }
+  const thread = messages.filter(m => m.invoice_id === id).sort((a, b) => (a.sent_at < b.sent_at ? -1 : 1));
+  const overdue = r.status === "overdue";
+  const flip = arLastStatus[id] && arLastStatus[id] !== r.status;
+  arLastStatus[id] = r.status;
+  const html =
+    '<button class="link" id="ar-back">&larr; all customers</button>' +
+    '<div class="ar-card">' +
+      '<div class="ar-card-head">' +
+        '<span class="ar-card-name">' + esc(r.customer) + '</span>' +
+        '<span class="ar-badge big' + (overdue ? " over" : " cur") + (flip ? " flip" : "") + '">' + (overdue ? "Overdue" : "Current") + '</span>' +
+      '</div>' +
+      '<div class="ab-meta">invoice #' + esc(r.id) + '&nbsp;&nbsp; amount: $' + esc(r.amount) +
+        '&nbsp;&nbsp; due: ' + esc(r.due_date) + '</div>' +
+    '</div>' +
+    '<div class="ab-label" style="margin-top:14px">Messages sent (' + thread.length + ')</div>' +
+    (thread.length
+      ? '<div class="ar-thread">' + thread.map(m =>
+          '<div class="ar-msg"><div class="ar-msg-meta small">' + esc(m.sent_at) + '</div>' +
+          '<div class="ar-msg-body">' + esc(m.message) + '</div></div>').join("") + '</div>'
+      : '<div class="hint">no messages sent yet - still within terms, or the agent has not run.</div>');
+  openModal("Customer: " + r.customer, html);
+  $("ar-back").onclick = renderArList;
+}
+
+function probeLinesHtml(lines) {
+  return (lines || []).map(l => '<div class="pline' +
+    (String(l).startsWith("PASS") ? " pass" : String(l).startsWith("FAIL") ? " fail" : "") +
+    '">' + esc(l) + '</div>').join("");
+}
+
 function renderScenarios(list) {
-  $("scenario-list").innerHTML = list.map(s =>
-    '<div class="scenario"><h3>' + esc(s.title) + '</h3><p>' + esc(s.description) + '</p>' +
-    '<div class="row"><button class="primary" data-load="' + esc(s.id) + '">Load</button>' +
-    (s.suggested_runs || []).map((r, i) =>
-      '<button data-run="' + esc(s.id) + ':' + i + '">' + esc(r.label) + '</button>').join("") +
-    '</div><div id="scen-status-' + esc(s.id) + '"></div></div>').join("");
+  $("scenario-list").innerHTML = list.map(s => {
+    const loaded = LOADED_SCENARIOS.has(s.id);
+    const wl = SCENARIO_WORKLOAD[s.id];
+    const runBtns = (s.suggested_runs || []).map((r, i) =>
+      '<button data-run="' + esc(s.id) + ':' + i + '"' + (loaded ? "" : ' disabled title="set up first"') +
+      '>&#9654; ' + esc(r.label) + '</button>').join("");
+    const probeBtns = (s.probes || []).map(p =>
+      '<button class="link" data-probe="' + esc(s.id) + ':' + esc(p.key) + '">' + esc(p.label) + '</button>').join("");
+    const agents = [...new Set((s.suggested_runs || []).map(r => r.agent))];
+    const viewBtns = agents.map(ag =>
+      '<button class="link" data-viewagent="' + esc(ag) + '"' + (loaded ? "" : " disabled") +
+      '>&#9432; view ' + esc(ag) + '</button>').join("");
+    const arBtn = s.id === "invoices"
+      ? '<button class="link" data-arview="1"' + (loaded ? "" : " disabled") + '>&#128101; Customers</button>' : "";
+    return '<details class="scenario" data-id="' + esc(s.id) + '"' + (OPEN_SCEN.has(s.id) ? " open" : "") + '>' +
+      '<summary><span class="scen-title">' + esc(s.title) + '</span> <span class="scen-badge' + (loaded ? " on" : "") + '">' +
+        (loaded ? "ready" : "not set up") + '</span></summary>' +
+      '<div class="scen-body">' +
+      '<p>' + esc(s.description) + '</p>' +
+      (SCENARIO_WATCH[s.id] ? '<div class="scen-watch"><b>Watch:</b> ' + esc(SCENARIO_WATCH[s.id]) + '</div>' : "") +
+      '<div class="row scen-actions">' +
+        '<button class="primary" data-setup="' + esc(s.id) + '">' + (loaded ? "&#8635; Reset" : "Set up") + '</button>' +
+        runBtns + viewBtns + arBtn + '</div>' +
+      (wl ? '<div class="row scen-wl" data-wl="' + esc(wl) + '">' +
+        '<span class="small">workload</span><span class="scen-wl-count small">-</span>' +
+        '<button data-wladd="1000"' + (loaded ? "" : " disabled") + '>+1k</button>' +
+        '<button data-wladd="10000"' + (loaded ? "" : " disabled") + '>+10k</button>' +
+        '<button data-wltoggle="1"' + (loaded ? "" : " disabled") + '>start</button></div>' : "") +
+      ((s.probes && s.probes.length) || SCENARIO_INSPECT_NOTE[s.id] ?
+        '<div class="scen-inspect"><div class="ab-label" style="margin-top:8px">Inspect' +
+          ((s.probes && s.probes.length) ? ': before &rarr; after' : '') + '</div>' +
+        (SCENARIO_INSPECT_NOTE[s.id] ? '<div class="scen-inspect-note">' + esc(SCENARIO_INSPECT_NOTE[s.id]) + '</div>' : '') +
+        ((s.probes && s.probes.length) ?
+          '<div class="small">1) Snapshot before &nbsp;&middot;&nbsp; 2) Run &nbsp;&middot;&nbsp; 3) Snapshot after to see what changed.</div>' +
+          '<div class="row" style="margin:6px 0"><button data-snap="' + esc(s.id) + ':before"' + (loaded ? "" : " disabled") + '>&#9312; before</button>' +
+          '<button data-snap="' + esc(s.id) + ':after"' + (loaded ? "" : " disabled") + '>&#9314; after</button>' +
+          '<span class="small">probes:</span>' + probeBtns + '</div>' +
+          '<div class="scen-snap" id="snap-' + esc(s.id) + '"></div>' : '') +
+        '</div>' : "") +
+      '<div id="scen-status-' + esc(s.id) + '"></div></div></details>';
+  }).join("");
 
-  document.querySelectorAll("[data-load]").forEach(btn => btn.onclick = async () => {
-    const id = btn.dataset.load;
-    const st = $("scen-status-" + id);
-    if (!requireConnected(st)) return;
-    banner(st, "info", "loading scenario (seeding schema, data, agents)...");
-    const r = await api("/api/scenario/" + id, "POST");
-    if (r.ok) {
-      banner(st, "ok", "loaded. agents registered: see the run panel.");
-      await bootstrap(true);
-      const s = r.scenario;
-      renderWatch(s);
-      if (s.suggested_runs && s.suggested_runs.length) {
-        $("run-agent").value = s.suggested_runs[0].agent;
-        $("run-input").value = s.suggested_runs[0].input;
-      }
-    } else banner(st, "bad", r.error || "load failed");
-  });
-
-  document.querySelectorAll("[data-run]").forEach(btn => btn.onclick = () => {
-    const [id, i] = btn.dataset.run.split(":");
+  const root = $("scenario-list");
+  root.querySelectorAll("details.scenario").forEach(d => d.addEventListener("toggle", () => {
+    if (d.open) OPEN_SCEN.add(d.dataset.id); else OPEN_SCEN.delete(d.dataset.id);
+  }));
+  root.querySelectorAll("[data-setup]").forEach(b => b.onclick = () => scenarioSetup(b.dataset.setup));
+  root.querySelectorAll("[data-viewagent]").forEach(b => b.onclick = () => openAgentModal(b.dataset.viewagent));
+  root.querySelectorAll("[data-arview]").forEach(b => b.onclick = () => openArCustomers());
+  root.querySelectorAll("[data-run]").forEach(b => b.onclick = () => {
+    const [id, i] = b.dataset.run.split(":");
     const s = BOOT.scenarios.find(x => x.id === id);
     const run = s.suggested_runs[parseInt(i, 10)];
-    startRun(run.agent, run.input);
+    $("run-agent").value = run.agent; $("run-input").value = run.input;
+    startRun(run.agent, run.input, id === "invoices" ? { onDone: () => refreshArModalIfOpen() } : undefined);
+  });
+  root.querySelectorAll("[data-probe]").forEach(b => b.onclick = async () => {
+    const [id, key] = b.dataset.probe.split(":");
+    const r = await api("/api/probe/" + key);
+    $("snap-" + id).innerHTML = '<div class="probe-out">' + probeLinesHtml(r.ok ? r.lines : [r.error || "probe failed"]) + '</div>';
+  });
+  root.querySelectorAll("[data-snap]").forEach(b => b.onclick = () => {
+    const [id, which] = b.dataset.snap.split(":"); snapshot(id, which);
+  });
+  root.querySelectorAll(".scen-wl").forEach(row => {
+    const wl = row.dataset.wl;
+    row.querySelectorAll("[data-wladd]").forEach(b => b.onclick = async () => {
+      b.disabled = true; await api("/api/workload/seed", "POST", { target: wl, count: parseInt(b.dataset.wladd, 10) });
+      await refreshScenWorkload(); refreshTree();
+    });
+    const tg = row.querySelector("[data-wltoggle]");
+    if (tg) tg.onclick = async () => {
+      const running = tg.textContent.trim() === "stop";
+      await api("/api/workload/" + (running ? "stop" : "start"), "POST", { target: wl, rate: 25 });
+      await refreshScenWorkload();
+    };
+  });
+  // restore any snapshots after a re-render
+  for (const id of Object.keys(SNAP)) renderSnapshot(id);
+  refreshScenWorkload();
+}
+
+async function scenarioSetup(id) {
+  const st = $("scen-status-" + id);
+  if (!requireConnected(st)) return;
+  banner(st, "info", "setting up: seeding schema, data, and agents...");
+  const r = await api("/api/scenario/" + id, "POST");
+  if (!r.ok) { banner(st, "bad", r.error || "setup failed"); return; }
+  LOADED_SCENARIOS.add(id);
+  OPEN_SCEN.add(id); // keep this card expanded after the re-render
+  delete SNAP[id];
+  if (id === "invoices") { for (const k of Object.keys(arLastStatus)) delete arLastStatus[k]; refreshArModalIfOpen(); }
+  await bootstrap(true); // re-renders cards (badge -> ready, Run enabled)
+  banner($("scen-status-" + id), "ok", "ready. Snapshot 'before', then Run, then 'after'.");
+  renderWatch(r.scenario);
+  const s = r.scenario;
+  if (s.suggested_runs && s.suggested_runs.length) {
+    $("run-agent").value = s.suggested_runs[0].agent; $("run-input").value = s.suggested_runs[0].input;
+  }
+}
+
+async function snapshot(id, which) {
+  const s = BOOT.scenarios.find(x => x.id === id); if (!s) return;
+  SNAP[id] = SNAP[id] || {};
+  const cap = {};
+  for (const p of (s.probes || [])) {
+    const r = await api("/api/probe/" + p.key);
+    cap[p.key] = { label: p.label, lines: r.ok ? (r.lines || []) : [r.error || "probe failed"] };
+  }
+  SNAP[id][which] = cap;
+  renderSnapshot(id);
+}
+function renderSnapshot(id) {
+  const s = BOOT.scenarios.find(x => x.id === id); const box = $("snap-" + id);
+  if (!s || !box) return;
+  const snap = SNAP[id] || {};
+  const cols = [];
+  if (snap.before) cols.push(["before", snap.before]);
+  if (snap.after) cols.push(["after", snap.after]);
+  if (!cols.length) { box.innerHTML = ""; return; }
+  box.innerHTML = '<div class="snap-grid">' + (s.probes || []).map(p =>
+    '<div class="snap-probe"><div class="snap-plabel">' + esc(p.label) + '</div><div class="snap-cols">' +
+    cols.map(([which, data]) => {
+      const d = data[p.key];
+      return '<div class="snap-col"><div class="snap-which">' + which + '</div>' +
+        '<div class="probe-out">' + (d ? probeLinesHtml(d.lines) : '<div class="hint">-</div>') + '</div></div>';
+    }).join("") + '</div></div>').join("") + '</div>';
+}
+
+async function refreshScenWorkload() {
+  const root = $("scenario-list"); if (!root) return;
+  const rows = root.querySelectorAll(".scen-wl"); if (!rows.length) return;
+  const st = await api("/api/workload/status");
+  const counts = st.counts || {}; const running = new Set(st.running || []);
+  rows.forEach(row => {
+    const wl = row.dataset.wl, c = counts[wl];
+    const cs = row.querySelector(".scen-wl-count");
+    if (cs) cs.textContent = (c == null || c < 0) ? "empty" : Number(c).toLocaleString() + " rows";
+    const tg = row.querySelector("[data-wltoggle]");
+    if (tg) { const on = running.has(wl); tg.textContent = on ? "stop" : "start"; tg.classList.toggle("danger", on); }
   });
 }
 
@@ -1914,6 +2604,27 @@ function wireHeroNodes() {
   }
 }
 
+// ---- diagram flip: extension (data path) <-> sidecar (deployment) ----
+let VIZ_VIEW = "extension";
+function setVizView(view) {
+  VIZ_VIEW = view === "sidecar" ? "sidecar" : "extension";
+  const side = VIZ_VIEW === "sidecar";
+  document.body.classList.toggle("viz-sidecar", side);
+  const be = $("viz-view-ext"), bs = $("viz-view-side");
+  if (be) be.classList.toggle("active", !side);
+  if (bs) bs.classList.toggle("active", side);
+  const title = $("hero-title"), hint = $("hero-hint");
+  if (title && title.firstChild) title.firstChild.nodeValue = side ? "Sidecar deployment " : "The data path ";
+  if (hint) hint.textContent = side
+    ? "kernel runs beside a managed Postgres (RDS), over the wire; see the Sidecar / Install tabs"
+    : "click any node to open its panel";
+  // Replay animates the in-DB data path only.
+  const rep = $("btn-viz-replay");
+  if (rep) rep.style.display = side ? "none" : "";
+}
+if ($("viz-view-ext")) $("viz-view-ext").onclick = () => setVizView("extension");
+if ($("viz-view-side")) $("viz-view-side").onclick = () => setVizView("sidecar");
+
 // 1. SQL client node -> prompt builder + agent box
 function openPromptBuilder() {
   openDetail("Prompt builder", '' +
@@ -2030,6 +2741,102 @@ async function openAudit() {
   });
 }
 
+// ---- Workload tab: generate / reset / stream synthetic data ----
+const WL_META = {
+  orders:   { label: "Orders",      feeds: "index_tuner, data_analyst" },
+  leads:    { label: "Sales leads", feeds: "sales_lead_scorer" },
+  invoices: { label: "Invoices",    feeds: "collections_agent" },
+  contacts: { label: "Contacts",    feeds: "etl_agent" },
+};
+let wlTimer = null;
+function wlActive() { const t = document.querySelector('.tab[data-tab="workload"]'); return t && t.classList.contains("active"); }
+async function renderWorkload() {
+  const el = $("wl-list"); if (!el) return;
+  const st = await api("/api/workload/status");
+  if (!st.ok) { el.innerHTML = '<div class="banner bad">' + esc(st.error || "workload status failed") + '</div>'; return; }
+  const running = new Set(st.running || []);
+  const counts = st.counts || {};
+  el.innerHTML = (st.targets || []).map(t => {
+    const m = WL_META[t] || { label: t, feeds: "" };
+    const c = counts[t];
+    const countTxt = (c == null || c < 0) ? '<span class="muted">not loaded</span>' : (Number(c).toLocaleString() + " rows");
+    const on = running.has(t);
+    return '<div class="wl-card" data-t="' + esc(t) + '">' +
+      '<div class="wl-head"><b>' + esc(m.label) + '</b>' +
+        '<span class="wl-count">' + countTxt + '</span></div>' +
+      '<div class="small" style="margin:2px 0 8px">feeds: ' + esc(m.feeds) + '</div>' +
+      '<div class="row">' +
+        '<span class="small">add</span>' +
+        '<button data-add="100">+100</button><button data-add="1000">+1k</button><button data-add="10000">+10k</button>' +
+        '<button class="danger" data-reset="1">reset</button>' +
+        (on
+          ? '<button class="danger" data-stop="1">&#9632; stop</button><span class="chip running">generating ~25/s</span>'
+          : '<button class="primary" data-start="1">&#9654; start generator</button>') +
+      '</div></div>';
+  }).join("");
+  el.querySelectorAll(".wl-card").forEach(card => {
+    const t = card.dataset.t;
+    const go = async (path, body) => { const r = await api("/api/workload/" + path, "POST", body);
+      if (r && r.ok === false) $("wl-note").textContent = r.error || "failed";
+      await renderWorkload(); if (path !== "start" && path !== "stop") refreshTree(); };
+    card.querySelectorAll("[data-add]").forEach(b => b.onclick = () => go("seed", { target: t, count: parseInt(b.dataset.add, 10) }));
+    const rb = card.querySelector("[data-reset]"); if (rb) rb.onclick = () => go("reset", { target: t });
+    const sb = card.querySelector("[data-start]"); if (sb) sb.onclick = () => go("start", { target: t, rate: 25 });
+    const stp = card.querySelector("[data-stop]"); if (stp) stp.onclick = () => go("stop", { target: t });
+  });
+  if (wlTimer) clearTimeout(wlTimer);
+  if (running.size && wlActive()) wlTimer = setTimeout(renderWorkload, 2000);
+}
+if ($("wl-refresh")) $("wl-refresh").onclick = renderWorkload;
+
+// ---- Log tab: agent run history (synapse.executions + trace) ----
+async function renderLog() {
+  const list = $("log-list"); if (!list) return;
+  list.innerHTML = '<div class="hint">loading...</div>';
+  const ex = await api("/api/table/executions");
+  if (!ex.ok) { list.innerHTML = '<div class="banner bad">' + esc(ex.error || "could not load run log") + '</div>'; return; }
+  const rows = ex.rows || [];
+  const cnt = $("log-count"); if (cnt) cnt.textContent = rows.length + " run" + (rows.length === 1 ? "" : "s") + " (latest 50)";
+  if (!rows.length) {
+    list.innerHTML = '<div class="hint">no runs yet. Run an agent (Run or Talk to DB) and it appears here.</div>';
+    $("log-trace").innerHTML = ""; return;
+  }
+  const when = (ts) => ts ? String(ts).replace("T", " ").slice(0, 19) : "-";
+  list.innerHTML = '<table class="log-table"><tr><th>when</th><th>agent</th><th>who</th><th>status</th><th>duration</th><th>tokens</th></tr>' +
+    rows.map((r, i) =>
+      '<tr class="log-row" data-i="' + i + '">' +
+      '<td class="lg-when">' + esc(when(r.started_at)) + '</td>' +
+      '<td><b>' + esc(r.agent_name) + '</b><div class="small">' + esc(r.input || "") + '</div></td>' +
+      '<td class="lg-who">' + esc(r.caller_role || "-") + '</td>' +
+      '<td><span class="chip ' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
+      '<td class="lg-num">' + (r.duration_ms != null ? esc(r.duration_ms) + " ms" : "-") + '</td>' +
+      '<td class="lg-num">' + esc(r.tokens_in ?? 0) + " / " + esc(r.tokens_out ?? 0) + '</td>' +
+      '</tr>').join("") + '</table>';
+  list.querySelectorAll(".log-row").forEach(row => row.onclick = () => showLogTrace(rows[parseInt(row.dataset.i, 10)], row));
+}
+async function showLogTrace(r, rowEl) {
+  document.querySelectorAll(".log-row.sel").forEach(e => e.classList.remove("sel"));
+  if (rowEl) rowEl.classList.add("sel");
+  const box = $("log-trace");
+  box.innerHTML = '<div class="hint">loading trace...</div>';
+  const d = await api("/api/execution/" + r.execution_id);
+  if (!d.ok || !d.execution) { box.innerHTML = '<div class="banner bad">' + esc((d && d.error) || "could not load trace") + '</div>'; return; }
+  const e = d.execution, msgs = d.messages || [];
+  let html = '<div class="ab-label">Trace &mdash; ' + esc(e.agent_name) + ' &middot; ' + esc(e.status) +
+    ' &middot; by ' + esc(r.caller_role || "-") + '</div>' +
+    '<div class="ab-meta">' + esc(r.execution_id) + '</div>';
+  if (e.output) html += '<div class="nl-answer">' + mdToHtml(e.output) + '</div>';
+  html += msgs.map(m => {
+    let inner = '<div class="role">' + esc(m.role) + (m.tool_name ? (" &middot; " + esc(m.tool_name)) : "") + '</div>';
+    if (m.tool_name && m.role === "assistant") inner += '<pre>' + esc(sqlOf(m.tool_input) || pretty(m.tool_input)) + '</pre>';
+    if (m.content) inner += '<pre>' + esc(m.content) + '</pre>';
+    if (m.role === "tool" && m.tool_output != null) inner += '<pre>' + esc(pretty(m.tool_output)) + '</pre>';
+    return '<div class="msg ' + esc(m.role) + '">' + inner + '</div>';
+  }).join("");
+  box.innerHTML = html;
+}
+if ($("log-refresh")) $("log-refresh").onclick = renderLog;
+
 function openLlmInfo() {
   const prof = ((BOOT && BOOT.profiles) || []).find(p => p.name === "vllm-default") || ((BOOT && BOOT.profiles) || [])[0];
   const body = prof
@@ -2040,11 +2847,14 @@ function openLlmInfo() {
     '<div class="detail-note">The model is external and yours. Each loop iteration makes one completion request here.</div>' + body);
 }
 function openTablesInfo() {
-  const t = $("touched").textContent;
+  const lt = LAST_TOUCHED || { tables: [], reads: 0, writes: 0 };
+  const summary = (lt.reads || lt.writes)
+    ? "last run touched: " + (lt.tables.join(", ") || "(unnamed)") + "  (" + lt.reads + " read, " + lt.writes + " write)"
+    : "run an agent to see which tables it touches";
   openDetail("Your tables",
     '<div class="detail-note">Tools read and write ordinary Postgres tables via SPI, inside the run\'s transaction.</div>' +
-    '<div class="ab-meta">' + (t ? esc(t) : "run an agent to see which tables it touches") + '</div>' +
-    '<div class="ab-label">browse</div><div>Open the schema tree in the dock below to inspect any table live.</div>');
+    '<div class="ab-meta">' + esc(summary) + '</div>' +
+    '<div class="ab-label">browse</div><div>Open the Tree tab to inspect any table live.</div>');
 }
 function wireAccordions(root) {
   root.querySelectorAll(".acc-h").forEach(h => h.onclick = () => {
@@ -2115,7 +2925,101 @@ function renderTools() {
   wireAccordions(el);
 }
 
-// ---- bottom dock: live schema tree ----
+// ---- Install tab: extension (in-process) vs sidecar (managed / RDS) ----
+// Two hosts, one kernel. Accurate to docs/extension-quickstart.md,
+// docs/sidecar-quickstart.md, and the pg-synapse-sidecar crate's v1 HTTP API.
+function renderInstall() {
+  const el = $("p-install");
+  if (!el) return;
+  const pre = (s) => '<pre class="ab-prompt">' + esc(s) + '</pre>';
+  const acc = (title, body) =>
+    '<div class="acc"><div class="acc-h">' + esc(title) + '<span class="acc-x">+</span></div>' +
+    '<div class="acc-b">' + body + '</div></div>';
+
+  const ext =
+    '<div class="detail-note">The canonical install. The kernel runs <b>inside</b> Postgres as a pgrx ' +
+    'extension: lowest latency, SPI straight to the backend, and the SQL tools run under the caller\'s ' +
+    'Postgres role. Pick this when you manage the server and can install a <code>.so</code>.</div>' +
+    '<div class="ab-label">1. Build &amp; install the extension</div>' +
+    pre('cd /path/to/pg-synapse\ncargo pgrx install --features pg17 --no-default-features') +
+    '<div class="ab-label">2. Create it in your database</div>' +
+    pre('CREATE EXTENSION pg_synapse_pgrx;    -- the schema is "synapse"\n' +
+        'GRANT synapse_admin TO my_admin_user;\n' +
+        'GRANT synapse_user  TO my_app_user;') +
+    '<div class="ab-label">3. Point it at an LLM, create an agent, run</div>' +
+    pre("SELECT synapse.llm_profile_set('vllm','openai','<model>',\n" +
+        "  'http://host:8000/v1', NULL, '{}'::jsonb);\n\n" +
+        "SELECT synapse.agent_create('asst',\n" +
+        "  'You are helpful. Use sql_query to read and sql_exec to write.',\n" +
+        "  'conversation', 'vllm', ARRAY['sql_query','sql_exec'], 5, 60000);\n\n" +
+        "SELECT synapse.execute('asst', 'List the tables in the public schema.');") +
+    '<div class="banner info" style="margin-top:10px">In-process: no network hop between the agent loop ' +
+    'and your tables. Requires a Postgres you can install an extension into.</div>';
+
+  const side =
+    '<div class="detail-note">The out-of-process host: the <code>pg-synapse-sidecar</code> binary runs the ' +
+    '<b>same kernel</b> beside your database and talks to it over an ordinary connection. Pick this for ' +
+    '<b>managed Postgres you cannot extend</b> (Amazon RDS, Cloud SQL, Neon, Supabase), or to give the agent ' +
+    'runtime its own failure domain and scale it independently of the DB.</div>' +
+    '<div class="ab-label">1. Run the sidecar against your managed database</div>' +
+    pre('pg-synapse-sidecar \\\n' +
+        '  --database-url postgres://user:pw@app.abc123.us-east-1.rds.amazonaws.com:5432/app \\\n' +
+        '  --port 8088 \\\n' +
+        '  --admin-token "$PG_SYNAPSE_ADMIN_TOKEN"\n' +
+        '# env equivalents: DATABASE_URL, PG_SYNAPSE_PORT, PG_SYNAPSE_ADMIN_TOKEN') +
+    '<div class="ab-label">2. Configure over the token-gated admin API</div>' +
+    pre("H='X-PG-Synapse-Admin-Token: '$PG_SYNAPSE_ADMIN_TOKEN\n\n" +
+        "curl -sX POST localhost:8088/v1/admin/profile/llm -H \"$H\" -d '{\n" +
+        '  "name":"vllm","provider":"openai","model":"<model>",\n' +
+        '  "base_url":"http://host:8000/v1"}\x27\n\n' +
+        "curl -sX POST localhost:8088/v1/admin/agent -H \"$H\" -d '{\n" +
+        '  "name":"asst","system_prompt":"You are helpful...",\n' +
+        '  "executor_name":"conversation","llm_profile_main":"vllm",\n' +
+        '  "tools":["sql_query","sql_exec"]}\x27') +
+    '<div class="ab-label">3. Run an agent over HTTP</div>' +
+    pre("curl -sX POST localhost:8088/v1/execute \\\n" +
+        "  -d '{\"agent\":\"asst\",\"input\":\"List the tables in the public schema.\"}'\n\n" +
+        "# also: POST /v1/execute_async -> GET /v1/status/{id}\n" +
+        "#       POST /v1/embed   POST /v1/tool_call   GET /v1/health") +
+    '<div class="ab-label" style="margin-top:12px">Keep the SQL surface (roadmap)</div>' +
+    '<div class="ab-meta">A <code>pg_synapse.sidecar_url</code> GUC is registered so a future extension build can ' +
+    'forward <code>synapse.execute()</code> to the sidecar (callers keep writing plain SQL). That forwarding is ' +
+    'not wired in v0.1 yet: today, drive the sidecar over its HTTP API as above.</div>' +
+    '<div class="banner info" style="margin-top:10px">The kernel is host-agnostic (it does no I/O). Same six ' +
+    'traits, three executors, MCP client, and tools: the sidecar supplies the runtime, DB connection, and HTTP ' +
+    'surface in place of pgrx. The <code>sql_query</code> / <code>sql_exec</code> tools now travel over the ' +
+    'wire to your cloud DB.</div>';
+
+  const compare =
+    '<div class="ab-label" style="margin-top:16px">Which host do I pick?</div>' +
+    acc('Extension (in-process) - self-managed Postgres',
+      'You control the server and can install a .so. Lowest latency, no extra hop, and SQL tools run under the ' +
+      'caller\'s Postgres role with zero extra wiring. The canonical install today.') +
+    acc('Sidecar (out-of-process) - managed / cloud Postgres',
+      'You run on RDS / Cloud SQL / Neon / Supabase where arbitrary extensions are not allowed, or you want the ' +
+      'agent runtime isolated and scaled on its own. The trade is one network hop and a process to run and monitor.');
+
+  el.innerHTML =
+    '<p class="sub">One kernel, two hosts. The agent loop is the same code either way; only where it runs and how ' +
+    'it reaches Postgres differ. Flip the hero diagram to the <b>Sidecar / RDS</b> view to see the topology.</p>' +
+    '<div class="row" style="margin-bottom:10px"><span class="seg">' +
+    '<button id="inst-ext" class="seg-btn active">Extension (self-managed)</button>' +
+    '<button id="inst-side" class="seg-btn">Sidecar (managed / RDS)</button></span></div>' +
+    '<div id="inst-body">' + ext + '</div>' + compare;
+
+  const show = (which) => {
+    $("inst-ext").classList.toggle("active", which === "ext");
+    $("inst-side").classList.toggle("active", which === "side");
+    $("inst-body").innerHTML = which === "ext" ? ext : side;
+    if (typeof VIZ_VIEW === "string" && which !== VIZ_VIEW && typeof setVizView === "function")
+      setVizView(which === "side" ? "sidecar" : "extension");
+  };
+  $("inst-ext").onclick = () => show("ext");
+  $("inst-side").onclick = () => show("side");
+  wireAccordions(el);
+}
+
+// ---- Tree tab: live schema tree ----
 
 let TREE = [];
 const TREE_OPEN = new Set();
@@ -2161,10 +3065,11 @@ async function selectTreeTable(schema, table) {
   html += '<div class="small">' + (cols.length
     ? cols.map(col => esc(col.column) + " " + esc(col.type) + (col.pk ? " PK" : "")).join("   |   ")
     : "no columns") + "</div>";
+  const cn = cols.length ? cols.map(x => x.column) : (rows.rows && rows.rows[0] ? Object.keys(rows.rows[0]) : []);
   if (rows.ok && rows.rows && rows.rows.length) {
-    const cn = cols.length ? cols.map(x => x.column) : Object.keys(rows.rows[0]);
+    html += '<div class="small">click a row to view the full text of every column</div>';
     html += "<table><tr>" + cn.map(x => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
-      rows.rows.map(r => "<tr>" + cn.map(x => {
+      rows.rows.map((r, i) => "<tr class=\"trow\" data-i=\"" + i + "\">" + cn.map(x => {
         const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
         return "<td title='" + esc(d) + "'>" + esc(d.length > 60 ? d.slice(0, 60) + "..." : d) + "</td>";
       }).join("") + "</tr>").join("") + "</table>";
@@ -2172,39 +3077,40 @@ async function selectTreeTable(schema, table) {
     html += '<div class="hint">' + (rows.ok ? "no rows" : esc(rows.error || "could not read rows")) + "</div>";
   }
   td.innerHTML = html;
+  td.querySelectorAll("tr.trow").forEach(tr => tr.onclick = () => {
+    const r = rows.rows[parseInt(tr.dataset.i, 10)];
+    openModal(schema + "." + table + " - row " + (parseInt(tr.dataset.i, 10) + 1),
+      cn.map(x => {
+        const v = r[x]; const d = (v === null || v === undefined) ? "NULL" : String(v);
+        return '<div class="ab-label" style="margin-top:10px">' + esc(x) + '</div>' +
+          '<pre class="ab-prompt" style="max-height:none; white-space:pre-wrap">' + esc(d) + '</pre>';
+      }).join(""));
+  });
 }
 async function refreshTree() {
   await loadTree();
   if (treeSel.table) await selectTreeTable(treeSel.schema, treeSel.table);
 }
-$("dock-refresh").onclick = refreshTree;
-$("dock-toggle").onclick = () => {
-  const dock = $("dock");
-  const collapsed = dock.classList.toggle("collapsed");
-  $("dock-toggle").textContent = collapsed ? "show" : "hide";
-};
-// Expand the active tab panel, or the schema tree, over the hero diagram.
+$("tree-refresh").onclick = refreshTree;
+// Resize the split between the diagram and the tab panel: Expand fills the
+// panel over the diagram; Shrink collapses the panel to give the diagram the
+// room. The two are mutually exclusive.
 function setTabsMax(on) {
   document.body.classList.toggle("tabs-max", on);
   $("tab-max").innerHTML = on ? "⤡ Show diagram" : "⤢ Expand";
-  if (on) setDockMax(false);
+  if (on) setTabsMin(false);
 }
-function setDockMax(on) {
-  document.body.classList.toggle("dock-max", on);
-  $("dock-max").textContent = on ? "restore" : "expand";
-  if (on) {
-    document.body.classList.remove("tabs-max");
-    $("tab-max").innerHTML = "⤢ Expand";
-    $("dock").classList.remove("collapsed");
-    $("dock-toggle").textContent = "hide";
-  }
+function setTabsMin(on) {
+  document.body.classList.toggle("tabs-min", on);
+  const b = $("tab-min"); if (b) b.innerHTML = on ? "⊟ Show tabs" : "⊟ Shrink";
+  if (on) setTabsMax(false);
 }
 $("tab-max").onclick = () => setTabsMax(!document.body.classList.contains("tabs-max"));
-$("dock-max").onclick = () => setDockMax(!document.body.classList.contains("dock-max"));
+if ($("tab-min")) $("tab-min").onclick = () => setTabsMin(!document.body.classList.contains("tabs-min"));
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (document.body.classList.contains("tabs-max")) setTabsMax(false);
-  if (document.body.classList.contains("dock-max")) setDockMax(false);
+  if (document.body.classList.contains("tabs-min")) setTabsMin(false);
 });
 
 // ---- NL tab: talk to the database via db_architect ----
@@ -2212,18 +3118,59 @@ document.addEventListener("keydown", (e) => {
 const DB_ARCHITECT = {
   name: "db_architect",
   system_prompt:
-    "You translate the user's natural-language request into SQL and execute it. Use sql_exec for DDL and DML " +
-    "(CREATE TABLE, INSERT, UPDATE, ALTER, DELETE) and sql_query to inspect the schema when you need to. Run the " +
-    "statements, then reply with a short confirmation of exactly what you did. Prefer plain CREATE TABLE, which is " +
-    "transaction-safe. Do not ask questions; make reasonable assumptions.",
+    "You translate the user's natural-language request into PostgreSQL and execute it. Use sql_exec for DDL and DML " +
+    "(CREATE TABLE, INSERT, UPDATE, ALTER, DELETE) and sql_query for reads. This is PostgreSQL.\n\n" +
+    "Rules:\n" +
+    "- Run ONE statement per tool call and do NOT end it with a semicolon (the tool runs a single prepared " +
+    "statement and rejects a trailing ';').\n" +
+    "- The user's own tables live in the public schema. pg_synapse stores its OWN metadata in the synapse schema: " +
+    "agents in synapse.agents, runs in synapse.executions, message traces in synapse.messages, LLM profiles in " +
+    "synapse.llm_profiles. Always schema-qualify these, e.g. SELECT name, executor_name, tools FROM synapse.agents.\n" +
+    "- To discover tables, query information_schema.tables or pg_tables.\n\n" +
+    "After running, reply with a short confirmation and, for reads, list the rows. Prefer plain CREATE TABLE, which " +
+    "is transaction-safe. Do not ask questions; make reasonable assumptions. Once you have verified the requested " +
+    "data or schema exists (e.g. a row count matches what was asked for), STOP and reply with your confirmation. " +
+    "Do not delete or regenerate data that already satisfies the request just to improve it.",
   executor: "conversation",
   llm_profile: "vllm-default",
   tools: ["sql_exec", "sql_query"],
-  max_iterations: 8,
+  max_iterations: 12,
   timeout_ms: 60000,
   cost_cap_usd: 0,
 };
 
+// Compact, general-purpose agent: read-only Q&A over the database. Minimal
+// prompt, genuine model reasoning (no baked SQL). Pairs with db_architect.
+const DATA_ANALYST = {
+  name: "data_analyst",
+  system_prompt:
+    "You answer questions about this PostgreSQL database. Use sql_query to READ data; you cannot write. " +
+    "This is PostgreSQL. Run ONE statement per tool call and never end it with a semicolon.\n\n" +
+    "- When you don't know the schema, inspect information_schema.tables and information_schema.columns.\n" +
+    "- The user's data is in public and other schemas; pg_synapse's own bookkeeping is in the synapse schema " +
+    "(synapse.agents, synapse.executions, synapse.messages). Schema-qualify synapse tables.\n" +
+    "- Answer concisely and show the numbers you found. If asked to change data, say you are read-only and " +
+    "suggest the db_architect agent.",
+  executor: "conversation",
+  llm_profile: "vllm-default",
+  tools: ["sql_query"],
+  max_iterations: 6,
+  timeout_ms: 60000,
+  cost_cap_usd: 0,
+};
+
+const CORE_AGENTS = [DB_ARCHITECT, DATA_ANALYST];
+// Ensure the always-available compact agents exist once an LLM is connected,
+// so they show up in the Run / Agent pickers without loading a scenario.
+async function ensureCoreAgents() {
+  if (!CONNECTED) return;
+  const have = new Set(((BOOT && BOOT.agents) || []).map(a => a.name));
+  let created = false;
+  for (const a of CORE_AGENTS) {
+    if (!have.has(a.name)) { const r = await api("/api/agent", "POST", a); if (r && r.ok) created = true; }
+  }
+  if (created) await bootstrap(true);
+}
 async function ensureDbArchitect() {
   if (((BOOT && BOOT.agents) || []).some(a => a.name === "db_architect")) return true;
   const r = await api("/api/agent", "POST", DB_ARCHITECT);
@@ -2257,15 +3204,20 @@ $("nl-run").onclick = async () => {
       $("nl-status").textContent = env.status || "done";
       const sqls = (run.messages || [])
         .filter(m => m.role === "assistant" && (m.tool_name === "sql_exec" || m.tool_name === "sql_query"))
-        .map(m => { try { return JSON.parse(m.tool_input).sql || m.tool_input; } catch (e) { return m.tool_input; } });
+        .map(m => sqlOf(m.tool_input)).filter(Boolean);
       let html = "";
-      if (env.output) html += '<div class="banner ok">' + esc(env.output) + "</div>";
+      if (env.output) html += '<div class="nl-answer">' + mdToHtml(env.output) + "</div>";
       if (sqls.length) html += '<div class="ab-label">SQL it ran</div>' +
         sqls.map(s => '<pre class="ab-prompt">' + esc(s) + "</pre>").join("");
       $("nl-out").innerHTML = html || '<div class="hint">no SQL captured</div>';
       refreshTree();
     },
   });
+};
+
+$("nl-view-agent").onclick = async () => {
+  await ensureDbArchitect();
+  openAgentModal("db_architect");
 };
 
 // ---- Schema tab navigation helper ----

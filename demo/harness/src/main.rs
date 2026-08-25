@@ -16,18 +16,28 @@ use axum::response::Html;
 use axum::routing::{get, post};
 use axum::Router;
 
+/// Running continuous-workload generators, keyed by target. The bool is the
+/// stop flag the background task polls.
+pub type WorkloadRegistry = Arc<Mutex<HashMap<String, Arc<std::sync::atomic::AtomicBool>>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db_url: String,
     pub runs: runs::RunRegistry,
+    pub workloads: WorkloadRegistry,
     pub default_llm_base_url: String,
     pub default_llm_model: String,
 }
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
+const SIDECAR_HTML: &str = include_str!("../static/sidecar.html");
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn sidecar_page() -> Html<&'static str> {
+    Html(SIDECAR_HTML)
 }
 
 #[tokio::main]
@@ -46,12 +56,21 @@ async fn main() {
     let state = AppState {
         db_url,
         runs: Arc::new(Mutex::new(HashMap::new())),
+        workloads: Arc::new(Mutex::new(HashMap::new())),
         default_llm_base_url,
         default_llm_model,
     };
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/sidecar", get(sidecar_page))
+        .route("/api/sidecar/probe", post(api::sidecar_probe))
+        .route("/api/sidecar/execute", post(api::sidecar_execute))
+        .route("/api/workload/seed", post(api::workload_seed))
+        .route("/api/workload/reset", post(api::workload_reset))
+        .route("/api/workload/start", post(api::workload_start))
+        .route("/api/workload/stop", post(api::workload_stop))
+        .route("/api/workload/status", get(api::workload_status))
         .route("/api/bootstrap", get(api::bootstrap))
         .route("/api/profile", post(api::profile_set))
         .route("/api/profile/test", post(api::profile_test))

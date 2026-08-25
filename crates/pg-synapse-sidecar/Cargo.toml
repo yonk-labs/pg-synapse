@@ -22,6 +22,7 @@ pg-synapse-tools-lede    = { path = "../../plugins/pg-synapse-tools-lede",      
 pg-synapse-tools-calc    = { path = "../../plugins/pg-synapse-tools-calc",         version = "0.1.1" }
 pg-synapse-tools-clock   = { path = "../../plugins/pg-synapse-tools-clock",        version = "0.1.1" }
 pg-synapse-tools-delegate = { path = "../../plugins/pg-synapse-tools-delegate",   version = "0.1.1" }
+pg-synapse-tools-lexicon = { path = "../../plugins/pg-synapse-tools-lexicon",     version = "0.1.1" }
 
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
@@ -34,7 +35,7 @@ chrono       = { workspace = true }
 axum         = "0.7"
 clap         = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-sqlx         = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "uuid", "chrono"] }
+sqlx         = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "uuid", "chrono", "bigdecimal"] }
 anyhow       = "1"
 
 [dev-dependencies]

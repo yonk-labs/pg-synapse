@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg_synapse - sidecar to remote Postgres</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#2d3646;
+    --text:#d7dee8; --muted:#8b98a9; --accent:#4ea1ff; --green:#3fb950;
+    --red:#f85149; --orange:#d29922;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:11px 22px;
+           border-bottom:1px solid var(--border); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; } header h1 span { color:var(--accent); }
+  header .tag { color:var(--muted); font-size:12px; font-family:var(--mono); }
+  header a { margin-left:auto; color:var(--accent); font-size:13px; text-decoration:none; }
+  header a:hover { text-decoration:underline; }
+  main { max-width:1120px; margin:0 auto; padding:18px 22px 40px; }
+  .lead { color:var(--muted); font-size:14px; margin:2px 0 18px; }
+  .lead b { color:var(--text); }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+           padding:16px 18px; margin:14px 0; }
+  .panel h2 { margin:0 0 4px; font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+              color:var(--accent); }
+  .panel .sub { color:var(--muted); font-size:12.5px; margin:0 0 12px; }
+  .diagram svg { width:100%; height:auto; display:block; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .grow { flex:1 1 auto; }
+  input[type=text], textarea {
+    background:var(--bg); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:8px 10px; font-family:var(--mono); font-size:12.5px; width:100%; }
+  textarea { resize:vertical; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--border);
+           border-radius:6px; padding:8px 15px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:#1f4b7a; border-color:#2e6db3; }
+  button:disabled { opacity:.5; cursor:default; }
+  .pill { display:inline-flex; align-items:center; gap:7px; font-family:var(--mono);
+          font-size:12.5px; padding:4px 11px; border-radius:999px; border:1px solid var(--border); }
+  .pill .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+  .pill.ok { color:var(--green); border-color:var(--green); } .pill.ok .dot { background:var(--green); box-shadow:0 0 6px var(--green); }
+  .pill.bad { color:var(--red); border-color:var(--red); } .pill.bad .dot { background:var(--red); }
+  .idgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:12px 0 4px; }
+  .idcell { background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:9px 12px; }
+  .idcell .k { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; }
+  .idcell .v { color:var(--text); font-family:var(--mono); font-size:13.5px; margin-top:3px; word-break:break-all; }
+  table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; margin-top:10px; }
+  th,td { border-bottom:1px solid var(--border); padding:5px 8px; text-align:left; }
+  th { color:var(--muted); font-weight:600; }
+  .banner { border-radius:6px; padding:10px 12px; margin:10px 0; font-family:var(--mono); font-size:12.5px; }
+  .banner.ok { background:#12261a; border:1px solid var(--green); color:var(--green); }
+  .banner.bad { background:#2b1214; border:1px solid var(--red); color:#ff8a80; }
+  .banner.info { background:#10233a; border:1px solid var(--accent); color:var(--accent); }
+  pre { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px;
+        font-family:var(--mono); font-size:12px; white-space:pre-wrap; word-break:break-word; margin:8px 0; overflow:auto; }
+  code { font-family:var(--mono); color:var(--green); }
+  .muted { color:var(--muted); }
+  /* diagram classes */
+  .vs-boundary { fill:rgba(78,161,255,.05); stroke:var(--border); stroke-width:1.5; stroke-dasharray:3 5; }
+  .vs-cloud { fill:rgba(63,185,80,.06); stroke:var(--green); stroke-width:1.5; stroke-dasharray:2 4; }
+  .vs-title { fill:var(--muted); font-size:12px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; }
+  .vs-node { fill:var(--panel2); stroke:var(--border); stroke-width:1.5; }
+  .vs-h { fill:var(--text); font-size:15px; font-weight:600; text-anchor:middle; }
+  .vs-s { fill:var(--muted); font-size:11.5px; font-family:var(--mono); text-anchor:middle; }
+  .vs-edge { fill:none; stroke:#45526b; stroke-width:2; marker-end:url(#vs-arrow); }
+  .vs-edge.ext { stroke:var(--orange); }
+  .vs-edge.wire { stroke:var(--accent); }
+  .vs-el { fill:var(--muted); font-size:10.5px; font-family:var(--mono); text-anchor:middle; }
+  .vs-el.ext { fill:var(--orange); } .vs-el.wire { fill:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>pg_synapse</span> sidecar to a remote Postgres</h1>
+  <span class="tag" id="ver-tag"></span>
+  <a href="/">&larr; back to the main demo</a>
+</header>
+
+<main>
+  <p class="lead">The <b>same agent kernel</b> as the in-database extension, running as an out-of-process
+    binary (<code>pg-synapse-sidecar</code>) beside a Postgres it <b>cannot</b> extend: managed cloud DBs
+    like <b>Amazon RDS</b>, Cloud SQL, Neon, Supabase. It reaches the database over an ordinary connection
+    (sqlx / libpq). This page talks to a live sidecar and proves it.</p>
+
+  <div class="panel diagram" id="diagram-panel">
+    <h2>Topology</h2>
+    <p class="sub">Kernel runs outside the database. SQL tools reach into the cloud DB over the wire;
+      external tools and the LLM leave to the internet.</p>
+    <!-- DIAGRAM_SLOT -->
+    <svg viewBox="0 0 960 380" role="img" aria-label="sidecar to remote Postgres topology">
+      <defs>
+        <marker id="vs-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5"
+                orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#556275"></path></marker>
+      </defs>
+
+      <!-- sidecar process boundary -->
+      <rect class="vs-boundary" x="214" y="40" width="300" height="300" rx="12"></rect>
+      <text class="vs-title" x="230" y="62">pg-synapse-sidecar :8088</text>
+
+      <!-- cloud boundary -->
+      <rect class="vs-cloud" x="700" y="40" width="234" height="150" rx="14"></rect>
+      <text class="vs-title" x="716" y="62" style="fill:var(--green)">Managed Postgres (RDS)</text>
+
+      <!-- client -->
+      <g><rect class="vs-node" x="24" y="150" width="150" height="80" rx="10"></rect>
+        <text class="vs-h" x="99" y="182">client</text>
+        <text class="vs-s" x="99" y="202">HTTP /v1/execute</text>
+        <text class="vs-s" x="99" y="216">/v1/tool_call</text></g>
+
+      <!-- kernel -->
+      <g><rect class="vs-node" x="242" y="86" width="244" height="70" rx="10"></rect>
+        <text class="vs-h" x="364" y="115">agent loop (kernel)</text>
+        <text class="vs-s" x="364" y="134">pg-synapse-core - 6 traits, 3 executors</text></g>
+      <!-- agents -->
+      <g><rect class="vs-node" x="242" y="168" width="118" height="70" rx="10"></rect>
+        <text class="vs-h" x="301" y="190" style="font-size:13px">agents</text>
+        <text class="vs-s" x="301" y="208">index_tuner,</text>
+        <text class="vs-s" x="301" y="222">db_architect, ...</text></g>
+      <!-- in-db tools -->
+      <g><rect class="vs-node" x="368" y="168" width="118" height="70" rx="10"></rect>
+        <text class="vs-h" x="427" y="190" style="font-size:13px">SQL tools</text>
+        <text class="vs-s" x="427" y="208">sql_query</text>
+        <text class="vs-s" x="427" y="222">sql_exec</text></g>
+      <!-- external tools -->
+      <g><rect class="vs-node" x="242" y="252" width="244" height="72" rx="10"></rect>
+        <text class="vs-h" x="364" y="278" style="font-size:13px">external tools</text>
+        <text class="vs-s" x="364" y="296">http_get / http_post / http_head / MCP</text>
+        <text class="vs-s" x="364" y="311">calculator, get_current_time, call_agent</text></g>
+
+      <!-- cloud db -->
+      <g><rect class="vs-node" x="722" y="82" width="190" height="86" rx="10" style="stroke:var(--green)"></rect>
+        <text class="vs-h" x="817" y="112">your tables +</text>
+        <text class="vs-h" x="817" y="130">synapse schema</text>
+        <text class="vs-s" x="817" y="150">no extension needed</text></g>
+
+      <!-- llm -->
+      <g><rect class="vs-node" x="722" y="214" width="190" height="56" rx="10"></rect>
+        <text class="vs-h" x="817" y="238" style="font-size:13px">LLM endpoint</text>
+        <text class="vs-s" x="817" y="256">OpenAI-compatible</text></g>
+      <!-- internet -->
+      <g><rect class="vs-node" x="722" y="286" width="190" height="56" rx="10" style="stroke:var(--orange)"></rect>
+        <text class="vs-h" x="817" y="310" style="font-size:13px">internet</text>
+        <text class="vs-s" x="817" y="328">external services</text></g>
+
+      <!-- edges -->
+      <path class="vs-edge" d="M 174 190 L 238 175"></path>
+      <text class="vs-el" x="205" y="176">HTTP</text>
+      <path class="vs-edge wire" d="M 486 200 C 620 200, 640 128, 718 125"></path>
+      <text class="vs-el wire" x="600" y="150">sqlx / libpq  (over the wire)</text>
+      <path class="vs-edge wire" d="M 486 214 C 610 250, 650 242, 718 242"></path>
+      <text class="vs-el wire" x="600" y="262">completion request</text>
+      <path class="vs-edge ext" d="M 486 300 C 600 320, 640 316, 718 314"></path>
+      <text class="vs-el ext" x="602" y="333">http_* / MCP leave the box</text>
+    </svg>
+  </div>
+
+  <div class="panel">
+    <h2>Live probe</h2>
+    <p class="sub">The harness relays to the sidecar's v1 API server-side (no browser CORS). Every value below
+      is reported by the <b>remote</b> database, through the sidecar.</p>
+    <div class="row">
+      <input type="text" id="sc-url" class="grow" value="http://localhost:8088"
+             placeholder="http://localhost:8088" style="max-width:360px">
+      <span id="sc-health" class="pill"><span class="dot"></span>not probed</span>
+      <button class="primary" id="sc-probe">Probe remote PG</button>
+    </div>
+    <div id="sc-identity"></div>
+    <div id="sc-status"></div>
+
+    <div style="margin-top:16px">
+      <p class="sub" style="margin-bottom:6px">Run any read-only query on the remote DB via the sidecar's
+        <code>sql_query</code> tool:</p>
+      <textarea id="sc-query" rows="2" spellcheck="false">SELECT table_name FROM information_schema.tables WHERE table_schema = 'synapse' ORDER BY table_name</textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="sc-run" disabled>Run query</button>
+        <span class="muted" id="sc-run-hint" style="font-size:12px">probe first to enable</span>
+      </div>
+      <div id="sc-rows"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Run an agent</h2>
+    <p class="sub">A full tool-calling run, proxied to the sidecar's <code>POST /v1/execute</code>. The sidecar
+      (a host process) makes the LLM call and drives the remote DB. Needs an agent + LLM profile registered
+      on the sidecar (via its <code>/v1/admin/*</code> API).</p>
+    <div class="row">
+      <input type="text" id="ag-name" value="asst" placeholder="agent name" style="max-width:160px">
+      <input type="text" id="ag-input" class="grow" value="How many rows are in public.orders and what is the total amount (use amount::float8)? Use SQL.">
+      <button class="primary" id="ag-run">Run agent</button>
+    </div>
+    <div id="ag-out"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Run it yourself</h2>
+    <p class="sub">Two containers: a stock Postgres standing in for RDS, plus the sidecar.</p>
+    <pre>docker compose -f docker-compose.sidecar.yml up --build
+# rds:     stock postgres:17, synapse schema seeded by plain DDL (no extension)
+# sidecar: pg-synapse-sidecar, connects over the wire, v1 HTTP API on :8088</pre>
+    <p class="sub" style="margin:8px 0 0">Then set this page's URL to <code>http://localhost:8088</code> and probe.</p>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+function esc(s){ return String(s ?? "").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function probe(runQuery) {
+  const url = $("sc-url").value.trim();
+  $("sc-probe").disabled = true;
+  $("sc-status").innerHTML = '<div class="banner info">probing ' + esc(url) + ' ...</div>';
+  let data;
+  try {
+    const body = { base_url: url };
+    if (runQuery) body.query = $("sc-query").value;
+    const resp = await fetch("/api/sidecar/probe", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    data = await resp.json();
+  } catch (e) { data = { ok: false, error: String(e) }; }
+  $("sc-probe").disabled = false;
+  render(data);
+}
+
+function firstRow(x) {
+  const out = x && x.output;
+  return Array.isArray(out) && out.length ? out[0] : null;
+}
+function rowsOf(x) {
+  const out = x && x.output;
+  return Array.isArray(out) ? out : null;
+}
+
+function render(d) {
+  const health = $("sc-health");
+  if (!d || !d.ok) {
+    health.className = "pill bad"; health.innerHTML = '<span class="dot"></span>unreachable';
+    $("sc-identity").innerHTML = "";
+    $("sc-status").innerHTML = '<div class="banner bad">' + esc((d && d.error) || "probe failed") + '</div>';
+    $("sc-run").disabled = true; $("sc-run-hint").textContent = "probe first to enable";
+    return;
+  }
+  health.className = "pill ok"; health.innerHTML = '<span class="dot"></span>healthy';
+  const ver = (d.version && d.version.version) || "?";
+  $("ver-tag").textContent = "sidecar v" + ver;
+
+  const id = firstRow(d.identity);
+  if (id) {
+    $("sc-identity").innerHTML =
+      '<div class="idgrid">' +
+      cell("database", id.database) +
+      cell("server address", id.server_addr) +
+      cell("server port", id.server_port) +
+      cell("engine", id.version) +
+      cell("sidecar", d.target) +
+      '</div>' +
+      '<div class="banner ok">Connected. The sidecar is driving the database above over the wire, ' +
+      'from its own process. Nothing is installed inside that Postgres.</div>';
+  } else {
+    $("sc-identity").innerHTML = '<div class="banner info">identity: ' + esc(JSON.stringify(d.identity)) + '</div>';
+  }
+  $("sc-status").innerHTML = "";
+  $("sc-run").disabled = false; $("sc-run-hint").textContent = "";
+  renderRows(d.rows, d.query);
+}
+function cell(k, v) {
+  return '<div class="idcell"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v ?? "-") + '</div></div>';
+}
+function renderRows(rowsReply, query) {
+  const box = $("sc-rows");
+  if (rowsReply && rowsReply.error) {
+    box.innerHTML = '<div class="banner bad">' + esc(rowsReply.error) + '</div>'; return;
+  }
+  const rows = rowsOf(rowsReply);
+  if (!rows) { box.innerHTML = '<pre>' + esc(JSON.stringify(rowsReply, null, 2)) + '</pre>'; return; }
+  if (!rows.length) { box.innerHTML = '<div class="banner info">0 rows.</div>'; return; }
+  const cols = Object.keys(rows[0]);
+  box.innerHTML =
+    '<div class="muted" style="font-size:11.5px;margin-top:8px">' + esc(rows.length) + ' row(s) from the remote DB</div>' +
+    '<table><tr>' + cols.map(c => '<th>' + esc(c) + '</th>').join("") + '</tr>' +
+    rows.map(r => '<tr>' + cols.map(c => '<td>' + esc(r[c]) + '</td>').join("") + '</tr>').join("") + '</table>';
+}
+
+$("sc-probe").onclick = () => probe(true);
+$("sc-run").onclick = () => probe(true);
+
+async function runAgent() {
+  const out = $("ag-out");
+  $("ag-run").disabled = true;
+  out.innerHTML = '<div class="banner info">running via sidecar /v1/execute ...</div>';
+  let d;
+  try {
+    const resp = await fetch("/api/sidecar/execute", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_url: $("sc-url").value.trim(), agent: $("ag-name").value.trim(), input: $("ag-input").value }) });
+    d = await resp.json();
+  } catch (e) { d = { ok: false, error: String(e) }; }
+  $("ag-run").disabled = false;
+  if (!d.ok) { out.innerHTML = '<div class="banner bad">' + esc(d.error || "run failed") + '</div>'; return; }
+  const e = d.envelope || {};
+  const tokens = (e.tokens_in != null || e.tokens_out != null) ? (esc(e.tokens_in) + " in / " + esc(e.tokens_out) + " out") : "n/a";
+  out.innerHTML =
+    (e.output ? '<div class="banner ok">' + esc(e.output) + '</div>' : '') +
+    '<div class="idgrid">' + cell("status", e.status || "completed") + cell("tokens", tokens) +
+    cell("duration", (e.duration_ms != null ? e.duration_ms + " ms" : "n/a")) +
+    cell("tool calls", (e.tool_calls ? e.tool_calls.length : 0)) + '</div>' +
+    (e.error ? '<div class="banner bad">' + esc(e.error) + '</div>' : '');
+}
+$("ag-run").onclick = runAgent;
+</script>
+</body>
+</html>
