@@ -1,0 +1,54 @@
+# pg_synapse SIDECAR demo: mimic managed Postgres (RDS) with two containers.
+#
+#   docker compose -f docker-compose.sidecar.yml up --build
+#
+# "rds" is a STOCK postgres:17 image with NO pg_synapse extension installed:
+# the stand-in for a managed database (Amazon RDS, Cloud SQL, Neon, Supabase)
+# where you cannot load arbitrary .so extensions. The synapse schema is seeded
+# with plain DDL (schema.sql) as an init script, exactly as you would on real
+# managed Postgres. "sidecar" runs the pg-synapse-sidecar binary beside it and
+# reaches it over the wire (sqlx/libpq), exposing the v1 HTTP API on :8088.
+#
+# The LLM endpoint is NOT part of this stack. Register one after startup:
+#   H='X-PG-Synapse-Admin-Token: demo-admin-token'
+#   curl -sX POST localhost:8088/v1/admin/profile/llm -H "$H" \
+#     -d '{"name":"vllm","provider":"openai","model":"<model>",
+#          "base_url":"http://host:8000/v1"}'
+#   curl -sX POST localhost:8088/v1/admin/agent -H "$H" \
+#     -d '{"name":"asst","system_prompt":"You are helpful...",
+#          "executor_name":"conversation","llm_profile_main":"vllm",
+#          "tools":["sql_query","sql_exec"]}'
+#   curl -sX POST localhost:8088/v1/execute \
+#     -d '{"agent":"asst","input":"List the tables in public."}'
+
+services:
+  rds:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: synapse_demo
+    ports:
+      # 55433 so it does not collide with the extension demo's 55432.
+      - "55433:5432"
+    volumes:
+      # Seed the synapse schema with plain DDL: no extension, just tables/roles.
+      - ./crates/pg-synapse-pgrx/sql/schema.sql:/docker-entrypoint-initdb.d/01-synapse-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d synapse_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  sidecar:
+    build:
+      context: .
+      dockerfile: demo/sidecar/Dockerfile
+    environment:
+      DATABASE_URL: "postgres://postgres:postgres@rds:5432/synapse_demo"
+      PG_SYNAPSE_PORT: "8088"
+      PG_SYNAPSE_ADMIN_TOKEN: "demo-admin-token"
+    ports:
+      - "8088:8088"
+    depends_on:
+      rds:
+        condition: service_healthy

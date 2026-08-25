@@ -250,6 +250,15 @@ fn try_decode_column(row: &sqlx::postgres::PgRow, name: &str) -> serde_json::Val
     if let Ok(v) = row.try_get::<f64, _>(name) {
         return serde_json::json!(v);
     }
+    // NUMERIC / DECIMAL (e.g. money columns, SUM/AVG aggregates). sqlx can't
+    // decode these as i64/f64, so without this branch they serialize as JSON
+    // null, silently breaking any aggregate or money query. Emit a JSON number
+    // when the value parses cleanly, else a string to preserve precision.
+    if let Ok(v) = row.try_get::<sqlx::types::BigDecimal, _>(name) {
+        let s = v.to_string();
+        return serde_json::from_str::<serde_json::Value>(&s)
+            .unwrap_or(serde_json::Value::String(s));
+    }
     // UUID.
     if let Ok(v) = row.try_get::<uuid::Uuid, _>(name) {
         return serde_json::Value::String(v.to_string());

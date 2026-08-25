@@ -30,6 +30,7 @@ use pg_synapse_tools_clock::ClockToolsPlugin;
 use pg_synapse_tools_delegate::{CallAgentTool, DelegateToolsPlugin};
 use pg_synapse_tools_fs::FsToolsPlugin;
 use pg_synapse_tools_lede::LedeToolsPlugin;
+use pg_synapse_tools_lexicon::LexiconToolsPlugin;
 use pg_synapse_tools_sql::SqlToolsPlugin;
 use sqlx::PgPool;
 use tracing::{info, warn};
@@ -109,6 +110,14 @@ pub async fn build_runtime(pool: &PgPool) -> anyhow::Result<Arc<Runtime>> {
 
     // Clock tool (get_current_time).
     builder = builder.with_plugin(ClockToolsPlugin::new());
+
+    // pg-lexicon schema-context bridge (get_schema_context). Points at a
+    // running pg-lexicon service; base URL and optional bearer token come
+    // from env so the sidecar can target a real or mock service.
+    let lexicon_base =
+        std::env::var("PG_LEXICON_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:9777".into());
+    let lexicon_token = std::env::var("PG_LEXICON_TOKEN").ok();
+    builder = builder.with_plugin(LexiconToolsPlugin::new(lexicon_base, lexicon_token));
 
     // Delegation tool (call_agent) -- phase 1: register the shell.
     builder = builder.with_plugin(DelegateToolsPlugin::with_tool(delegate_tool));
