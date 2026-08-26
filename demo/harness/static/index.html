@@ -156,6 +156,9 @@
   #schema-out td.editing { max-width: none; white-space: normal; overflow: visible; }
   #schema-out td.scell { cursor: pointer; }
   #schema-out td.scell:hover { background: var(--panel2); }
+  .tr-val.tr-editable { cursor: pointer; }
+  .tr-val.tr-editable:hover { background: var(--panel2); }
+  .tr-field textarea { font-size: 12px; }
   label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
   input[type=text], input[type=password], input[type=number], textarea, select {
     width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border);
@@ -3066,8 +3069,10 @@ async function selectTreeTable(schema, table) {
     ? cols.map(col => esc(col.column) + " " + esc(col.type) + (col.pk ? " PK" : "")).join("   |   ")
     : "no columns") + "</div>";
   const cn = cols.length ? cols.map(x => x.column) : (rows.rows && rows.rows[0] ? Object.keys(rows.rows[0]) : []);
+  const pkCol = (cols.find(c => c.pk) || {}).column || null;
   if (rows.ok && rows.rows && rows.rows.length) {
-    html += '<div class="small">click a row to view the full text of every column</div>';
+    html += '<div class="small">click a row to view and edit every column' +
+      (pkCol ? "" : " (read-only: no primary key found)") + '</div>';
     html += "<table><tr>" + cn.map(x => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
       rows.rows.map((r, i) => "<tr class=\"trow\" data-i=\"" + i + "\">" + cn.map(x => {
         const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
@@ -3079,12 +3084,67 @@ async function selectTreeTable(schema, table) {
   td.innerHTML = html;
   td.querySelectorAll("tr.trow").forEach(tr => tr.onclick = () => {
     const r = rows.rows[parseInt(tr.dataset.i, 10)];
-    openModal(schema + "." + table + " - row " + (parseInt(tr.dataset.i, 10) + 1),
-      cn.map(x => {
-        const v = r[x]; const d = (v === null || v === undefined) ? "NULL" : String(v);
-        return '<div class="ab-label" style="margin-top:10px">' + esc(x) + '</div>' +
-          '<pre class="ab-prompt" style="max-height:none; white-space:pre-wrap">' + esc(d) + '</pre>';
-      }).join(""));
+    openTreeRowModal(schema, table, cn, r, pkCol);
+  });
+}
+
+/**
+ * Row-detail modal for the Tree tab: every column's full value, click any
+ * one to edit it in place. Reuses /api/schema/update (the same endpoint the
+ * Schema tab's inline cell editor uses) so both editors write through the
+ * same validated, catalog-checked path.
+ */
+function openTreeRowModal(schema, table, cn, row, pkCol) {
+  const html = cn.map(x => {
+    const v = row[x]; const d = (v === null || v === undefined) ? "" : String(v);
+    return '<div class="tr-field" data-col="' + esc(x) + '">' +
+      '<div class="ab-label" style="margin-top:10px">' + esc(x) + (x === pkCol ? ' <span class="small">PK</span>' : "") + '</div>' +
+      '<pre class="ab-prompt tr-val' + (pkCol ? " tr-editable" : "") + '" style="max-height:none; white-space:pre-wrap">' +
+        esc(d || "NULL") + '</pre>' +
+      '</div>';
+  }).join("");
+  openModal(schema + "." + table + " row", html);
+  if (!pkCol) return;
+  $("modal-body").querySelectorAll(".tr-field").forEach(field => {
+    const col = field.dataset.col;
+    const pre = field.querySelector(".tr-val");
+    pre.onclick = () => {
+      if (field.querySelector("textarea")) return;
+      const cur = (row[col] === null || row[col] === undefined) ? "" : String(row[col]);
+      pre.style.display = "none";
+      const ta = document.createElement("textarea");
+      ta.value = cur;
+      ta.rows = Math.min(8, Math.max(1, Math.ceil((cur.length || 1) / 60)));
+      ta.style.width = "100%";
+      const bar = document.createElement("div");
+      bar.className = "row"; bar.style.marginTop = "4px";
+      const save = document.createElement("button");
+      save.className = "primary"; save.textContent = "save";
+      const cancel = document.createElement("button");
+      cancel.textContent = "cancel";
+      const status = document.createElement("span");
+      status.className = "small";
+      bar.append(save, cancel, status);
+      field.append(ta, bar);
+      ta.focus();
+      cancel.onclick = () => { ta.remove(); bar.remove(); pre.style.display = ""; };
+      save.onclick = async () => {
+        save.disabled = true;
+        status.textContent = "saving...";
+        const r = await api("/api/schema/update", "POST", {
+          schema, table, pk_col: pkCol, pk_val: row[pkCol], col, val: ta.value,
+        });
+        if (r.ok) {
+          row[col] = ta.value;
+          pre.textContent = ta.value || "NULL";
+          ta.remove(); bar.remove(); pre.style.display = "";
+          refreshTree();
+        } else {
+          status.textContent = r.error || "update failed";
+          save.disabled = false;
+        }
+      };
+    };
   });
 }
 async function refreshTree() {
