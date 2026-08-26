@@ -96,6 +96,15 @@ database itself: an autonomous index tuner, a DBA that files tickets, and
 LLM-powered ETL. See `demo/README.md` for build details and the suggested
 talk flow.
 
+## Client libraries
+
+`clients/typescript/` is a minimal TypeScript client for apps that want to
+trigger or check on agents from their own backend: `execute(agent, input)`,
+`status()`, `messages()`. It has zero runtime dependencies and no separate
+service to run: it's a thin wrapper around `synapse.*` SQL, called over
+whatever Postgres client (`pg.Pool`, etc.) and role the app already has. See
+`clients/typescript/README.md`.
+
 ## Workspace layout
 
 ```
@@ -103,6 +112,7 @@ crates/pg-synapse-core      kernel: traits, executors, Runtime, MCP, tower seam
 crates/pg-synapse-macros    #[derive(Tool)] proc macro
 crates/pg-synapse-pgrx      Postgres extension host (pgrx)
 crates/pg-synapse-sidecar   axum HTTP host (12 v1 endpoints, sqlx-backed)
+clients/typescript          TypeScript client (SQL-based, no HTTP)
 plugins/pg-synapse-provider-openai      OpenAI / OpenAI-compatible
 plugins/pg-synapse-provider-anthropic   Anthropic Messages API
 plugins/pg-synapse-provider-llama-cpp   llama.cpp server + GGUF download

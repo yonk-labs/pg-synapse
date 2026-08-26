@@ -1,6 +1,8 @@
 /target
 Cargo.lock
 **/*.rs.bk
+node_modules/
+dist/
 .DS_Store
 .idea/
 .vscode/
