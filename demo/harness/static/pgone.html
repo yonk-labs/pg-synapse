@@ -176,6 +176,24 @@
   #browse-tree .tbl.sel { color:var(--accent); font-weight:600; }
   #browse-data { padding:14px 16px; overflow:auto; }
   .hint { color:var(--muted); font-size:13px; }
+
+  /* ---- CONNECTIONS view ---- */
+  #view-connections .head { display:flex; align-items:center; margin:28px 0 16px; }
+  #conn-form { max-width:480px; background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:20px 22px; margin-bottom:24px; }
+  #conn-form label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  #conn-form label:first-child { margin-top:0; }
+  #conn-form input[type=text], #conn-form input[type=number], #conn-form input[type=password] {
+    width:100%; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 10px; font-size:13.5px; }
+  #conn-form .two { display:grid; grid-template-columns:2fr 1fr; gap:12px; }
+  #conn-form .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; align-items:center; }
+  #conn-status { font-size:12.5px; color:var(--muted); }
+  .conn-list { display:flex; flex-direction:column; gap:8px; max-width:640px; }
+  .conn-card { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:12px 16px; display:flex; align-items:center; gap:12px; font-family:var(--mono); font-size:13px; }
+  .conn-card .cn-name { font-weight:700; min-width:120px; }
+  .conn-card .cn-meta { color:var(--muted); flex:1; }
 </style>
 </head>
 <body>
@@ -186,6 +204,7 @@
     <button data-nav="build" class="active">Build</button>
     <button data-nav="dashboard">Your apps</button>
     <button data-nav="browse">Browse data</button>
+    <button data-nav="connections">Connections</button>
   </nav>
   <div class="grow"></div>
   <div id="conn"><span class="dot"></span><span id="conn-text">checking connection...</span><a id="conn-change" href="#" style="display:none">change</a></div>
@@ -212,6 +231,12 @@
     <p class="sub">Describe an app. pg-one designs the tables, seeds them, and creates an agent for it, right in your database.</p>
     <div class="builder">
       <textarea id="build-input" rows="2" placeholder="a tool to track my gym members and who showed up this week"></textarea>
+      <div class="row" id="attach-row">
+        <input type="file" id="build-file" style="display:none">
+        <button class="chip" id="build-file-btn">&#128206; attach a file</button>
+        <button class="chip" id="build-sample-btn">or use sample data (product reviews)</button>
+        <span class="small" id="attach-status"></span>
+      </div>
       <div class="row">
         <div class="examples">
           <button class="chip" data-ex="Track overdue invoices for my small business and draft reminders">AR collections</button>
@@ -309,6 +334,36 @@
     </div>
   </section>
 
+  <!-- CONNECTIONS -->
+  <section class="view" id="view-connections">
+    <div class="head"><h2>Connections</h2></div>
+    <p class="sub" style="margin:0 0 18px">
+      Name an external Postgres database once here, and any app can query it with the
+      <code>remote_query</code> / <code>remote_exec</code> tools, by name, no code required.
+      This is the same connection method <code>pg-synapse-sidecar</code> uses for its own remote
+      database. The password is stored as a secret, never shown to an agent.
+    </p>
+    <div id="conn-form">
+      <label>Name (what agents will call it, e.g. <code>sales_db</code>)</label>
+      <input type="text" id="c-name" placeholder="sales_db">
+      <div class="two">
+        <div><label>Host</label><input type="text" id="c-host" placeholder="db.example.com"></div>
+        <div><label>Port</label><input type="number" id="c-port" value="5432"></div>
+      </div>
+      <label>Database name</label>
+      <input type="text" id="c-dbname" placeholder="sales">
+      <div class="two">
+        <div><label>User</label><input type="text" id="c-user" placeholder="reporter"></div>
+        <div><label>Password</label><input type="password" id="c-password"></div>
+      </div>
+      <div class="foot">
+        <span id="conn-status"></span>
+        <button class="btn primary" id="conn-save">Save connection</button>
+      </div>
+    </div>
+    <div class="conn-list" id="conn-list"><div class="hint">loading...</div></div>
+  </section>
+
 </main>
 
 <script>
@@ -349,13 +404,23 @@ const APP_BUILDER = {
   system_prompt:
     "You design and build small database-backed applications inside this Postgres database, " +
     "driven by a one-line app idea from the user.\n\n" +
-    "Your only capabilities are reading and writing THIS Postgres database (sql_query, sql_exec). " +
-    "You have no internet access, cannot read a file the user uploads, cannot connect to any other " +
-    "database, and cannot send email. If the idea needs any of those, do not pretend to have done " +
-    "it: build the closest useful version that is achievable with just this database (e.g. a table " +
-    "to hold data the user pastes in or an agent they can re-run with new input), and say plainly in " +
-    "your final line what you could not do and what the user needs to do instead (e.g. paste data " +
-    "in via the Run tab instead of uploading a file).\n\n" +
+    "Your capabilities:\n" +
+    "- sql_query / sql_exec: read and write THIS Postgres database.\n" +
+    "- read_file: read a file the user uploaded, at a path given to you in the task (relative to " +
+    "a sandboxed uploads directory). You cannot list files the user has not told you about.\n" +
+    "- remote_query / remote_exec: run SQL against a NAMED external Postgres connection (a row in " +
+    "synapse.connections, set up from pg-one's Connections page). If the task names a connection, " +
+    "or you are unsure, SELECT name FROM synapse.connections first to see what is available; use " +
+    "the connection argument exactly matching that name. You cannot connect to a database that has " +
+    "not been added as a connection first; do not invent one.\n" +
+    "- search_news: keyword news search (Google News RSS). Literal keyword matching, not semantic " +
+    "search. Returns title, url (a news.google.com redirect link, not the publisher's own URL), " +
+    "source, and published_at for each result - there is no article body or real summary; if the " +
+    "app needs a \"summary\" field, write a short one yourself from the headline and say so.\n\n" +
+    "You have no other capabilities: no general web search, no email sending, no file listing " +
+    "beyond a path you were given. If the idea needs any of those, do not pretend to have done it: " +
+    "build the closest useful version with what you actually have, and say plainly in your final " +
+    "line what you could not do and what the user should do instead.\n\n" +
     "For the idea you are given, in this order:\n" +
     "1. Pick a short, valid Postgres identifier for this app: lowercase letters, digits, and " +
     "underscores only, starting with a letter, 30 characters or fewer (e.g. \"gym_tracker\", " +
@@ -366,23 +431,35 @@ const APP_BUILDER = {
     "3. Register the new agent right away, before seeding any data (do not hand-write an INSERT " +
     "into synapse.agents, use the function): SELECT synapse.agent_create('<name>', '<a system " +
     "prompt you write for the new agent, describing the app's domain, referencing its own schema " +
-    "<name> by name, and telling it to use sql_query for reads and sql_exec for writes>', " +
-    "'conversation', 'vllm-default', ARRAY['sql_query','sql_exec'], 10, 60000);\n" +
+    "<name> by name, telling it which of sql_query/sql_exec/read_file/remote_query/remote_exec/ " +
+    "search_news it needs and how to use them, AND telling it to insert multiple rows in as FEW " +
+    "sql_exec calls as possible (one multi-row INSERT beats one row per call) whenever it processes " +
+    "several records at once, e.g. rows from a file - it has a limited number of tool calls to work " +
+    "with, same as you do>', 'conversation', 'vllm-default', ARRAY['sql_query','sql_exec'<list any " +
+    "of read_file/remote_query/remote_exec/search_news the new agent actually needs, comma-" +
+    "separated, each single-quoted>], 15, 90000);\n" +
     "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'. The app " +
     "is now usable even if you run out of time before step 5, so do this before seeding data, not after.\n" +
-    "5. Insert a handful of seed rows so the app has something to show. Make them obviously sample " +
-    "data (e.g. \"Sample Customer 1\", example.com emails/URLs), never data that could be mistaken " +
-    "for something real or actually fetched.\n" +
+    "5. If you were given an uploaded file to work from, do NOT read or process it yourself: that is " +
+    "real analysis work (reading every row, judging each one) that belongs to the new agent's own " +
+    "run, with its own time budget, not squeezed into this one. Just make sure the new agent's " +
+    "system prompt (step 3) tells it the exact file path and what to do with it when asked. " +
+    "Otherwise (no file given), insert a handful of seed rows in as FEW sql_exec calls as possible " +
+    "(one multi-row INSERT with several VALUES tuples beats one row per call) so the app has " +
+    "something to show. Make invented seed data obviously sample data (e.g. \"Sample Customer 1\", " +
+    "example.com emails/URLs), never data that could be mistaken for something real or actually " +
+    "fetched.\n" +
     "6. Finish with exactly one line in this shape: \"Built <name>: <one sentence describing what " +
     "it does>\", plus, only if relevant, a second short line noting anything you could not do (see " +
-    "above).\n\n" +
+    "above). If you skipped seeding because a file is waiting to be processed (step 5), say so in " +
+    "this line so the caller knows to trigger that run next.\n\n" +
     "Rules: run ONE statement per tool call, never end a statement with a semicolon, never touch " +
     "the synapse schema's rows directly (only through synapse.agent_create), never touch any table " +
     "outside the schema you just created, and always pass values through the params array, never " +
     "inline them.",
   executor: "conversation",
   llm_profile: "vllm-default",
-  tools: ["sql_query", "sql_exec"],
+  tools: ["sql_query", "sql_exec", "read_file", "remote_query", "remote_exec", "search_news"],
   max_iterations: 24,
   timeout_ms: 120000,
   cost_cap_usd: 0,
@@ -394,6 +471,7 @@ function showView(name) {
   document.querySelectorAll("#topbar nav button").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
   if (name === "dashboard") renderDashboard();
   if (name === "browse") loadBrowseTree();
+  if (name === "connections") loadConnections();
 }
 document.querySelectorAll("[data-nav]").forEach((el) =>
   el.addEventListener("click", (e) => { e.preventDefault(); showView(el.dataset.nav); }));
@@ -437,6 +515,44 @@ async function ensureAppBuilder() {
   return r.ok;
 }
 
+// ---- file attach: either a real upload, or the bundled sample dataset ----
+let ATTACH = null; // { mode: "file" | "sample", file: File | null }
+$("build-file-btn").onclick = () => $("build-file").click();
+$("build-file").onchange = () => {
+  const f = $("build-file").files[0];
+  if (!f) return;
+  ATTACH = { mode: "file", file: f };
+  $("attach-status").textContent = "attached: " + f.name;
+};
+$("build-sample-btn").onclick = () => {
+  ATTACH = { mode: "sample", file: null };
+  $("build-file").value = "";
+  $("attach-status").textContent = "will use: product_reviews_sample.csv";
+};
+function clearAttachment() {
+  ATTACH = null;
+  $("build-file").value = "";
+  $("attach-status").textContent = "";
+}
+// Multipart, not JSON: bypasses the shared api() helper, which always sends
+// content-type: application/json.
+async function uploadAttachment() {
+  if (!ATTACH) return null;
+  if (ATTACH.mode === "sample") {
+    const r = await api("/api/upload/sample", "POST");
+    return r.ok ? r.path : null;
+  }
+  const form = new FormData();
+  form.append("file", ATTACH.file);
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const data = await res.json().catch(() => ({}));
+    return data && data.ok ? data.path : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 $("build-go").onclick = async () => {
   const idea = $("build-input").value.trim();
   if (!idea) { $("build-input").focus(); return; }
@@ -447,8 +563,36 @@ $("build-go").onclick = async () => {
   status.className = "busy"; status.textContent = "designing your app...";
   if (!(await ensureAppBuilder())) { status.className = ""; status.textContent = "could not register the builder agent"; $("build-go").disabled = false; return; }
 
+  // Fold in an uploaded file's path and any saved external connections as
+  // plain facts in the input text: app_builder cannot discover a file it
+  // was never told about, and while it can query synapse.connections
+  // itself, handing it the names directly saves a round trip.
+  let fullInput = idea;
+  let uploadedPath = null;
+  if (ATTACH) {
+    status.textContent = "uploading file...";
+    uploadedPath = await uploadAttachment();
+    clearAttachment();
+    if (!uploadedPath) { status.className = ""; status.textContent = "file upload failed"; $("build-go").disabled = false; return; }
+    // Deliberately does NOT ask app_builder to read/process the file itself:
+    // that is real per-row analysis work with its own time cost, and belongs
+    // to the new agent's own run (fired below, after the agent exists), not
+    // squeezed into app_builder's schema-design budget alongside everything
+    // else. See the "stopped early (timed_out)" failure this replaced.
+    fullInput += "\n\nA data file has been uploaded at path \"" + uploadedPath + "\". Design for this " +
+      "kind of data, give the new agent read_file access, and tell it (in the system prompt you " +
+      "write for it) that exact path and what to do with it when asked. Do not read the file yourself.";
+    status.textContent = "designing your app...";
+  }
+  const cr = await api("/api/connection");
+  const conns = (cr.ok && cr.connections) ? cr.connections : [];
+  if (conns.length) {
+    fullInput += "\n\nAvailable external database connections (query via remote_query/remote_exec): " +
+      conns.map((c) => c.name + " (" + c.dbname + " on " + c.host + ")").join(", ") + ".";
+  }
+
   const before = new Set((BOOT.agents || []).map((a) => a.name));
-  const r = await api("/api/execute", "POST", { agent: "app_builder", input: idea });
+  const r = await api("/api/execute", "POST", { agent: "app_builder", input: fullInput });
   if (!r.ok) { status.className = ""; status.textContent = r.error || "failed to start"; $("build-go").disabled = false; return; }
 
   const runId = r.run_id;
@@ -496,10 +640,24 @@ $("build-go").onclick = async () => {
       return;
     }
 
-    status.textContent = env.output || "built.";
     $("build-input").value = "";
-    showView("dashboard");
-    renderDashboard(created[0]);
+
+    if (!uploadedPath) {
+      status.textContent = env.output || "built.";
+      showView("dashboard");
+      renderDashboard(created[0]);
+      return;
+    }
+
+    // Phase 2: the new agent's OWN run processes the file, with its OWN
+    // iteration/time budget (not app_builder's), on the app's detail page
+    // so progress is visible right where the user lands next.
+    status.textContent = (env.output || "built.") + " Now processing your file...";
+    openDetail(created[0]);
+    const processInput = "Process the uploaded file at path \"" + uploadedPath +
+      "\" and insert its normalized rows into your table(s).";
+    $("run-input").value = processInput;
+    startAgentRun(created[0], processInput);
   };
   poll();
 };
@@ -566,28 +724,37 @@ function setPane(name) {
   document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + name));
 }
 
-$("run-go").onclick = async () => {
-  const input = $("run-input").value.trim();
-  if (!input) return;
+// Shared by the Run tab's button and the automatic "process my uploaded
+// file" run pg-one fires right after building an app from a file.
+async function startAgentRun(agent, input) {
   if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
   $("run-go").disabled = true;
   $("run-status").textContent = "running...";
   $("run-output").classList.remove("show");
-  const r = await api("/api/execute", "POST", { agent: CURRENT_AGENT, input });
+  const r = await api("/api/execute", "POST", { agent, input });
   if (!r.ok) { $("run-status").textContent = r.error || "failed to start"; $("run-go").disabled = false; return; }
   const poll = async () => {
     const s = await api("/api/run/" + r.run_id);
     if (!s.ok) { $("run-status").textContent = s.error || "lost the run"; $("run-go").disabled = false; return; }
     const run = s.run;
-    if (run.phase === "starting" || run.phase === "running") { setTimeout(poll, 1000); return; }
+    if (run.phase === "starting" || run.phase === "running") {
+      $("run-status").textContent = "running... (" + Math.round((Date.now() - run.started_at_ms) / 1000) + "s)";
+      setTimeout(poll, 1000);
+      return;
+    }
     $("run-go").disabled = false;
     if (run.phase === "failed") { $("run-status").textContent = run.error || "run failed"; return; }
     const env = run.envelope || {};
     $("run-status").textContent = (env.status || "done") + " · " + (env.tokens_in || 0) + " in / " + (env.tokens_out || 0) + " out";
     $("run-output").textContent = env.output || "(no output)";
     $("run-output").classList.add("show");
+    if (env.status === "completed") loadAgentTables(agent);
   };
   poll();
+}
+$("run-go").onclick = () => {
+  const input = $("run-input").value.trim();
+  if (input) startAgentRun(CURRENT_AGENT, input);
 };
 
 // ---- tables (scoped to the agent's own schema) ----
@@ -698,6 +865,38 @@ async function loadBrowseData() {
   }
   out.innerHTML = html;
 }
+
+// ---- CONNECTIONS ----
+async function loadConnections() {
+  const list = $("conn-list");
+  const r = await api("/api/connection");
+  if (!r.ok) { list.innerHTML = '<div class="hint">' + esc(r.error || "could not load connections") + '</div>'; return; }
+  const conns = r.connections || [];
+  list.innerHTML = conns.length
+    ? conns.map((c) =>
+        '<div class="conn-card"><span class="cn-name">' + esc(c.name) + '</span>' +
+        '<span class="cn-meta">' + esc(c.user) + '@' + esc(c.host) + ':' + esc(c.port) + '/' + esc(c.dbname) +
+        (c.has_password ? ' &middot; password saved' : ' &middot; no password') + '</span></div>').join("")
+    : '<div class="hint">no connections yet. Add one above, then reference its name when you describe an app ' +
+      '(e.g. "using the sales_db connection...").</div>';
+}
+$("conn-save").onclick = async () => {
+  const name = $("c-name").value.trim(), host = $("c-host").value.trim(), dbname = $("c-dbname").value.trim(),
+    user = $("c-user").value.trim();
+  if (!name || !host || !dbname || !user) { $("conn-status").textContent = "name, host, database, and user are required"; return; }
+  $("conn-status").textContent = "saving...";
+  const r = await api("/api/connection", "POST", {
+    name, host, dbname, user,
+    port: parseInt($("c-port").value, 10) || 5432,
+    password: $("c-password").value,
+  });
+  $("conn-status").textContent = r.ok ? "saved" : (r.error || "failed");
+  if (r.ok) {
+    $("c-name").value = ""; $("c-host").value = ""; $("c-dbname").value = "";
+    $("c-user").value = ""; $("c-password").value = ""; $("c-port").value = "5432";
+    await loadConnections();
+  }
+};
 
 // ---- boot ----
 loadBootstrap();

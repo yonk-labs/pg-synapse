@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate", "tools-remotedb", "tools-newssearch"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -38,6 +38,11 @@ tools-clock = ["dep:pg-synapse-tools-clock"]
 tools-http = ["dep:pg-synapse-tools-http"]
 # Bundle the delegation tool plugin (call_agent).
 tools-delegate = ["dep:pg-synapse-tools-delegate"]
+# Bundle the remote-database tools plugin (remote_query, remote_exec):
+# named external Postgres connections via synapse.connections.
+tools-remotedb = ["dep:pg-synapse-tools-remotedb"]
+# Bundle the news search tool plugin (search_news): Google News RSS, no API key.
+tools-newssearch = ["dep:pg-synapse-tools-newssearch"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -53,6 +58,8 @@ pg-synapse-tools-lede      = { path = "../../plugins/pg-synapse-tools-lede", ver
 pg-synapse-tools-calc      = { path = "../../plugins/pg-synapse-tools-calc", version = "0.1.1", optional = true }
 pg-synapse-tools-clock     = { path = "../../plugins/pg-synapse-tools-clock", version = "0.1.1", optional = true }
 pg-synapse-tools-delegate  = { path = "../../plugins/pg-synapse-tools-delegate", version = "0.1.1", optional = true }
+pg-synapse-tools-remotedb  = { path = "../../plugins/pg-synapse-tools-remotedb", version = "0.1.1", optional = true }
+pg-synapse-tools-newssearch = { path = "../../plugins/pg-synapse-tools-newssearch", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

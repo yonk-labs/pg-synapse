@@ -143,7 +143,7 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
         // this is the responsive path before it).
         .with_interrupt_check(std::sync::Arc::new(backend_interrupt))
         .with_plugin(pg_synapse_provider_openai::OpenAiProviderFactory)
-        .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec));
+        .with_plugin(pg_synapse_tools_sql::SqlToolsPlugin::new(spi_exec.clone()));
 
     #[cfg(feature = "provider-llama-cpp")]
     let builder = builder
@@ -173,6 +173,19 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
             }
         }
     };
+
+    // Remote-database tools (remote_query, remote_exec): run SQL against a
+    // named external Postgres connection (synapse.connections), the same
+    // sqlx-backed connection method pg-synapse-sidecar uses for its own
+    // remote Postgres, reused here as a tool instead of a separate service.
+    #[cfg(feature = "tools-remotedb")]
+    let builder = builder.with_plugin(pg_synapse_tools_remotedb::RemoteDbToolsPlugin::new(
+        spi_exec,
+    ));
+
+    // News search tool (search_news): Google News RSS, no API key required.
+    #[cfg(feature = "tools-newssearch")]
+    let builder = builder.with_plugin(pg_synapse_tools_newssearch::NewsSearchToolsPlugin::new());
 
     // Lede compression tool (lede_compress). Shim: uses lede CLI if on PATH,
     // otherwise falls back to deterministic extractive compression.

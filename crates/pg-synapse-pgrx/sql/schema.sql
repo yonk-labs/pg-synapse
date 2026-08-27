@@ -66,6 +66,21 @@ CREATE TABLE IF NOT EXISTS synapse.secrets (
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Named connections to an external Postgres database, for the
+-- remote_query / remote_exec tools (pg-synapse-tools-remotedb). password
+-- is never stored here directly: password_secret names a row in
+-- synapse.secrets, resolved server-side and never exposed to the model.
+CREATE TABLE IF NOT EXISTS synapse.connections (
+  name             TEXT PRIMARY KEY,
+  host             TEXT NOT NULL,
+  port             INT NOT NULL DEFAULT 5432,
+  dbname           TEXT NOT NULL,
+  "user"           TEXT NOT NULL,
+  password_secret  TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS synapse.tools (
   name         TEXT PRIMARY KEY,
   description  TEXT,

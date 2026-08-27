@@ -17,6 +17,13 @@ services:
       POSTGRES_DB: synapse_demo
     ports:
       - "55432:5432"
+    volumes:
+      # Shared with harness at the same path: this is the tools-fs sandbox
+      # root inside the extension process (see runtime_holder.rs), and where
+      # the harness's /api/upload writes files a pg-one agent can then
+      # read_file(). Same absolute path in both containers so a path the
+      # harness returns is directly usable by the agent, no translation.
+      - fs_uploads:/tmp/pg_synapse_fs
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d synapse_demo"]
       interval: 3s
@@ -31,9 +38,15 @@ services:
       # Prefill for the UI endpoint form (the repo's documented test LLM).
       DEFAULT_LLM_BASE_URL: "http://192.168.1.193:8000/v1"
       DEFAULT_LLM_MODEL: "Intel/Qwen3-Coder-Next-int4-AutoRound"
+      UPLOAD_DIR: "/tmp/pg_synapse_fs/uploads"
     ports:
       # Override the host port with HARNESS_PORT=nnnn docker compose up.
       - "${HARNESS_PORT:-8080}:8080"
+    volumes:
+      - fs_uploads:/tmp/pg_synapse_fs
     depends_on:
       db:
         condition: service_healthy
+
+volumes:
+  fs_uploads:

@@ -27,11 +27,21 @@ pub struct AppState {
     pub workloads: WorkloadRegistry,
     pub default_llm_base_url: String,
     pub default_llm_model: String,
+    /// Directory shared with the `db` container at the same absolute path
+    /// (the tools-fs sandbox root there is `/tmp/pg_synapse_fs`; see
+    /// docker-compose.yml). A path this harness writes is directly usable
+    /// by an agent's `read_file` tool with no translation.
+    pub upload_dir: String,
 }
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const SIDECAR_HTML: &str = include_str!("../static/sidecar.html");
 const PGONE_HTML: &str = include_str!("../static/pgone.html");
+/// Pre-written, not agent-generated: realistic messy product-review data for
+/// pg-one's "use sample data" button, so the file-upload -> normalize flow
+/// has something real to work with without the builder agent having to
+/// invent source data during its own run.
+pub const SAMPLE_REVIEWS_CSV: &str = include_str!("../sample-data/product_reviews_sample.csv");
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
@@ -57,6 +67,10 @@ async fn main() {
         .unwrap_or_else(|_| "http://192.168.1.193:8000/v1".to_owned());
     let default_llm_model = std::env::var("DEFAULT_LLM_MODEL")
         .unwrap_or_else(|_| "Intel/Qwen3-Coder-Next-int4-AutoRound".to_owned());
+    let upload_dir =
+        std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "/tmp/pg_synapse_fs/uploads".to_owned());
+    std::fs::create_dir_all(&upload_dir)
+        .unwrap_or_else(|e| panic!("cannot create upload dir {upload_dir}: {e}"));
 
     let state = AppState {
         db_url,
@@ -64,6 +78,7 @@ async fn main() {
         workloads: Arc::new(Mutex::new(HashMap::new())),
         default_llm_base_url,
         default_llm_model,
+        upload_dir,
     };
 
     let app = Router::new()
@@ -101,6 +116,12 @@ async fn main() {
         .route("/api/probe/{key}", get(api::probe))
         .route("/api/execution/{execution_id}", get(api::execution_detail))
         .route("/api/scenario/{id}", post(api::scenario_load))
+        .route("/api/upload", post(api::upload_file))
+        .route("/api/upload/sample", post(api::upload_sample))
+        .route(
+            "/api/connection",
+            get(api::connection_list).post(api::connection_add),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&addr)

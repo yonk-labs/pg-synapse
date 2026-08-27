@@ -29,6 +29,18 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
     ("calculator", "Evaluate an arithmetic expression"),
     ("get_current_time", "Read the current time"),
     ("call_agent", "Delegate to another registered agent"),
+    (
+        "read_file",
+        "Read a file under the sandboxed uploads directory",
+    ),
+    (
+        "write_file",
+        "Write a file under the sandboxed uploads directory",
+    ),
+    (
+        "list_files",
+        "List files under the sandboxed uploads directory",
+    ),
 ];
 
 const EXECUTORS: &[&str] = &["conversation", "react", "reflection"];
@@ -960,6 +972,16 @@ fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// A safe, predictable identifier for anything a user names through the UI
+/// (a connection name here; scenario/agent names are LLM-chosen elsewhere
+/// and validated by the same shape convention in the app_builder prompt).
+fn is_safe_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && s.len() <= 30
+}
+
 /// JSON value to the text we bind as a `$n` parameter: null stays SQL NULL,
 /// strings pass through raw, everything else uses its compact JSON form.
 fn as_sql_text(v: &Value) -> Option<String> {
@@ -1373,4 +1395,171 @@ pub async fn scenario_load(
         "ok": true,
         "scenario": serde_json::to_value(scenario).unwrap_or(Value::Null),
     })))
+}
+
+// ---- file uploads (pg-one) ----
+//
+// Uploaded files land in `state.upload_dir`, which is bind-mounted into the
+// `db` container at the exact path the tools-fs plugin sandboxes read_file
+// to (see docker-compose.yml). The path this returns is relative to that
+// sandbox root, ready to hand an agent directly.
+
+/// Strip any directory components and unsafe characters from a client-
+/// supplied filename, and prefix a short random id so concurrent uploads
+/// (or two people naming a file the same thing) never collide.
+fn sanitize_upload_filename(name: &str) -> String {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("upload");
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{}-{cleaned}", &Uuid::new_v4().simple().to_string()[..8])
+}
+
+pub async fn upload_file(
+    State(state): State<AppState>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<Value>, HarnessError> {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| HarnessError::BadRequest(format!("bad upload: {e}")))?
+    {
+        let Some(filename) = field.file_name().map(str::to_owned) else {
+            continue;
+        };
+        let safe_name = sanitize_upload_filename(&filename);
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|e| HarnessError::BadRequest(format!("could not read upload: {e}")))?;
+        let path = std::path::Path::new(&state.upload_dir).join(&safe_name);
+        std::fs::write(&path, &bytes)
+            .map_err(|e| HarnessError::BadRequest(format!("could not save upload: {e}")))?;
+        return Ok(Json(json!({
+            "ok": true,
+            "filename": safe_name,
+            "path": format!("uploads/{safe_name}"),
+            "bytes": bytes.len(),
+        })));
+    }
+    Err(HarnessError::BadRequest("no file in the upload".to_owned()))
+}
+
+/// Copy the bundled sample dataset (written ahead of time, not agent-
+/// generated - see sample-data/product_reviews_sample.csv) into the shared
+/// uploads directory, so "use sample data" needs no real file from the user.
+pub async fn upload_sample(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let filename = "product_reviews_sample.csv";
+    let path = std::path::Path::new(&state.upload_dir).join(filename);
+    std::fs::write(&path, crate::SAMPLE_REVIEWS_CSV)
+        .map_err(|e| HarnessError::BadRequest(format!("could not write sample data: {e}")))?;
+    Ok(Json(json!({
+        "ok": true,
+        "filename": filename,
+        "path": format!("uploads/{filename}"),
+        "bytes": crate::SAMPLE_REVIEWS_CSV.len(),
+    })))
+}
+
+// ---- external database connections (pg-one), via remote_query/remote_exec ----
+//
+// A named connection is just a row in synapse.connections (+ a secret in
+// synapse.secrets for the password). No DDL, no foreign server, no schema
+// import: the pg-synapse-tools-remotedb plugin's remote_query/remote_exec
+// tools resolve the name and open a fresh connection at call time, reusing
+// the same sqlx-backed connection method pg-synapse-sidecar already uses
+// for its own remote Postgres.
+
+#[derive(Deserialize)]
+pub struct ConnectionReq {
+    pub name: String,
+    pub host: String,
+    #[serde(default = "default_pg_port")]
+    pub port: i32,
+    pub dbname: String,
+    pub user: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+fn default_pg_port() -> i32 {
+    5432
+}
+
+pub async fn connection_add(
+    State(state): State<AppState>,
+    Json(req): Json<ConnectionReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let name = req.name.trim().to_lowercase();
+    if !is_safe_identifier(&name) {
+        return Err(HarnessError::BadRequest(
+            "connection name must be lowercase letters, digits, and underscores, starting \
+             with a letter, 30 characters or fewer"
+                .to_owned(),
+        ));
+    }
+    if req.host.trim().is_empty() || req.dbname.trim().is_empty() || req.user.trim().is_empty() {
+        return Err(HarnessError::BadRequest(
+            "host, dbname, and user are required".to_owned(),
+        ));
+    }
+
+    let client = db::connect(&state.db_url).await?;
+    let secret_name = if req.password.is_empty() {
+        None
+    } else {
+        let secret_name = format!("{name}_db_password");
+        client
+            .execute(
+                "INSERT INTO synapse.secrets (name, value) VALUES ($1, $2) \
+                 ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                &[&secret_name, &req.password],
+            )
+            .await?;
+        Some(secret_name)
+    };
+    client
+        .execute(
+            "INSERT INTO synapse.connections (name, host, port, dbname, \"user\", password_secret) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (name) DO UPDATE SET \
+               host = EXCLUDED.host, port = EXCLUDED.port, dbname = EXCLUDED.dbname, \
+               \"user\" = EXCLUDED.user, password_secret = EXCLUDED.password_secret, \
+               updated_at = now()",
+            &[
+                &name,
+                &req.host.trim(),
+                &req.port,
+                &req.dbname.trim(),
+                &req.user.trim(),
+                &secret_name,
+            ],
+        )
+        .await?;
+
+    Ok(Json(json!({"ok": true, "name": name})))
+}
+
+pub async fn connection_list(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let connections = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(c)::text FROM ( \
+           SELECT name, host, port, dbname, \"user\", \
+                  (password_secret IS NOT NULL) AS has_password \
+           FROM synapse.connections ORDER BY name) c",
+        &[],
+    )
+    .await?;
+    Ok(Json(json!({"ok": true, "connections": connections})))
 }
