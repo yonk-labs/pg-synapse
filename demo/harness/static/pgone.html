@@ -349,22 +349,33 @@ const APP_BUILDER = {
   system_prompt:
     "You design and build small database-backed applications inside this Postgres database, " +
     "driven by a one-line app idea from the user.\n\n" +
-    "For the idea you are given:\n" +
+    "Your only capabilities are reading and writing THIS Postgres database (sql_query, sql_exec). " +
+    "You have no internet access, cannot read a file the user uploads, cannot connect to any other " +
+    "database, and cannot send email. If the idea needs any of those, do not pretend to have done " +
+    "it: build the closest useful version that is achievable with just this database (e.g. a table " +
+    "to hold data the user pastes in or an agent they can re-run with new input), and say plainly in " +
+    "your final line what you could not do and what the user needs to do instead (e.g. paste data " +
+    "in via the Run tab instead of uploading a file).\n\n" +
+    "For the idea you are given, in this order:\n" +
     "1. Pick a short, valid Postgres identifier for this app: lowercase letters, digits, and " +
     "underscores only, starting with a letter, 30 characters or fewer (e.g. \"gym_tracker\", " +
     "\"invoice_tracker\"). This is BOTH the new agent's name AND its dedicated schema name. " +
     "Query synapse.agents first to make sure the name is not already taken; if it is, add a short suffix.\n" +
     "2. CREATE SCHEMA <name>, then create the tables that idea needs inside it, with sensible " +
-    "columns and types, and insert a handful of realistic seed rows so the app has something to " +
-    "show immediately.\n" +
-    "3. Register the new agent with the exact function call (do not hand-write an INSERT into " +
-    "synapse.agents): SELECT synapse.agent_create('<name>', '<a system prompt you write for the " +
-    "new agent, describing the app's domain, referencing its own schema <name> by name, and " +
-    "telling it to use sql_query for reads and sql_exec for writes>', 'conversation', " +
-    "'vllm-default', ARRAY['sql_query','sql_exec'], 10, 60000);\n" +
-    "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'.\n" +
-    "5. Finish with exactly one line in this shape: \"Built <name>: <one sentence describing what " +
-    "it does>\".\n\n" +
+    "columns and types.\n" +
+    "3. Register the new agent right away, before seeding any data (do not hand-write an INSERT " +
+    "into synapse.agents, use the function): SELECT synapse.agent_create('<name>', '<a system " +
+    "prompt you write for the new agent, describing the app's domain, referencing its own schema " +
+    "<name> by name, and telling it to use sql_query for reads and sql_exec for writes>', " +
+    "'conversation', 'vllm-default', ARRAY['sql_query','sql_exec'], 10, 60000);\n" +
+    "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'. The app " +
+    "is now usable even if you run out of time before step 5, so do this before seeding data, not after.\n" +
+    "5. Insert a handful of seed rows so the app has something to show. Make them obviously sample " +
+    "data (e.g. \"Sample Customer 1\", example.com emails/URLs), never data that could be mistaken " +
+    "for something real or actually fetched.\n" +
+    "6. Finish with exactly one line in this shape: \"Built <name>: <one sentence describing what " +
+    "it does>\", plus, only if relevant, a second short line noting anything you could not do (see " +
+    "above).\n\n" +
     "Rules: run ONE statement per tool call, never end a statement with a semicolon, never touch " +
     "the synapse schema's rows directly (only through synapse.agent_create), never touch any table " +
     "outside the schema you just created, and always pass values through the params array, never " +
@@ -372,7 +383,7 @@ const APP_BUILDER = {
   executor: "conversation",
   llm_profile: "vllm-default",
   tools: ["sql_query", "sql_exec"],
-  max_iterations: 20,
+  max_iterations: 24,
   timeout_ms: 120000,
   cost_cap_usd: 0,
 };
@@ -458,7 +469,6 @@ $("build-go").onclick = async () => {
       status.textContent = "stopped early (" + env.status + "). " + (env.output || "");
       return;
     }
-    status.textContent = env.output || "built.";
     const sqls = (run.messages || [])
       .filter((m) => m.role === "assistant" && m.tool_name === "sql_exec")
       .map((m) => { try { return JSON.parse(m.tool_input).query; } catch (e) { return null; } })
@@ -471,9 +481,25 @@ $("build-go").onclick = async () => {
     // created by ensureAppBuilder() just above, before this snapshot), so
     // it is never a valid highlight target regardless of name ordering.
     const created = after.filter((n) => !before.has(n) && n !== "app_builder");
+
+    if (!created.length) {
+      // A "completed" status is not proof anything usable got built: the
+      // run can exhaust its iteration budget mid-build (often while
+      // seeding data) and land here with empty output and no registered
+      // agent. Say so plainly instead of silently doing nothing - this
+      // is exactly the failure mode a silent dashboard swap would hide.
+      status.textContent = (env.output && env.output.trim())
+        ? env.output
+        : "The builder ran but didn't finish registering an agent (it may have run out of steps). " +
+          "Check \"what it did\" below" + (sqls.length ? "" : " (no SQL ran at all)") +
+          ", then try again with a shorter or more specific idea.";
+      return;
+    }
+
+    status.textContent = env.output || "built.";
     $("build-input").value = "";
     showView("dashboard");
-    renderDashboard(created[0] || null);
+    renderDashboard(created[0]);
   };
   poll();
 };
