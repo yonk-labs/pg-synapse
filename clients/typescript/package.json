@@ -1,0 +1,25 @@
+{
+  "name": "pg-synapse-client",
+  "version": "0.1.0",
+  "description": "Minimal TypeScript client for pg_synapse: call synapse.* SQL over any Postgres client your app already has. No HTTP, no separate service, auth is whatever Postgres role the connection uses.",
+  "license": "MIT OR Apache-2.0",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc && node --test dist/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "pg": "^8.12.0",
+    "typescript": "^5.5.4"
+  }
+}
