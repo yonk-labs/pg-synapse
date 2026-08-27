@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg-one</title>
+<style>
+  :root {
+    --bg:#0a0d12; --bg2:#0d1117; --panel:#12161d; --panel2:#181e28; --border:#242c38;
+    --text:#e6ebf2; --muted:#8b98a9; --accent:#5aa9ff; --accent2:#9b7bff;
+    --green:#3fb950; --red:#f85149; --yellow:#e3b341;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    --grad:linear-gradient(135deg,var(--accent),var(--accent2));
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(90,169,255,.08), transparent 60%),
+      radial-gradient(900px 500px at 90% 10%, rgba(155,123,255,.06), transparent 60%),
+      var(--bg);
+    color:var(--text); font:15px/1.55 var(--sans); min-height:100%;
+  }
+  a { color:var(--accent); }
+  button { font:inherit; cursor:pointer; }
+  ::selection { background:rgba(90,169,255,.3); }
+
+  /* ---- top bar ---- */
+  #topbar { display:flex; align-items:center; gap:16px; padding:16px 28px; }
+  #topbar .brand { font-weight:700; letter-spacing:-.01em; font-size:15px; }
+  #topbar .brand span { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #topbar nav { display:flex; gap:4px; margin-left:8px; }
+  #topbar nav button { background:none; border:0; color:var(--muted); padding:7px 12px; border-radius:8px; font-size:13.5px; }
+  #topbar nav button:hover { color:var(--text); background:var(--panel2); }
+  #topbar nav button.active { color:var(--text); background:var(--panel2); }
+  #topbar .grow { flex:1; }
+  #conn { font-family:var(--mono); font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  #conn .dot { width:7px; height:7px; border-radius:50%; background:var(--red); }
+  #conn.ok .dot { background:var(--green); }
+  #conn a { font-size:12px; margin-left:2px; }
+
+  main { max-width:1040px; margin:0 auto; padding:0 24px 80px; }
+  .view { display:none; }
+  .view.active { display:block; animation:fade .35s ease; }
+  @keyframes fade { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+  /* ---- connect strip (only shown when no LLM configured) ---- */
+  #connect-strip { max-width:560px; margin:10px auto 0; padding:14px 16px; border:1px solid var(--border);
+    border-radius:12px; background:var(--panel); display:none; }
+  #connect-strip.show { display:block; }
+  #connect-strip .row { display:flex; gap:8px; margin-top:8px; }
+  #connect-strip input { flex:1; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 10px; font-size:13px; }
+  #connect-strip button { background:var(--grad); border:0; color:#fff; padding:8px 16px; border-radius:8px; font-weight:600; font-size:13px; }
+  #connect-strip .small { color:var(--muted); font-size:12.5px; }
+  #connect-strip .status { margin-top:6px; font-size:12.5px; }
+
+  /* ---- BUILD view: the hero ---- */
+  #view-build { padding-top:9vh; text-align:center; }
+  #view-build h1 { font-size:44px; line-height:1.15; margin:0 0 10px; letter-spacing:-.02em; font-weight:700; }
+  #view-build h1 .accent { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #view-build .sub { color:var(--muted); font-size:16px; margin:0 0 34px; }
+  .builder { max-width:640px; margin:0 auto; }
+  .builder textarea {
+    width:100%; resize:none; background:var(--panel); border:1px solid var(--border); color:var(--text);
+    border-radius:16px; padding:18px 20px; font:15.5px/1.5 var(--sans); min-height:64px;
+    box-shadow:0 20px 60px rgba(0,0,0,.35); transition:border-color .15s;
+  }
+  .builder textarea:focus { outline:none; border-color:var(--accent); }
+  .builder .row { display:flex; justify-content:space-between; align-items:center; margin-top:14px; }
+  .builder .examples { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { background:var(--panel2); border:1px solid var(--border); color:var(--muted); border-radius:999px;
+    padding:6px 13px; font-size:12.5px; }
+  .chip:hover { color:var(--text); border-color:var(--accent); }
+  #build-go { background:var(--grad); border:0; color:#fff; font-weight:700; font-size:14.5px;
+    padding:11px 24px; border-radius:11px; box-shadow:0 8px 24px rgba(90,169,255,.25); }
+  #build-go:disabled { opacity:.5; cursor:default; }
+  #build-status { margin-top:20px; color:var(--muted); font-size:13.5px; min-height:20px; }
+  #build-status.busy::before { content:"⟳ "; display:inline-block; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #build-trace { max-width:640px; margin:22px auto 0; text-align:left; display:none; }
+  #build-trace.show { display:block; }
+  #build-trace summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  #build-trace pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px;
+    font-family:var(--mono); font-size:12px; white-space:pre-wrap; margin-top:8px; max-height:280px; overflow:auto; }
+  .goto-apps { margin-top:44px; }
+  .goto-apps a { color:var(--muted); font-size:13px; }
+
+  /* ---- DASHBOARD view ---- */
+  #view-dashboard .head { display:flex; align-items:center; margin:28px 0 18px; }
+  #view-dashboard h2 { font-size:20px; margin:0; }
+  #view-dashboard .grow { flex:1; }
+  .btn { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:9px;
+    padding:8px 14px; font-size:13.5px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--grad); border:0; color:#fff; font-weight:600; }
+  .app-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  .app-card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px 18px;
+    cursor:pointer; transition:border-color .15s, transform .15s; text-align:left; }
+  .app-card:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .app-card.new { border-color:var(--accent); box-shadow:0 0 0 3px rgba(90,169,255,.15); }
+  .app-card .name { font-weight:700; font-size:15px; margin-bottom:6px; font-family:var(--mono); }
+  .app-card .desc { color:var(--muted); font-size:12.5px; line-height:1.5; max-height:52px; overflow:hidden; }
+  .app-card .meta { margin-top:12px; display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { font-size:10.5px; color:var(--muted); border:1px solid var(--border); border-radius:6px; padding:2px 7px;
+    font-family:var(--mono); }
+  .empty-hint { color:var(--muted); text-align:center; padding:60px 0; font-size:14px; }
+
+  /* ---- manual create form ---- */
+  #manual-form { max-width:520px; margin:16px auto 0; background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:20px 22px; display:none; }
+  #manual-form.show { display:block; }
+  #manual-form label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  #manual-form label:first-child { margin-top:0; }
+  #manual-form input[type=text], #manual-form textarea, #manual-form input[type=number] {
+    width:100%; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 10px; font-size:13.5px; font-family:var(--sans); }
+  #manual-form textarea { font-family:var(--mono); font-size:12.5px; min-height:90px; resize:vertical; }
+  #manual-form .tools { display:flex; gap:10px; flex-wrap:wrap; }
+  #manual-form .tools label { display:flex; align-items:center; gap:5px; margin:0; font-size:12.5px; color:var(--text); }
+  #manual-form .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  #manual-form .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+  #manual-status { font-size:12.5px; color:var(--muted); margin-top:8px; }
+
+  /* ---- DETAIL view ---- */
+  #view-detail .head { display:flex; align-items:center; gap:12px; margin:28px 0 6px; }
+  #view-detail .back { color:var(--muted); font-size:13px; cursor:pointer; }
+  #view-detail h2 { font-family:var(--mono); font-size:21px; margin:0; }
+  #view-detail .prompt-preview { color:var(--muted); font-size:13px; margin:8px 0 20px; max-width:720px; }
+  .seg { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:18px; }
+  .seg button { background:none; border:0; color:var(--muted); padding:9px 4px; margin-right:18px;
+    border-bottom:2px solid transparent; font-size:13.5px; }
+  .seg button.active { color:var(--text); border-color:var(--accent); }
+  .pane { display:none; }
+  .pane.active { display:block; }
+
+  #run-input { width:100%; background:var(--panel); border:1px solid var(--border); color:var(--text);
+    border-radius:10px; padding:12px 14px; font-size:14px; min-height:56px; resize:vertical; }
+  #run-go { margin-top:10px; }
+  #run-status { color:var(--muted); font-size:13px; margin:10px 0; min-height:18px; }
+  #run-output { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+    font-size:13.5px; white-space:pre-wrap; display:none; }
+  #run-output.show { display:block; }
+
+  #tables-list { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  #tables-list button { background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:6px 12px; font-size:13px; font-family:var(--mono); }
+  #tables-list button.active { border-color:var(--accent); color:var(--accent); }
+  #table-data { overflow:auto; }
+  table.data-table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+  table.data-table th, table.data-table td { border-bottom:1px solid var(--border); padding:6px 10px; text-align:left;
+    max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  table.data-table th { color:var(--muted); font-weight:500; }
+
+  .embed-tabs { display:flex; gap:6px; margin-bottom:10px; }
+  .embed-tabs button { background:var(--panel2); border:1px solid var(--border); color:var(--muted);
+    border-radius:8px; padding:6px 12px; font-size:12.5px; }
+  .embed-tabs button.active { color:var(--text); border-color:var(--accent); }
+  .embed-block { position:relative; }
+  .embed-block pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px 18px;
+    font-family:var(--mono); font-size:12.5px; overflow:auto; }
+  .embed-block .copy { position:absolute; top:10px; right:10px; background:var(--panel2); border:1px solid var(--border);
+    color:var(--text); border-radius:7px; padding:5px 10px; font-size:11.5px; }
+  .embed-block .copy.copied { border-color:var(--green); color:var(--green); }
+  .embed-note { color:var(--muted); font-size:12px; margin-top:8px; }
+
+  /* ---- BROWSE view ---- */
+  #view-browse .head { margin:28px 0 16px; }
+  #browse-grid { display:grid; grid-template-columns:220px 1fr; gap:0; border:1px solid var(--border);
+    border-radius:12px; overflow:hidden; min-height:340px; }
+  #browse-tree { border-right:1px solid var(--border); padding:10px; overflow:auto; max-height:520px; }
+  #browse-tree .sch { color:var(--accent); font-family:var(--mono); font-size:12.5px; cursor:pointer; padding:4px 0; }
+  #browse-tree .tbl { color:var(--text); font-family:var(--mono); font-size:12.5px; cursor:pointer; padding:3px 0 3px 16px; }
+  #browse-tree .tbl:hover, #browse-tree .sch:hover { color:var(--accent); }
+  #browse-tree .tbl.sel { color:var(--accent); font-weight:600; }
+  #browse-data { padding:14px 16px; overflow:auto; }
+  .hint { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="brand">pg-<span>one</span></div>
+  <nav>
+    <button data-nav="build" class="active">Build</button>
+    <button data-nav="dashboard">Your apps</button>
+    <button data-nav="browse">Browse data</button>
+  </nav>
+  <div class="grow"></div>
+  <div id="conn"><span class="dot"></span><span id="conn-text">checking connection...</span><a id="conn-change" href="#" style="display:none">change</a></div>
+</div>
+
+<div id="connect-strip">
+  <div class="small">Connect an OpenAI-compatible LLM endpoint to build and run apps.</div>
+  <div class="row">
+    <input id="cs-url" type="text" placeholder="http://host:8000/v1">
+    <input id="cs-model" type="text" placeholder="model name" style="max-width:200px">
+  </div>
+  <div class="row">
+    <input id="cs-key" type="text" placeholder="API key (optional)">
+    <button id="cs-save">Connect</button>
+  </div>
+  <div class="status" id="cs-status"></div>
+</div>
+
+<main>
+
+  <!-- BUILD -->
+  <section class="view active" id="view-build">
+    <h1>What do you want to<br>build <span class="accent">today?</span></h1>
+    <p class="sub">Describe an app. pg-one designs the tables, seeds them, and creates an agent for it, right in your database.</p>
+    <div class="builder">
+      <textarea id="build-input" rows="2" placeholder="a tool to track my gym members and who showed up this week"></textarea>
+      <div class="row">
+        <div class="examples">
+          <button class="chip" data-ex="Track overdue invoices for my small business and draft reminders">AR collections</button>
+          <button class="chip" data-ex="Triage inbound support tickets by urgency and category">Support triage</button>
+          <button class="chip" data-ex="Score inbound sales leads as hot, warm, or cold from free-text notes">Lead scoring</button>
+        </div>
+        <button id="build-go">Build it &rarr;</button>
+      </div>
+      <div id="build-status"></div>
+      <div id="build-trace">
+        <details>
+          <summary>What it did</summary>
+          <pre id="build-trace-body"></pre>
+        </details>
+      </div>
+    </div>
+    <div class="goto-apps"><a href="#" data-nav="dashboard">or browse what you've already built &rarr;</a></div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section class="view" id="view-dashboard">
+    <div class="head">
+      <h2>Your apps</h2>
+      <div class="grow"></div>
+      <button class="btn" id="btn-manual-toggle">+ Add manually</button>
+      <button class="btn primary" data-nav="build" style="margin-left:8px">+ New app</button>
+    </div>
+
+    <div id="manual-form">
+      <label>Name (used as its schema too, e.g. <code>gym_tracker</code>)</label>
+      <input type="text" id="m-name" placeholder="my_app">
+      <label>System prompt</label>
+      <textarea id="m-prompt" placeholder="You are a ... you can ..."></textarea>
+      <label>Tools</label>
+      <div class="tools" id="m-tools"></div>
+      <div class="two">
+        <div><label>max_iterations</label><input type="number" id="m-maxiter" value="10"></div>
+        <div><label>timeout_ms</label><input type="number" id="m-timeout" value="60000"></div>
+      </div>
+      <div class="foot">
+        <span id="manual-status"></span>
+        <button class="btn" id="btn-manual-cancel">cancel</button>
+        <button class="btn primary" id="btn-manual-save">save</button>
+      </div>
+    </div>
+
+    <div class="app-grid" id="app-grid"></div>
+  </section>
+
+  <!-- DETAIL -->
+  <section class="view" id="view-detail">
+    <div class="head">
+      <span class="back" data-nav="dashboard">&larr; your apps</span>
+    </div>
+    <h2 id="d-name"></h2>
+    <div class="prompt-preview" id="d-prompt"></div>
+
+    <div class="seg">
+      <button data-pane="run" class="active">Run</button>
+      <button data-pane="tables">Tables</button>
+      <button data-pane="embed">Embed / API</button>
+    </div>
+
+    <div class="pane active" id="pane-run">
+      <textarea id="run-input" placeholder="give it something to do..."></textarea>
+      <div><button class="btn primary" id="run-go">Run</button></div>
+      <div id="run-status"></div>
+      <pre id="run-output"></pre>
+    </div>
+
+    <div class="pane" id="pane-tables">
+      <div id="tables-list"></div>
+      <div id="table-data"><div class="hint">no dedicated schema found for this app yet</div></div>
+    </div>
+
+    <div class="pane" id="pane-embed">
+      <div class="embed-tabs">
+        <button data-embed="sql" class="active">SQL</button>
+        <button data-embed="ts">TypeScript</button>
+      </div>
+      <div class="embed-block">
+        <button class="copy" id="embed-copy">copy</button>
+        <pre id="embed-code"></pre>
+      </div>
+      <div class="embed-note" id="embed-note"></div>
+    </div>
+  </section>
+
+  <!-- BROWSE -->
+  <section class="view" id="view-browse">
+    <div class="head"><h2>Browse data</h2></div>
+    <div id="browse-grid">
+      <div id="browse-tree"><div class="hint">loading...</div></div>
+      <div id="browse-data"><div class="hint">pick a table</div></div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+// ---------------------------------------------------------------------------
+// pg-one: a single-purpose app-builder UI for pg_synapse. Every capability
+// here (execute an agent, create/upsert an agent, browse a table) already
+// exists as a harness endpoint used by the main demo UI; this page adds no
+// new backend behavior, just a fresh, minimal front end and one meta-agent
+// definition (app_builder) that designs a schema and registers a new agent
+// for whatever idea it is given.
+// ---------------------------------------------------------------------------
+
+const $ = (id) => document.getElementById(id);
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+async function api(path, method, body) {
+  try {
+    const r = await fetch(path, {
+      method: method || "GET",
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: data.error || r.statusText };
+    return data;
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+let BOOT = { agents: [], profiles: [], tools: [] };
+let CONNECTED = false;
+let CURRENT_AGENT = null;
+
+const APP_BUILDER = {
+  name: "app_builder",
+  system_prompt:
+    "You design and build small database-backed applications inside this Postgres database, " +
+    "driven by a one-line app idea from the user.\n\n" +
+    "For the idea you are given:\n" +
+    "1. Pick a short, valid Postgres identifier for this app: lowercase letters, digits, and " +
+    "underscores only, starting with a letter, 30 characters or fewer (e.g. \"gym_tracker\", " +
+    "\"invoice_tracker\"). This is BOTH the new agent's name AND its dedicated schema name. " +
+    "Query synapse.agents first to make sure the name is not already taken; if it is, add a short suffix.\n" +
+    "2. CREATE SCHEMA <name>, then create the tables that idea needs inside it, with sensible " +
+    "columns and types, and insert a handful of realistic seed rows so the app has something to " +
+    "show immediately.\n" +
+    "3. Register the new agent with the exact function call (do not hand-write an INSERT into " +
+    "synapse.agents): SELECT synapse.agent_create('<name>', '<a system prompt you write for the " +
+    "new agent, describing the app's domain, referencing its own schema <name> by name, and " +
+    "telling it to use sql_query for reads and sql_exec for writes>', 'conversation', " +
+    "'vllm-default', ARRAY['sql_query','sql_exec'], 10, 60000);\n" +
+    "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'.\n" +
+    "5. Finish with exactly one line in this shape: \"Built <name>: <one sentence describing what " +
+    "it does>\".\n\n" +
+    "Rules: run ONE statement per tool call, never end a statement with a semicolon, never touch " +
+    "the synapse schema's rows directly (only through synapse.agent_create), never touch any table " +
+    "outside the schema you just created, and always pass values through the params array, never " +
+    "inline them.",
+  executor: "conversation",
+  llm_profile: "vllm-default",
+  tools: ["sql_query", "sql_exec"],
+  max_iterations: 20,
+  timeout_ms: 120000,
+  cost_cap_usd: 0,
+};
+
+// ---- nav ----
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
+  document.querySelectorAll("#topbar nav button").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
+  if (name === "dashboard") renderDashboard();
+  if (name === "browse") loadBrowseTree();
+}
+document.querySelectorAll("[data-nav]").forEach((el) =>
+  el.addEventListener("click", (e) => { e.preventDefault(); showView(el.dataset.nav); }));
+
+// ---- bootstrap / connection ----
+async function loadBootstrap() {
+  const r = await api("/api/bootstrap");
+  if (!r.ok) return;
+  BOOT = r;
+  CONNECTED = (r.profiles || []).some((p) => p.name === "vllm-default");
+  const conn = $("conn"), text = $("conn-text"), change = $("conn-change"), strip = $("connect-strip");
+  conn.classList.toggle("ok", CONNECTED);
+  if (CONNECTED) {
+    const p = r.profiles.find((p) => p.name === "vllm-default");
+    text.textContent = "connected: " + p.model;
+    change.style.display = "";
+    strip.classList.remove("show");
+  } else {
+    text.textContent = "not connected";
+    change.style.display = "none";
+    strip.classList.add("show");
+    if (r.default_llm) { $("cs-url").value = r.default_llm.base_url; $("cs-model").value = r.default_llm.model; }
+  }
+}
+$("conn-change").onclick = (e) => { e.preventDefault(); $("connect-strip").classList.add("show"); };
+$("cs-save").onclick = async () => {
+  const base_url = $("cs-url").value.trim(), model = $("cs-model").value.trim();
+  if (!base_url || !model) { $("cs-status").textContent = "base url and model are required"; return; }
+  $("cs-status").textContent = "connecting...";
+  const r = await api("/api/profile", "POST", { name: "vllm-default", base_url, model, api_key: $("cs-key").value.trim() });
+  $("cs-status").textContent = r.ok ? "connected" : (r.error || "failed");
+  if (r.ok) await loadBootstrap();
+};
+
+// ---- BUILD ----
+document.querySelectorAll(".chip[data-ex]").forEach((b) =>
+  b.onclick = () => { $("build-input").value = b.dataset.ex; $("build-input").focus(); });
+
+async function ensureAppBuilder() {
+  const r = await api("/api/agent", "POST", APP_BUILDER);
+  return r.ok;
+}
+
+$("build-go").onclick = async () => {
+  const idea = $("build-input").value.trim();
+  if (!idea) { $("build-input").focus(); return; }
+  if (!CONNECTED) { $("connect-strip").classList.add("show"); $("build-status").textContent = "connect an LLM endpoint first"; return; }
+  $("build-go").disabled = true;
+  $("build-trace").classList.remove("show");
+  const status = $("build-status");
+  status.className = "busy"; status.textContent = "designing your app...";
+  if (!(await ensureAppBuilder())) { status.className = ""; status.textContent = "could not register the builder agent"; $("build-go").disabled = false; return; }
+
+  const before = new Set((BOOT.agents || []).map((a) => a.name));
+  const r = await api("/api/execute", "POST", { agent: "app_builder", input: idea });
+  if (!r.ok) { status.className = ""; status.textContent = r.error || "failed to start"; $("build-go").disabled = false; return; }
+
+  const runId = r.run_id;
+  const poll = async () => {
+    const s = await api("/api/run/" + runId);
+    if (!s.ok) { status.className = ""; status.textContent = s.error || "lost the run"; $("build-go").disabled = false; return; }
+    const run = s.run;
+    if (run.phase === "starting" || run.phase === "running") {
+      status.textContent = "designing your app... (" + Math.round((Date.now() - run.started_at_ms) / 1000) + "s)";
+      setTimeout(poll, 1200);
+      return;
+    }
+    $("build-go").disabled = false;
+    status.className = "";
+    if (run.phase === "failed") { status.textContent = run.error || "run failed"; return; }
+    const env = run.envelope || {};
+    if (env.status && env.status !== "completed") {
+      status.textContent = "stopped early (" + env.status + "). " + (env.output || "");
+      return;
+    }
+    status.textContent = env.output || "built.";
+    const sqls = (run.messages || [])
+      .filter((m) => m.role === "assistant" && m.tool_name === "sql_exec")
+      .map((m) => { try { return JSON.parse(m.tool_input).query; } catch (e) { return null; } })
+      .filter(Boolean);
+    if (sqls.length) { $("build-trace").classList.add("show"); $("build-trace-body").textContent = sqls.join(";\n\n"); }
+
+    await loadBootstrap();
+    const after = (BOOT.agents || []).map((a) => a.name);
+    // app_builder itself can look "new" on the very first build (it is
+    // created by ensureAppBuilder() just above, before this snapshot), so
+    // it is never a valid highlight target regardless of name ordering.
+    const created = after.filter((n) => !before.has(n) && n !== "app_builder");
+    $("build-input").value = "";
+    showView("dashboard");
+    renderDashboard(created[0] || null);
+  };
+  poll();
+};
+
+// ---- DASHBOARD ----
+function renderDashboard(highlight) {
+  const grid = $("app-grid");
+  const agents = (BOOT.agents || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  if (!agents.length) { grid.innerHTML = ""; grid.parentElement.querySelector(".empty-hint")?.remove();
+    grid.insertAdjacentHTML("afterend", '<div class="empty-hint">nothing built yet. <a href="#" data-nav="build">build your first app</a></div>');
+    document.querySelectorAll("[data-nav]").forEach((el) => el.onclick || (el.onclick = (e) => { e.preventDefault(); showView(el.dataset.nav); }));
+    return;
+  }
+  document.querySelector(".empty-hint")?.remove();
+  grid.innerHTML = agents.map((a) => {
+    const desc = (a.system_prompt || "").replace(/\s+/g, " ").trim();
+    return '<button class="app-card' + (a.name === highlight ? " new" : "") + '" data-agent="' + esc(a.name) + '">' +
+      '<div class="name">' + esc(a.name) + '</div>' +
+      '<div class="desc">' + esc(desc) + '</div>' +
+      '<div class="meta">' + (a.tools || []).map((t) => '<span class="tag">' + esc(t) + '</span>').join("") +
+      '<span class="tag">max ' + esc(a.max_iterations) + '</span></div>' +
+      '</button>';
+  }).join("");
+  grid.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => openDetail(b.dataset.agent));
+}
+
+// ---- manual create ----
+function renderToolChecklist() {
+  $("m-tools").innerHTML = (BOOT.tools || []).map((t) =>
+    '<label><input type="checkbox" value="' + esc(t.name) + '"> ' + esc(t.name) + '</label>').join("");
+}
+$("btn-manual-toggle").onclick = () => { renderToolChecklist(); $("manual-form").classList.add("show"); };
+$("btn-manual-cancel").onclick = () => $("manual-form").classList.remove("show");
+$("btn-manual-save").onclick = async () => {
+  const name = $("m-name").value.trim(), prompt = $("m-prompt").value.trim();
+  if (!name || !prompt) { $("manual-status").textContent = "name and prompt are required"; return; }
+  const tools = [...document.querySelectorAll("#m-tools input:checked")].map((i) => i.value);
+  const r = await api("/api/agent", "POST", {
+    name, system_prompt: prompt, executor: "conversation", llm_profile: "vllm-default", tools,
+    max_iterations: parseInt($("m-maxiter").value, 10) || 10,
+    timeout_ms: parseInt($("m-timeout").value, 10) || 60000,
+  });
+  $("manual-status").textContent = r.ok ? "saved" : (r.error || "failed");
+  if (r.ok) { $("manual-form").classList.remove("show"); $("m-name").value = ""; $("m-prompt").value = "";
+    await loadBootstrap(); renderDashboard(name); }
+};
+
+// ---- DETAIL ----
+function openDetail(name) {
+  CURRENT_AGENT = name;
+  const a = (BOOT.agents || []).find((x) => x.name === name);
+  if (!a) return;
+  $("d-name").textContent = a.name;
+  $("d-prompt").textContent = (a.system_prompt || "").replace(/\s+/g, " ").trim();
+  $("run-input").value = ""; $("run-output").classList.remove("show"); $("run-status").textContent = "";
+  showView("detail");
+  setPane("run");
+  loadAgentTables(a.name);
+  renderEmbed(a.name, document.querySelector(".embed-tabs button.active")?.dataset.embed || "sql");
+}
+document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.onclick = () => setPane(b.dataset.pane));
+function setPane(name) {
+  document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.classList.toggle("active", b.dataset.pane === name));
+  document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + name));
+}
+
+$("run-go").onclick = async () => {
+  const input = $("run-input").value.trim();
+  if (!input) return;
+  if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
+  $("run-go").disabled = true;
+  $("run-status").textContent = "running...";
+  $("run-output").classList.remove("show");
+  const r = await api("/api/execute", "POST", { agent: CURRENT_AGENT, input });
+  if (!r.ok) { $("run-status").textContent = r.error || "failed to start"; $("run-go").disabled = false; return; }
+  const poll = async () => {
+    const s = await api("/api/run/" + r.run_id);
+    if (!s.ok) { $("run-status").textContent = s.error || "lost the run"; $("run-go").disabled = false; return; }
+    const run = s.run;
+    if (run.phase === "starting" || run.phase === "running") { setTimeout(poll, 1000); return; }
+    $("run-go").disabled = false;
+    if (run.phase === "failed") { $("run-status").textContent = run.error || "run failed"; return; }
+    const env = run.envelope || {};
+    $("run-status").textContent = (env.status || "done") + " · " + (env.tokens_in || 0) + " in / " + (env.tokens_out || 0) + " out";
+    $("run-output").textContent = env.output || "(no output)";
+    $("run-output").classList.add("show");
+  };
+  poll();
+};
+
+// ---- tables (scoped to the agent's own schema) ----
+async function loadAgentTables(agentName) {
+  const list = $("tables-list"), out = $("table-data");
+  list.innerHTML = ""; out.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/schema/tree");
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not load schema") + '</div>'; return; }
+  const schema = (r.tree || []).find((s) => s.schema === agentName);
+  if (!schema || !schema.tables.length) {
+    out.innerHTML = '<div class="hint">no dedicated schema named "' + esc(agentName) +
+      '" found. Apps built here get their own schema; hand-added agents may point at existing tables instead.</div>';
+    return;
+  }
+  list.innerHTML = schema.tables.map((t) => '<button data-t="' + esc(t) + '">' + esc(t) + '</button>').join("");
+  list.querySelectorAll("button").forEach((b) => b.onclick = () => {
+    list.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    loadTableData(agentName, b.dataset.t);
+  });
+  list.querySelector("button").click();
+}
+async function loadTableData(schema, table) {
+  const out = $("table-data");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const [c, rows] = await Promise.all([
+    api("/api/schema/columns?schema=" + encodeURIComponent(schema) + "&table=" + encodeURIComponent(table)),
+    api("/api/schema/rows?schema=" + encodeURIComponent(schema) + "&table=" + encodeURIComponent(table) + "&limit=50"),
+  ]);
+  const cn = (c.ok && c.columns.length) ? c.columns.map((x) => x.column) : (rows.rows && rows.rows[0] ? Object.keys(rows.rows[0]) : []);
+  if (!rows.ok || !rows.rows || !rows.rows.length) { out.innerHTML = '<div class="hint">no rows</div>'; return; }
+  out.innerHTML = "<table class='data-table'><tr>" + cn.map((x) => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
+    rows.rows.map((r) => "<tr>" + cn.map((x) => {
+      const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
+      return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
+    }).join("") + "</tr>").join("") + "</table>";
+}
+
+// ---- embed / API snippets ----
+document.querySelectorAll(".embed-tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".embed-tabs button").forEach((x) => x.classList.remove("active"));
+  b.classList.add("active");
+  renderEmbed(CURRENT_AGENT, b.dataset.embed);
+});
+function renderEmbed(agent, kind) {
+  if (!agent) return;
+  if (kind === "ts") {
+    $("embed-code").textContent =
+`import { PgSynapseClient } from "pg-synapse-client";
+
+const synapse = new PgSynapseClient(pool); // any pg.Pool-compatible client
+
+const result = await synapse.execute("${agent}", "your input here");
+console.log(result.output);`;
+    $("embed-note").textContent = "pg-synapse-client lives in clients/typescript in this repo (not yet published to npm).";
+  } else {
+    $("embed-code").textContent =
+`SELECT synapse.execute('${agent}', 'your input here');
+
+-- or from a Postgres client library in any language, e.g.:
+-- pool.query("SELECT synapse.execute($1, $2)", ["${agent}", "your input here"])`;
+    $("embed-note").textContent = "Works from any Postgres client. Auth is whatever role your connection already uses.";
+  }
+}
+$("embed-copy").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("embed-code").textContent);
+    $("embed-copy").textContent = "copied"; $("embed-copy").classList.add("copied");
+    setTimeout(() => { $("embed-copy").textContent = "copy"; $("embed-copy").classList.remove("copied"); }, 1400);
+  } catch (e) { $("embed-copy").textContent = "select + copy manually"; }
+};
+
+// ---- BROWSE (unscoped schema browser) ----
+let BROWSE_SEL = null;
+async function loadBrowseTree() {
+  const tree = $("browse-tree");
+  const r = await api("/api/schema/tree");
+  if (!r.ok) { tree.innerHTML = '<div class="hint">' + esc(r.error || "unavailable") + '</div>'; return; }
+  tree.innerHTML = (r.tree || []).map((s) =>
+    '<div class="sch" data-s="' + esc(s.schema) + '">' + esc(s.schema) + '</div>' +
+    s.tables.map((t) => '<div class="tbl" data-s="' + esc(s.schema) + '" data-t="' + esc(t) + '">' + esc(t) + '</div>').join("")
+  ).join("");
+  tree.querySelectorAll(".tbl").forEach((el) => el.onclick = () => {
+    tree.querySelectorAll(".tbl").forEach((x) => x.classList.remove("sel"));
+    el.classList.add("sel");
+    BROWSE_SEL = { schema: el.dataset.s, table: el.dataset.t };
+    loadBrowseData();
+  });
+}
+async function loadBrowseData() {
+  if (!BROWSE_SEL) return;
+  const out = $("browse-data");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const [c, rows] = await Promise.all([
+    api("/api/schema/columns?schema=" + encodeURIComponent(BROWSE_SEL.schema) + "&table=" + encodeURIComponent(BROWSE_SEL.table)),
+    api("/api/schema/rows?schema=" + encodeURIComponent(BROWSE_SEL.schema) + "&table=" + encodeURIComponent(BROWSE_SEL.table) + "&limit=50"),
+  ]);
+  const cn = (c.ok && c.columns.length) ? c.columns.map((x) => x.column) : (rows.rows && rows.rows[0] ? Object.keys(rows.rows[0]) : []);
+  let html = '<div class="hint" style="margin-bottom:8px">' + esc(BROWSE_SEL.schema) + "." + esc(BROWSE_SEL.table) + '</div>';
+  if (rows.ok && rows.rows && rows.rows.length) {
+    html += "<table class='data-table'><tr>" + cn.map((x) => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
+      rows.rows.map((r) => "<tr>" + cn.map((x) => {
+        const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
+        return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
+      }).join("") + "</tr>").join("") + "</table>";
+  } else {
+    html += '<div class="hint">no rows</div>';
+  }
+  out.innerHTML = html;
+}
+
+// ---- boot ----
+loadBootstrap();
+</script>
+</body>
+</html>

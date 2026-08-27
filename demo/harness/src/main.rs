@@ -31,6 +31,7 @@ pub struct AppState {
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const SIDECAR_HTML: &str = include_str!("../static/sidecar.html");
+const PGONE_HTML: &str = include_str!("../static/pgone.html");
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
@@ -38,6 +39,10 @@ async fn index() -> Html<&'static str> {
 
 async fn sidecar_page() -> Html<&'static str> {
     Html(SIDECAR_HTML)
+}
+
+async fn pgone_page() -> Html<&'static str> {
+    Html(PGONE_HTML)
 }
 
 #[tokio::main]
@@ -64,6 +69,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/sidecar", get(sidecar_page))
+        .route("/pgone", get(pgone_page))
         .route("/api/sidecar/probe", post(api::sidecar_probe))
         .route("/api/sidecar/execute", post(api::sidecar_execute))
         .route("/api/workload/seed", post(api::workload_seed))
