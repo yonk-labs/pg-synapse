@@ -43,6 +43,11 @@ pub(crate) enum TurnResult {
     AssistantText(String),
     /// Model issued one or more tool calls.
     ToolCalls(Vec<ToolCall>),
+    /// Model issued no tool calls and no (or whitespace-only) text: neither
+    /// a step forward nor an answer. Distinct from `AssistantText("")` so
+    /// callers cannot mistake it for a deliberate empty final answer and
+    /// silently finalize the run as `Completed`.
+    Empty,
 }
 
 /// Shared loop bookkeeping for executors. Created once per executor run.
@@ -170,6 +175,9 @@ impl<'a> LoopHarness<'a> {
             return Ok(TurnResult::ToolCalls(resp.tool_calls));
         }
         let text = resp.content.unwrap_or_default();
+        if text.trim().is_empty() {
+            return Ok(TurnResult::Empty);
+        }
         Ok(TurnResult::AssistantText(text))
     }
 
@@ -454,6 +462,21 @@ impl<'a> LoopHarness<'a> {
         );
     }
 
+    /// Append a corrective user-role message after an [`TurnResult::Empty`]
+    /// turn (no tool call, no text): tells the model to either act or answer,
+    /// and records a trace event so the empty turn is visible after the run.
+    /// Consumes one iteration via the normal loop path, so a model that
+    /// keeps going empty resolves to `MaxIterations`, never a false
+    /// `Completed`.
+    pub(crate) fn push_empty_turn_nudge(&mut self) {
+        self.push_user_message(
+            "Your last response had no tool call and no text. If you are \
+             finished, reply with your final answer as plain text. \
+             Otherwise, call a tool to continue.",
+        );
+        self.record_event(EventKind::EmptyTurn, serde_json::json!({}));
+    }
+
     fn push_message(
         &mut self,
         role: Role,
@@ -570,6 +593,30 @@ mod tests {
         }
         // assistant message recorded
         assert_eq!(h.messages().last().unwrap().role, Role::Assistant);
+    }
+
+    #[tokio::test]
+    async fn one_llm_turn_returns_empty_on_no_text_no_tool_calls() {
+        let mock = MockLlmProvider::new("m");
+        mock.push_text(""); // no tool calls, empty content: not a valid answer
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let res = h.one_llm_turn().await.unwrap();
+        assert!(matches!(res, TurnResult::Empty));
+    }
+
+    #[tokio::test]
+    async fn one_llm_turn_returns_empty_on_whitespace_only_text() {
+        let mock = MockLlmProvider::new("m");
+        mock.push_text("   \n  ");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let res = h.one_llm_turn().await.unwrap();
+        assert!(matches!(res, TurnResult::Empty));
     }
 
     #[tokio::test]

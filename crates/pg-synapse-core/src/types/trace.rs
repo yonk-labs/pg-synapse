@@ -100,6 +100,9 @@ pub enum EventKind {
     ToolEnd,
     /// A tool invocation returned an error.
     ToolError,
+    /// A turn had no tool call and no text content; the loop nudged the
+    /// model to act or answer instead of finalizing the run.
+    EmptyTurn,
     /// A provider call was retried.
     RetryAttempt,
     /// The per-run cost cap was evaluated.
@@ -118,6 +121,7 @@ impl EventKind {
             Self::ToolStart => "tool_start",
             Self::ToolEnd => "tool_end",
             Self::ToolError => "tool_error",
+            Self::EmptyTurn => "empty_turn",
             Self::RetryAttempt => "retry_attempt",
             Self::CostCapCheck => "cost_cap_check",
             Self::IterationCapCheck => "iteration_cap_check",
@@ -187,6 +191,7 @@ mod tests {
         assert_eq!(EventKind::ToolStart.as_str(), "tool_start");
         assert_eq!(EventKind::ToolEnd.as_str(), "tool_end");
         assert_eq!(EventKind::ToolError.as_str(), "tool_error");
+        assert_eq!(EventKind::EmptyTurn.as_str(), "empty_turn");
         assert_eq!(EventKind::RetryAttempt.as_str(), "retry_attempt");
         assert_eq!(EventKind::CostCapCheck.as_str(), "cost_cap_check");
         assert_eq!(EventKind::IterationCapCheck.as_str(), "iteration_cap_check");
@@ -196,6 +201,7 @@ mod tests {
             EventKind::ToolStart,
             EventKind::ToolEnd,
             EventKind::ToolError,
+            EventKind::EmptyTurn,
             EventKind::RetryAttempt,
             EventKind::CostCapCheck,
             EventKind::IterationCapCheck,

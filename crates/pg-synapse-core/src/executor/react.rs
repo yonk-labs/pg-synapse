@@ -47,6 +47,9 @@ impl Executor for ReActExecutor {
                 Ok(TurnResult::AssistantText(text)) => {
                     return Ok(harness.finalize(text, OutcomeStatus::Completed));
                 }
+                Ok(TurnResult::Empty) => {
+                    harness.push_empty_turn_nudge();
+                }
                 Ok(TurnResult::ToolCalls(calls)) => {
                     for tc in &calls {
                         match harness.dispatch_tool_call(tc).await {
@@ -153,6 +156,22 @@ mod tests {
         assert_eq!(outcome.status, OutcomeStatus::Completed);
         assert_eq!(outcome.output, "found it");
         assert_eq!(outcome.tool_calls.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn empty_final_turn_does_not_falsely_complete() {
+        let mock = MockLlmProvider::new("m");
+        mock.push_tool_call("c1", "echo", serde_json::json!({"step": 1}));
+        for _ in 0..10 {
+            mock.push_text("");
+        }
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let mut reg = ToolRegistry::new();
+        reg.add(MockTool::new("echo", ToolOutput::text("ok")));
+        let ctx = ctx_with(llm, reg, 4, None);
+
+        let outcome = ReActExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::MaxIterations);
     }
 
     #[tokio::test]
