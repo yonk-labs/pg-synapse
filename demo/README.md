@@ -139,6 +139,12 @@ runs `CREATE EXTENSION pg_synapse_pgrx` on first boot.
   Postgres volume. Do not expose it to a network you do not trust.
 - The tool list in the agent editor is the set compiled into the demo image
   (`sql_query`, `sql_exec`, `http_get`, `http_post`, `http_head`,
-  `calculator`, `get_current_time`, `call_agent`).
+  `calculator`, `get_current_time`, `call_agent`, `read_file`, `write_file`,
+  `list_files`, `remote_query`, `remote_exec`, `search_news`,
+  `read_article`, `lede_compress`).
+- `demo/reset.sh` wipes the stack's Docker volumes, brings it back up, and
+  re-seeds the `vllm-default` LLM profile (`DEFAULT_LLM_BASE_URL` /
+  `DEFAULT_LLM_MODEL` env, or the repo defaults) so a fresh test run does not
+  need a manual Panel 1 click first.
 - `synapse.embed` is present but non-functional in this image by design
   (the `embed-ort` feature is dropped to keep ONNX Runtime out).

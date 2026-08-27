@@ -82,7 +82,8 @@ errors with a 0.17 path, the binary drifted; reinstall.
 ## LLM test endpoint
 
 Default test LLM is an OpenAI-compatible vLLM at
-`http://192.168.1.193:8000/v1`. Override with `PG_SYNAPSE_TEST_LLM_BASE_URL`
+`http://192.168.1.133:8000/v1` (model `qwen36-nvfp4`). Override with
+`PG_SYNAPSE_TEST_LLM_BASE_URL`
 and `PG_SYNAPSE_TEST_LLM_MODEL`. The model must support function-calling for
 the agent demos to work.
 

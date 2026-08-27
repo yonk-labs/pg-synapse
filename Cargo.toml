@@ -14,6 +14,7 @@ members = [
     "plugins/pg-synapse-tools-lexicon",
     "plugins/pg-synapse-tools-remotedb",
     "plugins/pg-synapse-tools-newssearch",
+    "plugins/pg-synapse-tools-readarticle",
     "plugins/pg-synapse-compaction",
     "demo/harness",
 ]

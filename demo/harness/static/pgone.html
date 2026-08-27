@@ -414,9 +414,18 @@ const APP_BUILDER = {
     "the connection argument exactly matching that name. You cannot connect to a database that has " +
     "not been added as a connection first; do not invent one.\n" +
     "- search_news: keyword news search (Google News RSS). Literal keyword matching, not semantic " +
-    "search. Returns title, url (a news.google.com redirect link, not the publisher's own URL), " +
-    "source, and published_at for each result - there is no article body or real summary; if the " +
-    "app needs a \"summary\" field, write a short one yourself from the headline and say so.\n\n" +
+    "search. Returns title, url, source, and published_at for each result - there is no article " +
+    "body or real summary. IMPORTANT: the url is a news.google.com link that only resolves via " +
+    "JavaScript; do NOT pass it to read_article, that call will always fail. Treat search_news as " +
+    "headline discovery only (title, source, date), not a source of article text or a link you can " +
+    "fetch.\n" +
+    "- read_article: given a DIRECT article/publisher url (never a news.google.com one - see " +
+    "above), fetches the page and extracts its main title/body text, stripping nav/ads/boilerplate. " +
+    "Heuristic, not perfect: it does not run JavaScript, so pages that only render content client-" +
+    "side may come back empty.\n" +
+    "- lede_compress: given text and a max_tokens budget, returns a short extractive brief of the " +
+    "most salient sentences. Use it after read_article, not instead of it, to keep token spend down " +
+    "when handling long article text.\n\n" +
     "You have no other capabilities: no general web search, no email sending, no file listing " +
     "beyond a path you were given. If the idea needs any of those, do not pretend to have done it: " +
     "build the closest useful version with what you actually have, and say plainly in your final " +
@@ -432,12 +441,13 @@ const APP_BUILDER = {
     "into synapse.agents, use the function): SELECT synapse.agent_create('<name>', '<a system " +
     "prompt you write for the new agent, describing the app's domain, referencing its own schema " +
     "<name> by name, telling it which of sql_query/sql_exec/read_file/remote_query/remote_exec/ " +
-    "search_news it needs and how to use them, AND telling it to insert multiple rows in as FEW " +
-    "sql_exec calls as possible (one multi-row INSERT beats one row per call) whenever it processes " +
-    "several records at once, e.g. rows from a file - it has a limited number of tool calls to work " +
-    "with, same as you do>', 'conversation', 'vllm-default', ARRAY['sql_query','sql_exec'<list any " +
-    "of read_file/remote_query/remote_exec/search_news the new agent actually needs, comma-" +
-    "separated, each single-quoted>], 15, 90000);\n" +
+    "search_news/read_article/lede_compress it needs and how to use them, AND telling it to insert " +
+    "multiple rows in as FEW sql_exec calls as possible (one multi-row INSERT beats one row per " +
+    "call) whenever it processes several records at once, e.g. rows from a file - it has a limited " +
+    "number of tool calls to work with, same as you do>', 'conversation', 'vllm-default', " +
+    "ARRAY['sql_query','sql_exec'<list any of read_file/remote_query/remote_exec/search_news/" +
+    "read_article/lede_compress the new agent actually needs, comma-separated, each single-" +
+    "quoted>], 15, 90000);\n" +
     "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'. The app " +
     "is now usable even if you run out of time before step 5, so do this before seeding data, not after.\n" +
     "5. If you were given an uploaded file to work from, do NOT read or process it yourself: that is " +
@@ -459,7 +469,7 @@ const APP_BUILDER = {
     "inline them.",
   executor: "conversation",
   llm_profile: "vllm-default",
-  tools: ["sql_query", "sql_exec", "read_file", "remote_query", "remote_exec", "search_news"],
+  tools: ["sql_query", "sql_exec", "read_file", "remote_query", "remote_exec", "search_news", "read_article", "lede_compress"],
   max_iterations: 24,
   timeout_ms: 120000,
   cost_cap_usd: 0,

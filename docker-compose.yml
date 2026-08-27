@@ -36,8 +36,8 @@ services:
     environment:
       DATABASE_URL: "host=db port=5432 user=postgres password=postgres dbname=synapse_demo"
       # Prefill for the UI endpoint form (the repo's documented test LLM).
-      DEFAULT_LLM_BASE_URL: "http://192.168.1.193:8000/v1"
-      DEFAULT_LLM_MODEL: "Intel/Qwen3-Coder-Next-int4-AutoRound"
+      DEFAULT_LLM_BASE_URL: "http://192.168.1.133:8000/v1"
+      DEFAULT_LLM_MODEL: "qwen36-nvfp4"
       UPLOAD_DIR: "/tmp/pg_synapse_fs/uploads"
     ports:
       # Override the host port with HARNESS_PORT=nnnn docker compose up.

@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate", "tools-remotedb", "tools-newssearch"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate", "tools-remotedb", "tools-newssearch", "tools-readarticle"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -43,6 +43,8 @@ tools-delegate = ["dep:pg-synapse-tools-delegate"]
 tools-remotedb = ["dep:pg-synapse-tools-remotedb"]
 # Bundle the news search tool plugin (search_news): Google News RSS, no API key.
 tools-newssearch = ["dep:pg-synapse-tools-newssearch"]
+# Bundle the article extraction tool plugin (read_article): fetch + Readability-style extraction.
+tools-readarticle = ["dep:pg-synapse-tools-readarticle"]
 
 [dependencies]
 pgrx       = "=0.18.0"
@@ -60,6 +62,7 @@ pg-synapse-tools-clock     = { path = "../../plugins/pg-synapse-tools-clock", ve
 pg-synapse-tools-delegate  = { path = "../../plugins/pg-synapse-tools-delegate", version = "0.1.1", optional = true }
 pg-synapse-tools-remotedb  = { path = "../../plugins/pg-synapse-tools-remotedb", version = "0.1.1", optional = true }
 pg-synapse-tools-newssearch = { path = "../../plugins/pg-synapse-tools-newssearch", version = "0.1.1", optional = true }
+pg-synapse-tools-readarticle = { path = "../../plugins/pg-synapse-tools-readarticle", version = "0.1.1", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

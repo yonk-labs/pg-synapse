@@ -187,6 +187,12 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
     #[cfg(feature = "tools-newssearch")]
     let builder = builder.with_plugin(pg_synapse_tools_newssearch::NewsSearchToolsPlugin::new());
 
+    // Article extraction tool (read_article): fetch a URL and pull the main
+    // article text via a Readability-style DOM heuristic, so an agent that
+    // found links with search_news can read what they actually say.
+    #[cfg(feature = "tools-readarticle")]
+    let builder = builder.with_plugin(pg_synapse_tools_readarticle::ReadArticleToolsPlugin::new());
+
     // Lede compression tool (lede_compress). Shim: uses lede CLI if on PATH,
     // otherwise falls back to deterministic extractive compression.
     #[cfg(feature = "tools-lede")]

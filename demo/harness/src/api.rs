@@ -41,6 +41,23 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
         "list_files",
         "List files under the sandboxed uploads directory",
     ),
+    (
+        "remote_query",
+        "Read-only SQL against a named external Postgres connection",
+    ),
+    (
+        "remote_exec",
+        "Writing SQL against a named external Postgres connection",
+    ),
+    ("search_news", "Keyword news search via Google News RSS"),
+    (
+        "read_article",
+        "Fetch a URL and extract its main article text",
+    ),
+    (
+        "lede_compress",
+        "Compress text to a short extractive brief within a token budget",
+    ),
 ];
 
 const EXECUTORS: &[&str] = &["conversation", "react", "reflection"];
