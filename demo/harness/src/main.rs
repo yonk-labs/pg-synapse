@@ -61,12 +61,15 @@ async fn main() {
         "host=localhost port=5432 user=postgres password=postgres dbname=synapse_demo".to_owned()
     });
     let addr = std::env::var("HARNESS_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
-    // The repo's documented test endpoint; the UI form defaults to it and the
-    // presenter overrides it at runtime.
+    // A generic placeholder, not a real endpoint: no personal/internal
+    // address belongs baked into this binary. The UI form prefills with
+    // this and the presenter points it at their own server at runtime;
+    // override via DEFAULT_LLM_BASE_URL/DEFAULT_LLM_MODEL (docker-compose.yml
+    // reads these from a local, gitignored .env, not a tracked default).
     let default_llm_base_url = std::env::var("DEFAULT_LLM_BASE_URL")
-        .unwrap_or_else(|_| "http://192.168.1.193:8000/v1".to_owned());
-    let default_llm_model = std::env::var("DEFAULT_LLM_MODEL")
-        .unwrap_or_else(|_| "Intel/Qwen3-Coder-Next-int4-AutoRound".to_owned());
+        .unwrap_or_else(|_| "http://localhost:8000/v1".to_owned());
+    let default_llm_model =
+        std::env::var("DEFAULT_LLM_MODEL").unwrap_or_else(|_| "local-model".to_owned());
     let upload_dir =
         std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "/tmp/pg_synapse_fs/uploads".to_owned());
     std::fs::create_dir_all(&upload_dir)

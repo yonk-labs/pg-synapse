@@ -24,9 +24,12 @@ The first build is slow (it compiles the Rust extension inside the db image,
 expect 10 to 25 minutes cold); later builds hit the Docker cache. Then:
 
 1. Open <http://localhost:8080>.
-2. Panel 1 (LLM endpoint): the form is prefilled with the repo's test
-   endpoint; change it to your server, hit **Test** (probes `GET /models`
-   from the harness), then **Save**. This writes `synapse.llm_profiles` via
+2. Panel 1 (LLM endpoint): the form is prefilled with a `localhost:8000`
+   placeholder (no real endpoint is tracked in this repo); change it to
+   your server, hit **Test** (probes `GET /models` from the harness), then
+   **Save**. To skip retyping it every run, drop a local, gitignored `.env`
+   in the repo root with `DEFAULT_LLM_BASE_URL=...` / `DEFAULT_LLM_MODEL=...`
+   (`docker compose` loads it automatically). This writes `synapse.llm_profiles` via
    `synapse.llm_profile_set()`, and the API key (if any) via
    `synapse.secret_set()`.
 3. Panel 2 (Load a demo): pick a scenario, click **Load**, then click one of

@@ -81,11 +81,12 @@ errors with a 0.17 path, the binary drifted; reinstall.
 
 ## LLM test endpoint
 
-Default test LLM is an OpenAI-compatible vLLM at
-`http://192.168.1.133:8000/v1` (model `qwen36-nvfp4`). Override with
-`PG_SYNAPSE_TEST_LLM_BASE_URL`
-and `PG_SYNAPSE_TEST_LLM_MODEL`. The model must support function-calling for
-the agent demos to work.
+No endpoint is baked into the repo: set `PG_SYNAPSE_TEST_LLM_BASE_URL` and
+`PG_SYNAPSE_TEST_LLM_MODEL` in your own shell environment to point at
+whatever OpenAI-compatible server you have (vLLM, llama.cpp server, LM
+Studio, real OpenAI). The model must support function-calling for the agent
+demos to work. Live tests are gated behind `--features live-tests` and skip
+cleanly when these are unset.
 
 ## Module map
 

@@ -35,9 +35,13 @@ services:
       context: demo/harness
     environment:
       DATABASE_URL: "host=db port=5432 user=postgres password=postgres dbname=synapse_demo"
-      # Prefill for the UI endpoint form (the repo's documented test LLM).
-      DEFAULT_LLM_BASE_URL: "http://192.168.1.133:8000/v1"
-      DEFAULT_LLM_MODEL: "qwen36-nvfp4"
+      # Prefill for the UI endpoint form. No real endpoint belongs in a
+      # tracked file (personal LAN addresses are not portable to other
+      # checkouts); point DEFAULT_LLM_BASE_URL/DEFAULT_LLM_MODEL at your own
+      # server via a local, gitignored .env file (docker compose loads one
+      # automatically from the repo root) instead of editing this file.
+      DEFAULT_LLM_BASE_URL: "${DEFAULT_LLM_BASE_URL:-http://localhost:8000/v1}"
+      DEFAULT_LLM_MODEL: "${DEFAULT_LLM_MODEL:-local-model}"
       UPLOAD_DIR: "/tmp/pg_synapse_fs/uploads"
     ports:
       # Override the host port with HARNESS_PORT=nnnn docker compose up.

@@ -9,13 +9,14 @@
 # both steps so a test run can start immediately after.
 #
 # Usage: demo/reset.sh
-# Override the seeded profile: DEFAULT_LLM_BASE_URL=... DEFAULT_LLM_MODEL=... demo/reset.sh
+# Set your own endpoint: DEFAULT_LLM_BASE_URL=... DEFAULT_LLM_MODEL=... demo/reset.sh
+# (or drop a local, gitignored .env in the repo root with the same names)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-LLM_BASE_URL="${DEFAULT_LLM_BASE_URL:-http://192.168.1.133:8000/v1}"
-LLM_MODEL="${DEFAULT_LLM_MODEL:-qwen36-nvfp4}"
+LLM_BASE_URL="${DEFAULT_LLM_BASE_URL:-http://localhost:8000/v1}"
+LLM_MODEL="${DEFAULT_LLM_MODEL:-local-model}"
 
 echo "==> docker compose down -v"
 docker compose down -v
