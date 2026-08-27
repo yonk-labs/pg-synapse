@@ -58,7 +58,7 @@ impl Executor for ReflectionExecutor {
         harness.check_cost_cap()?;
         let mut current = match harness.one_llm_turn().await? {
             TurnResult::AssistantText(t) => t,
-            TurnResult::ToolCalls(_) => String::new(),
+            TurnResult::ToolCalls(_) | TurnResult::Empty => String::new(),
         };
 
         // Resolve judge once. Falls back to main when not configured.
@@ -80,7 +80,7 @@ impl Executor for ReflectionExecutor {
             ));
             let critique = match harness.one_llm_turn_with(judge.clone()).await? {
                 TurnResult::AssistantText(t) => t,
-                TurnResult::ToolCalls(_) => String::new(),
+                TurnResult::ToolCalls(_) | TurnResult::Empty => String::new(),
             };
 
             if critique.contains(ACCEPT_TOKEN) {
@@ -100,7 +100,7 @@ impl Executor for ReflectionExecutor {
             );
             current = match harness.one_llm_turn().await? {
                 TurnResult::AssistantText(t) => t,
-                TurnResult::ToolCalls(_) => current,
+                TurnResult::ToolCalls(_) | TurnResult::Empty => current,
             };
         }
 

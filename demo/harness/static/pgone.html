@@ -415,10 +415,13 @@ const APP_BUILDER = {
     "not been added as a connection first; do not invent one.\n" +
     "- search_news: keyword news search (Google News RSS). Literal keyword matching, not semantic " +
     "search. Returns title, url, source, and published_at for each result - there is no article " +
-    "body or real summary. IMPORTANT: the url is a news.google.com link that only resolves via " +
-    "JavaScript; do NOT pass it to read_article, that call will always fail. Treat search_news as " +
-    "headline discovery only (title, source, date), not a source of article text or a link you can " +
-    "fetch.\n" +
+    "body or real summary. IMPORTANT: the url is a news.google.com link that ALWAYS fails if passed " +
+    "to read_article (it only resolves via JavaScript, which read_article cannot run) - this is " +
+    "true of EVERY search_news result, not just the one you tried, so if read_article fails on one, " +
+    "do not re-run search_news hoping for a different, resolvable link; there is no such thing. If " +
+    "an app needs a \"summary\" field for a search_news result, write a short one yourself from the " +
+    "title (that is a real, working summary, not a fallback to apologize for) and move on to the " +
+    "next row - do not spend more than one read_article attempt total figuring this out.\n" +
     "- read_article: given a DIRECT article/publisher url (never a news.google.com one - see " +
     "above), fetches the page and extracts its main title/body text, stripping nav/ads/boilerplate. " +
     "Heuristic, not perfect: it does not run JavaScript, so pages that only render content client-" +

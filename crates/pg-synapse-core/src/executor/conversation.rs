@@ -53,6 +53,14 @@ impl Executor for ConversationExecutor {
                 Ok(TurnResult::AssistantText(text)) => {
                     return Ok(harness.finalize(text, OutcomeStatus::Completed));
                 }
+                Ok(TurnResult::Empty) => {
+                    // Neither a tool call nor a text answer: not a valid
+                    // terminal state. Nudge the model rather than silently
+                    // finalizing as Completed with an empty output; if it
+                    // keeps happening, the iteration cap turns it into an
+                    // honest MaxIterations instead of a false success.
+                    harness.push_empty_turn_nudge();
+                }
                 Ok(TurnResult::ToolCalls(calls)) => {
                     for tc in &calls {
                         // A failed tool call is fed back to the model as a
@@ -138,6 +146,50 @@ mod tests {
         assert_eq!(outcome.output, "done!");
         assert_eq!(outcome.tool_calls.len(), 1);
         assert_eq!(outcome.tool_calls[0].name, "echo");
+    }
+
+    #[tokio::test]
+    async fn empty_final_turn_does_not_falsely_complete() {
+        // Regression test: a model that goes quiet (no tool call, no text)
+        // partway through a task must never read as a successful Completed
+        // run. It should exhaust the iteration budget and come back
+        // MaxIterations, the same honest "did not finish" signal a timeout
+        // or an infinite tool-call loop already produces.
+        let mock = MockLlmProvider::new("m");
+        mock.push_tool_call("c1", "echo", serde_json::json!({"step": 1}));
+        for _ in 0..10 {
+            mock.push_text(""); // model goes quiet from here on
+        }
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let mut reg = ToolRegistry::new();
+        reg.add(MockTool::new("echo", ToolOutput::text("ok")));
+        let ctx = ctx_with(llm, reg, 4, None);
+
+        let outcome = ConversationExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::MaxIterations);
+    }
+
+    #[tokio::test]
+    async fn empty_turn_recovers_if_model_answers_next() {
+        // A single empty turn is nudged, not fatal: if the model answers on
+        // the very next turn, the run still completes normally.
+        let mock = MockLlmProvider::new("m");
+        mock.push_text("");
+        mock.push_text("recovered after going quiet once");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 10, None);
+
+        let outcome = ConversationExecutor.execute(ctx).await.unwrap();
+        assert_eq!(outcome.status, OutcomeStatus::Completed);
+        assert_eq!(outcome.output, "recovered after going quiet once");
+        // The nudge should be visible in the trace as a user-role message.
+        let nudge = outcome.messages.iter().any(|m| {
+            m.role == crate::types::Role::User
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("no tool call and no text"))
+        });
+        assert!(nudge, "expected the empty-turn nudge in the message trace");
     }
 
     #[tokio::test]

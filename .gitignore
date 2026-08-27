@@ -9,6 +9,7 @@ dist/
 *.swp
 docs/_drafts/
 skill-output/
+.playwright-mcp/
 
 # Secrets and local credentials (never commit)
 .openai
