@@ -336,6 +336,7 @@ impl SqlExecutor for SqlxSqlExecutor {
         sql: &str,
         params: &[Value],
         _caller_role: Option<&str>,
+        _execution_id: Option<&str>,
     ) -> Result<Vec<Value>, ToolError> {
         // NOTE: caller_role (SET ROLE) is deferred to v0.2.
         if params.is_empty() {
@@ -370,6 +371,7 @@ impl SqlExecutor for SqlxSqlExecutor {
         sql: &str,
         params: &[Value],
         _caller_role: Option<&str>,
+        _execution_id: Option<&str>,
     ) -> Result<u64, ToolError> {
         // NOTE: caller_role (SET ROLE) is deferred to v0.2.
         if params.is_empty() {

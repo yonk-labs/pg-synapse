@@ -241,14 +241,14 @@ mod tests {
     fn exec_sql(sql: &str, params: &[Value]) -> Result<u64, String> {
         let ex = crate::spi_executor::SpiSqlExecutor;
         crate::runtime_holder::tokio()
-            .block_on(async { ex.execute(sql, params, None).await })
+            .block_on(async { ex.execute(sql, params, None, None).await })
             .map_err(|e| e.to_string())
     }
 
     fn query_sql(sql: &str, params: &[Value]) -> Result<Vec<Value>, String> {
         let ex = crate::spi_executor::SpiSqlExecutor;
         crate::runtime_holder::tokio()
-            .block_on(async { ex.query(sql, params, None).await })
+            .block_on(async { ex.query(sql, params, None, None).await })
             .map_err(|e| e.to_string())
     }
 

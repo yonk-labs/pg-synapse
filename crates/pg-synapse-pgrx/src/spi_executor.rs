@@ -135,6 +135,7 @@ impl SqlExecutor for SpiSqlExecutor {
         sql: &str,
         params: &[Value],
         _caller_role: Option<&str>,
+        execution_id: Option<&str>,
     ) -> Result<Vec<Value>, ToolError> {
         if crate::schema_guc::DISABLE_BUILTIN_SQL_TOOLS.get() {
             return Err(ToolError::Execution {
@@ -148,6 +149,7 @@ impl SqlExecutor for SpiSqlExecutor {
         let wrapped = format!("SELECT to_jsonb(t) FROM ({sql}) t");
 
         with_savepoint("sql_query", || {
+            publish_execution_id(execution_id);
             let args = bind_args(params);
             // `connect_mut` + `update` (not `connect` + `select`) on purpose:
             // a read-only SPI query reuses the ActiveSnapshot, and inside the
@@ -184,6 +186,7 @@ impl SqlExecutor for SpiSqlExecutor {
         sql: &str,
         params: &[Value],
         _caller_role: Option<&str>,
+        execution_id: Option<&str>,
     ) -> Result<u64, ToolError> {
         if crate::schema_guc::DISABLE_BUILTIN_SQL_TOOLS.get() {
             return Err(ToolError::Execution {
@@ -193,6 +196,7 @@ impl SqlExecutor for SpiSqlExecutor {
         }
 
         with_savepoint("sql_exec", || {
+            publish_execution_id(execution_id);
             let args = bind_args(params);
             Spi::connect_mut(|client| -> Result<u64, ToolError> {
                 let table = client
@@ -204,6 +208,22 @@ impl SqlExecutor for SpiSqlExecutor {
                 Ok(table.len() as u64)
             })
         })
+    }
+}
+/// Publish the current execution id as a session setting for the duration of
+/// the statement, so a trigger on the agent's own tables can stamp the rows it
+/// wrote without the agent having to cooperate.
+///
+/// `set_config(..., true)` is transaction-local, so it unwinds with the
+/// surrounding savepoint and there is no cleanup path to forget. Failure is
+/// ignored on purpose: provenance is an audit nicety and must never be the
+/// reason an agent's actual work fails.
+fn publish_execution_id(execution_id: Option<&str>) {
+    if let Some(id) = execution_id {
+        let _ = Spi::run_with_args(
+            "SELECT set_config('synapse.execution_id', $1, true)",
+            &[DatumWithOid::from(id.to_string())],
+        );
     }
 }
 

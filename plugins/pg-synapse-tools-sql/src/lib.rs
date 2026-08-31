@@ -75,6 +75,7 @@ pub trait SqlExecutor: Send + Sync {
         sql: &str,
         params: &[Value],
         caller_role: Option<&str>,
+        execution_id: Option<&str>,
     ) -> Result<Vec<Value>, ToolError>;
 
     /// INSERT / UPDATE / DELETE. Returns the number of rows affected.
@@ -83,6 +84,7 @@ pub trait SqlExecutor: Send + Sync {
         sql: &str,
         params: &[Value],
         caller_role: Option<&str>,
+        execution_id: Option<&str>,
     ) -> Result<u64, ToolError>;
 }
 
@@ -136,7 +138,12 @@ impl Tool for SqlQueryTool {
             })?;
         let rows = self
             .executor
-            .query(&args.query, &args.params, ctx.caller_role.as_deref())
+            .query(
+                &args.query,
+                &args.params,
+                ctx.caller_role.as_deref(),
+                Some(&ctx.execution_id.to_string()),
+            )
             .await?;
         Ok(ToolOutput::Json(Value::Array(rows)))
     }
@@ -192,7 +199,12 @@ impl Tool for SqlExecTool {
             })?;
         let rows = self
             .executor
-            .execute(&args.query, &args.params, ctx.caller_role.as_deref())
+            .execute(
+                &args.query,
+                &args.params,
+                ctx.caller_role.as_deref(),
+                Some(&ctx.execution_id.to_string()),
+            )
             .await?;
         Ok(ToolOutput::Json(
             serde_json::json!({ "rows_affected": rows }),
@@ -297,6 +309,7 @@ pub mod testing {
             sql: &str,
             _params: &[Value],
             _caller_role: Option<&str>,
+            _execution_id: Option<&str>,
         ) -> Result<Vec<Value>, ToolError> {
             let lower = sql.trim().to_lowercase();
             if let Some(rest) = lower.strip_prefix("select * from ") {
@@ -313,6 +326,7 @@ pub mod testing {
             sql: &str,
             params: &[Value],
             _caller_role: Option<&str>,
+            _execution_id: Option<&str>,
         ) -> Result<u64, ToolError> {
             let lower = sql.trim().to_lowercase();
             if let Some(rest) = lower.strip_prefix("insert into ") {
@@ -363,6 +377,7 @@ pub mod testing {
             sql: &str,
             params: &[Value],
             caller_role: Option<&str>,
+            _execution_id: Option<&str>,
         ) -> Result<Vec<Value>, ToolError> {
             self.query_calls.lock().unwrap().push((
                 sql.to_string(),
@@ -376,6 +391,7 @@ pub mod testing {
             sql: &str,
             params: &[Value],
             caller_role: Option<&str>,
+            _execution_id: Option<&str>,
         ) -> Result<u64, ToolError> {
             self.execute_calls.lock().unwrap().push((
                 sql.to_string(),

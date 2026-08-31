@@ -286,6 +286,94 @@ BEGIN
 END;
 $$;
 
+
+-- ---------------------------------------------------------------------------
+-- Row level provenance.
+--
+-- synapse.executions answers "what did this agent run". It cannot answer
+-- "which run produced this row", which is the question an auditor asks when
+-- they are looking at a row they do not trust.
+--
+-- Deliberately a side table rather than columns on the user's tables. Adding
+-- a _synapse_execution_id column to every generated table would pollute a
+-- schema the user owns, and could not work at all for brownfield apps, where
+-- the customer's database must not be modified.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS synapse.row_provenance (
+  execution_id  UUID NOT NULL,
+  table_schema  TEXT NOT NULL,
+  table_name    TEXT NOT NULL,
+  row_pk        TEXT,
+  op            TEXT NOT NULL,
+  written_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS row_provenance_row_idx
+  ON synapse.row_provenance (table_schema, table_name, row_pk);
+CREATE INDEX IF NOT EXISTS row_provenance_exec_idx
+  ON synapse.row_provenance (execution_id);
+
+-- Stamps a row with the execution that wrote it. Reads the execution id from
+-- the session setting the executor publishes; a write made outside an agent
+-- run has no id and is not recorded, which is correct: it had no agent
+-- provenance to record.
+--
+-- The primary key is discovered from the catalog rather than assumed to be
+-- "id", so this attaches to a table whose key is named anything.
+CREATE OR REPLACE FUNCTION synapse.record_provenance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  exec_id text := nullif(current_setting('synapse.execution_id', true), '');
+  pk_col   text;
+  pk_val   text;
+  rec      record;
+BEGIN
+  IF exec_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT a.attname INTO pk_col
+  FROM pg_index i
+  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+  WHERE i.indrelid = TG_RELID AND i.indisprimary
+  LIMIT 1;
+
+  IF pk_col IS NOT NULL THEN
+    rec := NEW;
+    EXECUTE format('SELECT ($1).%I::text', pk_col) INTO pk_val USING rec;
+  END IF;
+
+  INSERT INTO synapse.row_provenance
+    (execution_id, table_schema, table_name, row_pk, op)
+  VALUES (exec_id::uuid, TG_TABLE_SCHEMA, TG_TABLE_NAME, pk_val, TG_OP);
+
+  RETURN NULL;
+END;
+$$;
+
+-- Attach provenance recording to one table. Called by the builder for tables
+-- it creates, and available to an operator for a table they own.
+--
+-- SECURITY INVOKER by nature (plain LANGUAGE plpgsql, no DEFINER): creating a
+-- trigger is DDL on the caller's table and should need the caller's rights,
+-- for the same reason attach_agent_trigger does.
+CREATE OR REPLACE FUNCTION synapse.track_provenance(target_schema text, target_table text)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  EXECUTE format(
+    'DROP TRIGGER IF EXISTS synapse_provenance ON %I.%I',
+    target_schema, target_table);
+  EXECUTE format(
+    'CREATE TRIGGER synapse_provenance AFTER INSERT OR UPDATE ON %I.%I '
+    'FOR EACH ROW EXECUTE FUNCTION synapse.record_provenance()',
+    target_schema, target_table);
+END;
+$$;
+
 -- Operator-driven drain (pg_cron or a sidecar poller) runs synapse.drain_queue().
 -- A true background worker drain is the v0.2 upgrade (design spec D8).
 CREATE TABLE IF NOT EXISTS synapse.agent_queue (
@@ -312,6 +400,7 @@ GRANT SELECT ON synapse.questions   TO synapse_user;
 GRANT SELECT ON synapse.apps        TO synapse_user;
 GRANT SELECT ON synapse.app_agents  TO synapse_user;
 GRANT SELECT ON synapse.schedules   TO synapse_user;
+GRANT SELECT ON synapse.row_provenance TO synapse_user;
 
 -- synapse_owner runs every agent statement, so it needs exactly what the
 -- extension itself does and nothing more: its own schema, its own tables, and

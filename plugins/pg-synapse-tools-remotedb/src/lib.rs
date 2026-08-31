@@ -64,6 +64,7 @@ async fn resolve_connection(
              FROM synapse.connections WHERE name = $1",
             &[Value::String(name.to_owned())],
             None,
+            None,
         )
         .await?;
     let row = rows
@@ -97,6 +98,7 @@ async fn resolve_connection(
                 .query(
                     "SELECT value FROM synapse.secrets WHERE name = $1",
                     &[Value::String(secret_name.clone())],
+                    None,
                     None,
                 )
                 .await?;
@@ -205,7 +207,12 @@ impl Tool for RemoteQueryTool {
             resolve_connection(self.local.as_ref(), &args.connection, "remote_query").await?;
         let remote = open_remote(&info, "remote_query", true).await?;
         let rows = remote
-            .query(&args.query, &args.params, ctx.caller_role.as_deref())
+            .query(
+                &args.query,
+                &args.params,
+                ctx.caller_role.as_deref(),
+                Some(&ctx.execution_id.to_string()),
+            )
             .await?;
         Ok(ToolOutput::Json(Value::Array(rows)))
     }
@@ -237,7 +244,12 @@ impl Tool for RemoteExecTool {
         let info = resolve_connection(self.local.as_ref(), &args.connection, "remote_exec").await?;
         let remote = open_remote(&info, "remote_exec", false).await?;
         let rows_affected = remote
-            .execute(&args.query, &args.params, ctx.caller_role.as_deref())
+            .execute(
+                &args.query,
+                &args.params,
+                ctx.caller_role.as_deref(),
+                Some(&ctx.execution_id.to_string()),
+            )
             .await?;
         Ok(ToolOutput::Json(
             serde_json::json!({ "rows_affected": rows_affected }),
@@ -307,6 +319,7 @@ mod tests {
             sql: &str,
             params: &[Value],
             _caller_role: Option<&str>,
+            _execution_id: Option<&str>,
         ) -> Result<Vec<Value>, ToolError> {
             let name = params
                 .first()
@@ -340,6 +353,7 @@ mod tests {
             _sql: &str,
             _params: &[Value],
             _caller_role: Option<&str>,
+            _execution_id: Option<&str>,
         ) -> Result<u64, ToolError> {
             Ok(0)
         }
