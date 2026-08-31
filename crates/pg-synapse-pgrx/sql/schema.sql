@@ -86,9 +86,19 @@ CREATE TABLE IF NOT EXISTS synapse.embedding_profiles (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- pgcrypto backs the at-rest encryption of secret values. Available in every
--- standard Postgres distribution as a contrib module.
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- pgcrypto backs the at-rest encryption of secret values. It ships with most
+-- Postgres distributions but not all: a source build without contrib does not
+-- have it, and the pgrx test harness is exactly that. Its absence must not stop
+-- the extension installing, because encryption is opt in and everything else
+-- works without it. Attempting it and moving on is the honest behaviour;
+-- failing the whole install over an optional feature is not.
+DO $pgcrypto$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'pgcrypto unavailable: secret encryption cannot be enabled (%)', SQLERRM;
+END
+$pgcrypto$;
 
 CREATE TABLE IF NOT EXISTS synapse.secrets (
   name        TEXT PRIMARY KEY,
@@ -108,20 +118,35 @@ CREATE TABLE IF NOT EXISTS synapse.secrets (
 -- expression is a second chance to get it wrong. Returns NULL for an unknown
 -- name rather than raising, because a missing secret is a condition the caller
 -- reports, not an exception.
+-- plpgsql rather than sql on purpose: a sql function body is parsed when the
+-- function is created, so referencing pgp_sym_decrypt would make this
+-- uncreatable wherever pgcrypto is missing. plpgsql defers that to call time,
+-- so the function exists everywhere and only fails if someone actually stores
+-- an encrypted secret on a server that cannot decrypt one.
 CREATE OR REPLACE FUNCTION synapse.secret_value(secret_name text)
 RETURNS text
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
-AS $$
-  SELECT CASE
-           WHEN s.is_encrypted
-           THEN pgp_sym_decrypt(dearmor(s.value),
-                  current_setting('pg_synapse.master_key', true))
-           ELSE s.value
-         END
-  FROM synapse.secrets s
-  WHERE s.name = secret_name
-$$;
+AS $secret_value$
+DECLARE
+  raw text;
+  enc boolean;
+  out_val text;
+BEGIN
+  SELECT s.value, s.is_encrypted INTO raw, enc
+  FROM synapse.secrets s WHERE s.name = secret_name;
+  IF raw IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF NOT enc THEN
+    RETURN raw;
+  END IF;
+  EXECUTE
+    'SELECT pgp_sym_decrypt(dearmor($1), current_setting(''pg_synapse.master_key'', true))'
+    INTO out_val USING raw;
+  RETURN out_val;
+END
+$secret_value$;
 
 -- Named connections to an external Postgres database, for the
 -- remote_query / remote_exec tools (pg-synapse-tools-remotedb). password
