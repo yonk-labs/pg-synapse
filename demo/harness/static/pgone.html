@@ -84,6 +84,21 @@
   #build-trace summary { cursor:pointer; color:var(--muted); font-size:13px; }
   #build-trace pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px;
     font-family:var(--mono); font-size:12px; white-space:pre-wrap; margin-top:8px; max-height:280px; overflow:auto; }
+  .q-intro { color:var(--muted); font-size:12.5px; line-height:1.6; margin-bottom:14px; max-width:640px; }
+  .q-card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:10px; }
+  .q-card .q-ask { font-weight:600; font-size:14px; margin-bottom:8px; }
+  .q-card .q-meta { color:var(--muted); font-size:11.5px; font-family:var(--mono); margin-bottom:10px; }
+  .q-card details { margin-top:10px; }
+  .q-card details summary { color:var(--muted); font-size:12px; cursor:pointer; }
+  .q-card details pre { background:#0d1117; border:1px solid var(--border); border-radius:8px;
+    padding:10px; overflow-x:auto; font-size:11.5px; margin-top:8px; white-space:pre-wrap; }
+  .q-result { margin-top:12px; }
+  .q-unconfirmed { color:#e0a458; font-size:11.5px; margin-bottom:8px; }
+  .q-new { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
+  .q-new summary { color:var(--muted); font-size:12.5px; cursor:pointer; margin-bottom:12px; }
+  .q-new input[type=text], .q-new textarea { width:100%; margin-bottom:8px; }
+  .q-new textarea { min-height:70px; font-family:var(--mono); font-size:12px; }
+  .q-confirm { display:block; color:var(--muted); font-size:12px; margin-bottom:10px; }
   .goto-apps { margin-top:44px; }
   .goto-apps a { color:var(--muted); font-size:13px; }
 
@@ -297,6 +312,7 @@
     <div class="seg">
       <button data-pane="run" class="active">Run</button>
       <button data-pane="tables">Tables</button>
+      <button data-pane="questions">Questions</button>
       <button data-pane="embed">Embed / API</button>
     </div>
 
@@ -310,6 +326,24 @@
     <div class="pane" id="pane-tables">
       <div id="tables-list"></div>
       <div id="table-data"><div class="hint">no dedicated schema found for this app yet</div></div>
+    </div>
+
+    <div class="pane" id="pane-questions">
+      <div class="q-intro">
+        A question is compiled to SQL once, then answered by Postgres every time
+        after that. No model runs when you ask it, so the answer is the same
+        every time and costs nothing.
+      </div>
+      <div id="q-list"></div>
+      <details class="q-new">
+        <summary>save a new question</summary>
+        <input type="text" id="q-name" placeholder="short_name" />
+        <input type="text" id="q-nl" placeholder="What do you want to know?" />
+        <textarea id="q-sql" placeholder="SELECT ..."></textarea>
+        <label class="q-confirm"><input type="checkbox" id="q-ok" /> I have read this SQL and approve it</label>
+        <div><button class="btn primary" id="q-save">Save question</button></div>
+        <div id="q-save-status"></div>
+      </details>
     </div>
 
     <div class="pane" id="pane-embed">
@@ -729,6 +763,7 @@ function openDetail(name) {
   showView("detail");
   setPane("run");
   loadAgentTables(a.name);
+  loadQuestions(a.name);
   renderEmbed(a.name, document.querySelector(".embed-tabs button.active")?.dataset.embed || "sql");
 }
 document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.onclick = () => setPane(b.dataset.pane));
@@ -805,6 +840,69 @@ async function loadTableData(schema, table) {
       return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
     }).join("") + "</tr>").join("") + "</table>";
 }
+
+// ---- named questions ----
+// A question stores the SQL it compiled to. Showing that SQL is deliberate: a
+// DBA who can read the query before trusting it is the difference between a
+// governed feature and a black box.
+async function loadQuestions(app) {
+  const list = $("q-list");
+  list.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/questions");
+  if (!r.ok) { list.innerHTML = '<div class="hint">' + esc(r.error || "could not load questions") + '</div>'; return; }
+  if (!r.questions || !r.questions.length) {
+    list.innerHTML = '<div class="hint">no saved questions yet. Save one below, and it becomes an endpoint you can call from anywhere.</div>';
+    return;
+  }
+  list.innerHTML = r.questions.map((q) =>
+    '<div class="q-card" data-q="' + esc(q.name) + '">' +
+      '<div class="q-ask">' + esc(q.nl_text) + '</div>' +
+      '<div class="q-meta">GET /api/app/' + esc(app) + '/q/' + esc(q.name) + '</div>' +
+      (q.confirmed ? "" : '<div class="q-unconfirmed">not reviewed yet, so it will not run</div>') +
+      '<button class="btn primary" data-run="' + esc(q.name) + '"' + (q.confirmed ? "" : " disabled") + '>Ask</button>' +
+      '<details><summary>the SQL this compiles to</summary><pre>' + esc(q.sql_text || "") + '</pre></details>' +
+      '<div class="q-result"></div>' +
+    '</div>'
+  ).join("");
+  list.querySelectorAll("button[data-run]").forEach((b) => b.onclick = () => runQuestion(app, b.dataset.run));
+}
+
+async function runQuestion(app, name) {
+  const card = document.querySelector('.q-card[data-q="' + CSS.escape(name) + '"]');
+  const out = card.querySelector(".q-result");
+  out.innerHTML = '<div class="hint">asking...</div>';
+  const t0 = performance.now();
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/q/" + encodeURIComponent(name));
+  const ms = Math.round(performance.now() - t0);
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "failed") + '</div>'; return; }
+  if (!r.rows || !r.rows.length) { out.innerHTML = '<div class="hint">no rows</div>'; return; }
+  const cols = Object.keys(r.rows[0]);
+  out.innerHTML = "<table class='data-table'><tr>" + cols.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr>" +
+    r.rows.map((row) => "<tr>" + cols.map((c) => {
+      const v = row[c]; const d = (v === null || v === undefined) ? "" : String(v);
+      return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
+    }).join("") + "</tr>").join("") + "</table>" +
+    '<div class="q-meta" style="margin-top:8px">' + r.row_count + ' rows in ' + ms + 'ms, no model involved</div>';
+}
+
+$("q-save").onclick = async () => {
+  const st = $("q-save-status");
+  const body = {
+    app: CURRENT_AGENT,
+    name: ($("q-name").value || "").trim(),
+    nl_text: ($("q-nl").value || "").trim(),
+    kind: "sql",
+    sql_text: ($("q-sql").value || "").trim(),
+    confirmed: $("q-ok").checked,
+  };
+  if (!body.name || !body.nl_text || !body.sql_text) { st.textContent = "name, question, and SQL are all required"; return; }
+  st.textContent = "saving...";
+  const r = await api("/api/question", "POST", body);
+  if (!r.ok) { st.textContent = r.error || "save failed"; return; }
+  st.textContent = r.confirmed ? "saved" : "saved, but unreviewed so it will not run until approved";
+  $("q-name").value = ""; $("q-nl").value = ""; $("q-sql").value = ""; $("q-ok").checked = false;
+  loadQuestions(CURRENT_AGENT);
+};
 
 // ---- embed / API snippets ----
 document.querySelectorAll(".embed-tabs button").forEach((b) => b.onclick = () => {
