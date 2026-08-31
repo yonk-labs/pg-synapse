@@ -515,6 +515,66 @@ RETURNS void LANGUAGE sql SECURITY DEFINER AS $$
           now())
 $$;
 
+
+-- Remove an app: its record, its agents, its schedules and its saved
+-- questions. Optionally its data too.
+--
+-- Two decisions worth stating, because both are easy to get wrong silently.
+--
+-- **Data is kept unless asked for.** Dropping an app you built by mistake
+-- should not be the same keystroke as destroying the rows it collected. The
+-- schema survives by default and `drop_data` has to be asked for explicitly.
+--
+-- **The audit trail always survives.** synapse.executions and
+-- synapse.row_provenance are untouched either way. Deleting an app is not a
+-- way to erase what its agents did: an audit history you can remove by
+-- deleting the thing it audits is not an audit history. Provenance rows point
+-- at tables that may no longer exist, which is correct; they record what
+-- happened, not what currently is.
+CREATE OR REPLACE FUNCTION synapse.app_drop(app_name text, drop_data boolean DEFAULT false)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $app_drop$
+DECLARE
+  target_schema text;
+  agent_names   text[];
+  n_questions   int;
+  n_schedules   int;
+BEGIN
+  SELECT a.schema_name INTO target_schema FROM synapse.apps a WHERE a.name = app_name;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'no app named "%"', app_name;
+  END IF;
+
+  SELECT COALESCE(array_agg(agent), '{}') INTO agent_names
+  FROM synapse.app_agents WHERE app = app_name;
+
+  SELECT count(*) INTO n_questions FROM synapse.questions WHERE app = app_name;
+  SELECT count(*) INTO n_schedules FROM synapse.schedules WHERE app = app_name;
+
+  DELETE FROM synapse.questions WHERE app = app_name;
+  -- app_agents and schedules cascade from synapse.apps.
+  DELETE FROM synapse.apps WHERE name = app_name;
+  DELETE FROM synapse.agents WHERE name = ANY(agent_names);
+  DELETE FROM synapse.agent_queue
+   WHERE agent = ANY(agent_names) AND status IN ('queued', 'running');
+
+  IF drop_data AND target_schema IS NOT NULL THEN
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', target_schema);
+  END IF;
+
+  RETURN jsonb_build_object(
+    'app', app_name,
+    'agents_removed', agent_names,
+    'questions_removed', n_questions,
+    'schedules_removed', n_schedules,
+    'schema', target_schema,
+    'data_dropped', drop_data AND target_schema IS NOT NULL,
+    'audit_kept', true
+  );
+END
+$app_drop$;
+
 -- Operator-driven drain (pg_cron or a sidecar poller) runs synapse.drain_queue().
 -- A true background worker drain is the v0.2 upgrade (design spec D8).
 CREATE TABLE IF NOT EXISTS synapse.agent_queue (

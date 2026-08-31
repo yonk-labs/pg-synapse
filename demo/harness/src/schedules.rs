@@ -198,6 +198,39 @@ pub async fn all_runs(State(state): State<AppState>) -> Result<Json<Value>, Harn
     ))
 }
 
+#[derive(serde::Deserialize)]
+pub struct DropReq {
+    /// Destroy the app's schema and its rows as well as its definition.
+    /// Defaults to false: removing an app you built by mistake must not be the
+    /// same keystroke as destroying the data it collected.
+    #[serde(default)]
+    pub drop_data: bool,
+}
+
+/// Remove an app. Its audit history is kept either way.
+pub async fn app_drop(
+    State(state): State<AppState>,
+    Path(app): Path<String>,
+    Json(req): Json<DropReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let row = client
+        .query_one(
+            "SELECT synapse.app_drop($1, $2)::text",
+            &[&app, &req.drop_data],
+        )
+        .await
+        .map_err(|e| {
+            HarnessError::BadRequest(
+                e.as_db_error()
+                    .map(|d| d.message().to_owned())
+                    .unwrap_or_else(|| e.to_string()),
+            )
+        })?;
+    let summary: Value = serde_json::from_str(&row.get::<_, String>(0)).unwrap_or(Value::Null);
+    Ok(Json(json!({"ok": true, "removed": summary})))
+}
+
 /// Observed build performance, measured rather than asserted.
 ///
 /// SC-003 requires that time-to-working-app be published from real runs

@@ -6,6 +6,7 @@
 mod api;
 mod db;
 mod error;
+mod files;
 mod mcp;
 mod questions;
 mod runs;
@@ -136,6 +137,9 @@ async fn main() {
         .route("/api/execution/{execution_id}", get(api::execution_detail))
         .route("/api/scenario/{id}", post(api::scenario_load))
         .route("/api/upload", post(api::upload_file))
+        .route("/api/files", get(files::list))
+        .route("/api/file/{filename}/process", post(files::process))
+        .route("/api/file/{filename}/delete", post(files::delete))
         .route("/api/upload/sample", post(api::upload_sample))
         .route(
             "/api/connection",
@@ -146,6 +150,7 @@ async fn main() {
         .route("/api/connection/{name}/gate", get(scan::gate))
         .route("/mcp", post(mcp::rpc))
         .route("/api/apps", get(schedules::app_list))
+        .route("/api/app/{app}/drop", post(schedules::app_drop))
         .route("/api/runs", get(schedules::all_runs))
         .route("/api/build-metrics", get(schedules::build_metrics))
         .route("/api/app/{app}/schedules", get(schedules::schedule_list))
