@@ -141,6 +141,7 @@ async fn main() {
         )
         .route("/api/apps", get(schedules::app_list))
         .route("/api/runs", get(schedules::all_runs))
+        .route("/api/build-metrics", get(schedules::build_metrics))
         .route("/api/app/{app}/schedules", get(schedules::schedule_list))
         .route("/api/app/{app}/runs", get(schedules::app_runs))
         .route("/api/schedule", post(schedules::schedule_add))

@@ -110,6 +110,40 @@ REVOKE ALL ON synapse.secrets FROM synapse_user;
 -- pg_read_file.
 GRANT USAGE, CREATE ON SCHEMA public TO synapse_owner;
 
+-- Apps built before this ownership change are owned by the installing
+-- superuser, so the agent that maintains them (now synapse_owner) cannot ALTER
+-- their tables: "must be owner of table". Anything built from here on is
+-- created by synapse_owner and owned correctly on the way in, so this is a
+-- one-time adoption of what already exists rather than ongoing policy.
+--
+-- Scoped to schemas registered in synapse.apps. A table the user made and
+-- never told pg-one about is left alone, and giving an agent ownership of it
+-- stays an explicit operator decision.
+DO $adopt_existing_apps$
+DECLARE
+  r record;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='synapse' AND tablename='apps') THEN
+    RETURN;
+  END IF;
+  FOR r IN SELECT n.nspname FROM pg_namespace n
+           JOIN synapse.apps a ON a.schema_name = n.nspname
+  LOOP
+    EXECUTE format('ALTER SCHEMA %I OWNER TO synapse_owner', r.nspname);
+  END LOOP;
+  FOR r IN SELECT schemaname, tablename FROM pg_tables
+           WHERE schemaname IN (SELECT schema_name FROM synapse.apps WHERE schema_name IS NOT NULL)
+  LOOP
+    EXECUTE format('ALTER TABLE %I.%I OWNER TO synapse_owner', r.schemaname, r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequence_schema, sequence_name FROM information_schema.sequences
+           WHERE sequence_schema IN (SELECT schema_name FROM synapse.apps WHERE schema_name IS NOT NULL)
+  LOOP
+    EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO synapse_owner', r.sequence_schema, r.sequence_name);
+  END LOOP;
+END
+$adopt_existing_apps$;
+
 DO $harden_ownership$
 DECLARE
   fn record;

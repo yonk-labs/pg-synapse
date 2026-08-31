@@ -198,6 +198,41 @@ pub async fn all_runs(State(state): State<AppState>) -> Result<Json<Value>, Harn
     ))
 }
 
+/// Observed build performance, measured rather than asserted.
+///
+/// SC-003 requires that time-to-working-app be published from real runs
+/// instead of quoted as a marketing number. This reports p50 and p90 over
+/// actual app_builder executions, and says plainly when there is not enough
+/// data to have an opinion.
+pub async fn build_metrics(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let m = db::jsonb_one(
+        &client,
+        "SELECT to_jsonb(m)::text FROM ( \
+           SELECT count(*) AS builds, \
+                  count(*) FILTER (WHERE status = 'completed') AS succeeded, \
+                  percentile_disc(0.5) WITHIN GROUP (ORDER BY duration_ms) AS p50_ms, \
+                  percentile_disc(0.9) WITHIN GROUP (ORDER BY duration_ms) AS p90_ms, \
+                  max(duration_ms) AS max_ms \
+           FROM synapse.executions WHERE agent_name = 'app_builder') m",
+        &[],
+    )
+    .await?;
+    let builds = m.get("builds").and_then(Value::as_i64).unwrap_or(0);
+    Ok(Json(json!({
+        "ok": true,
+        "metrics": m,
+        // Refusing to quote a percentile from three samples is the honest
+        // behaviour, and the threshold is stated rather than hidden.
+        "sufficient_data": builds >= 10,
+        "note": if builds >= 10 {
+            "p50 and p90 measured from real builds"
+        } else {
+            "fewer than 10 builds recorded; these numbers are indicative, not a promise"
+        }
+    })))
+}
+
 /// The scheduler driver: call `synapse.tick()` on a cadence, then drain what it
 /// enqueued.
 ///

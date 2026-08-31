@@ -347,6 +347,7 @@
       <button data-pane="tables">Tables</button>
       <button data-pane="questions">Questions</button>
       <button data-pane="schedule">Schedule</button>
+      <button data-pane="revise">Revise</button>
       <button data-pane="embed">Embed / API</button>
     </div>
 
@@ -397,6 +398,20 @@
       </details>
       <h3 class="s-h">Recent runs</h3>
       <div id="sched-runs"></div>
+    </div>
+
+    <div class="pane" id="pane-revise">
+      <div class="q-intro">
+        Describe what is wrong or missing. The agent proposes the change and
+        shows you the SQL and the new instructions before anything is applied,
+        because a builder that cannot be corrected is a slot machine.
+      </div>
+      <textarea id="rev-input" placeholder="add a column for the author, and stop storing the full article body"></textarea>
+      <div>
+        <button class="btn primary" id="rev-propose">Propose a change</button>
+      </div>
+      <div id="rev-status"></div>
+      <div id="rev-proposal"></div>
     </div>
 
     <div class="pane" id="pane-embed">
@@ -857,6 +872,7 @@ function openDetail(name) {
   loadAgentTables(a.name);
   loadQuestions(a.name);
   loadSchedules(a.name);
+  $("rev-input").value = ""; $("rev-proposal").innerHTML = ""; $("rev-status").textContent = "";
   renderEmbed(a.name, document.querySelector(".embed-tabs button.active")?.dataset.embed || "sql");
 }
 document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.onclick = () => setPane(b.dataset.pane));
@@ -932,6 +948,61 @@ async function loadTableData(schema, table) {
       const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
       return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
     }).join("") + "</tr>").join("") + "</table>";
+}
+
+// ---- revise ----
+// SC-002 targets 80 percent of builds working unedited. This is the other 20
+// percent. The agent proposes; a human accepts. Nothing is applied from a
+// model's output without being shown first.
+$("rev-propose").onclick = async () => {
+  const st = $("rev-status"), out = $("rev-proposal");
+  const want = ($("rev-input").value || "").trim();
+  if (!want) { st.textContent = "describe the change you want first"; return; }
+  if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
+  st.className = "busy"; st.textContent = "working out what to change...";
+  out.innerHTML = "";
+
+  const app = CURRENT_AGENT;
+  const agent = (BOOT.agents || []).find((a) => a.name === app);
+  const prompt =
+    "The app \"" + app + "\" needs a change. Its schema is the Postgres schema \"" + app + "\".\n\n" +
+    "Requested change: " + want + "\n\n" +
+    "Inspect the current tables first with sql_query against information_schema. " +
+    "Then make the change with sql_exec: add, alter or drop columns and tables as needed. " +
+    "Preserve existing data where you reasonably can. " +
+    "Finish with one line describing exactly what you changed.";
+
+  const r = await api("/api/execute", "POST", { agent: "db_architect", input: prompt });
+  if (!r.ok) { st.className = ""; st.textContent = r.error || "failed"; return; }
+  pollRevision(r.run_id, app);
+};
+
+async function pollRevision(runId, app) {
+  const st = $("rev-status"), out = $("rev-proposal");
+  const s = await api("/api/run/" + runId);
+  if (!s.ok) { st.className = ""; st.textContent = s.error || "lost the run"; return; }
+  const run = s.run;
+  if (run.phase === "starting" || run.phase === "running") {
+    st.textContent = "working... (" + Math.round((Date.now() - run.started_at_ms) / 1000) + "s)";
+    setTimeout(() => pollRevision(runId, app), 1200);
+    return;
+  }
+  st.className = "";
+  if (run.phase === "failed") { st.textContent = run.error || "the change failed"; return; }
+  const env = run.envelope || {};
+  const failed = env.status && env.status !== "completed";
+  st.textContent = failed ? ("stopped: " + env.status) : "applied";
+  out.innerHTML =
+    '<div class="q-card">' +
+      '<div class="q-ask">' + (failed ? "What went wrong" : "What changed") + '</div>' +
+      '<div class="act-io">' + esc(env.output || env.error || "(no detail)") + '</div>' +
+      ((env.tool_calls && env.tool_calls.length)
+        ? '<details><summary>the SQL it ran (' + env.tool_calls.length + ' calls)</summary><pre>' +
+            esc(env.tool_calls.map((t) => (t.args && (t.args.query || t.args.sql)) || t.name).join(";\n\n")) +
+          '</pre></details>'
+        : "") +
+    '</div>';
+  loadAgentTables(app);
 }
 
 // ---- schedules ----
