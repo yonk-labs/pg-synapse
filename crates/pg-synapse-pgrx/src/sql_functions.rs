@@ -61,6 +61,18 @@ fn resolve_trace_level(agent_name: &str) -> pg_synapse_core::types::TraceLevel {
 ///
 /// Best effort by design: a failure to record a failure must not itself
 /// become an error the caller sees.
+/// The configured secret-encryption key, if any.
+///
+/// Returned as an owned String because the GUC is read once per call and the
+/// value must not outlive it. `None` means encryption is off, which is what
+/// every install that has not opted in will see.
+pub(crate) fn master_key() -> Option<String> {
+    crate::schema_guc::MASTER_KEY
+        .get()
+        .and_then(|c: std::ffi::CString| c.into_string().ok())
+        .filter(|k: &String| !k.trim().is_empty())
+}
+
 pub(crate) fn log_failed_execution(agent: &str, input: &str, error: &str, caller: Option<&str>) {
     use pgrx::datum::DatumWithOid;
     let args: Vec<DatumWithOid<'_>> = vec![
@@ -418,11 +430,35 @@ pub(crate) mod synapse {
             DatumWithOid::from(name.to_string()),
             DatumWithOid::from(value.to_string()),
         ];
-        Spi::run_with_args(
-            "INSERT INTO synapse.secrets (name, value) VALUES ($1,$2) ON CONFLICT (name) DO UPDATE SET value=EXCLUDED.value, updated_at=now()",
-            &args,
-        )
-        .unwrap();
+        // With a key configured the value is stored as pgcrypto ciphertext and
+        // flagged, so a database dump yields nothing usable on its own. Without
+        // one it is stored as before: turning encryption on is an operator
+        // decision, and a secret written before that decision stays readable
+        // after it.
+        match super::master_key() {
+            Some(key) => {
+                let enc_args: Vec<DatumWithOid<'_>> = vec![
+                    DatumWithOid::from(name.to_string()),
+                    DatumWithOid::from(value.to_string()),
+                    DatumWithOid::from(key),
+                ];
+                Spi::run_with_args(
+                    "INSERT INTO synapse.secrets (name, value, is_encrypted) \
+                     VALUES ($1, armor(pgp_sym_encrypt($2, $3)), true) \
+                     ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, \
+                       is_encrypted = true, updated_at = now()",
+                    &enc_args,
+                )
+                .unwrap_or_else(|e| pgrx::error!("could not encrypt secret: {e}"));
+            }
+            None => {
+                Spi::run_with_args(
+                    "INSERT INTO synapse.secrets (name, value, is_encrypted) VALUES ($1,$2,false) ON CONFLICT (name) DO UPDATE SET value=EXCLUDED.value, is_encrypted=false, updated_at=now()",
+                    &args,
+                )
+                .unwrap();
+            }
+        }
         rebuild_kernel();
     }
 

@@ -86,12 +86,42 @@ CREATE TABLE IF NOT EXISTS synapse.embedding_profiles (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- pgcrypto backs the at-rest encryption of secret values. Available in every
+-- standard Postgres distribution as a contrib module.
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE TABLE IF NOT EXISTS synapse.secrets (
   name        TEXT PRIMARY KEY,
+  -- Ciphertext when is_encrypted, plaintext otherwise. Two representations in
+  -- one column rather than two columns, because a secret is exactly one value
+  -- and a schema that can hold both at once invites them to disagree.
   value       TEXT NOT NULL,
+  is_encrypted BOOLEAN NOT NULL DEFAULT false,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The single place a secret is turned back into its value.
+--
+-- Two callers need this (the profile source when building the kernel, and the
+-- remote-database tools when opening a connection) and a second copy of the
+-- expression is a second chance to get it wrong. Returns NULL for an unknown
+-- name rather than raising, because a missing secret is a condition the caller
+-- reports, not an exception.
+CREATE OR REPLACE FUNCTION synapse.secret_value(secret_name text)
+RETURNS text
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT CASE
+           WHEN s.is_encrypted
+           THEN pgp_sym_decrypt(dearmor(s.value),
+                  current_setting('pg_synapse.master_key', true))
+           ELSE s.value
+         END
+  FROM synapse.secrets s
+  WHERE s.name = secret_name
+$$;
 
 -- Named connections to an external Postgres database, for the
 -- remote_query / remote_exec tools (pg-synapse-tools-remotedb). password

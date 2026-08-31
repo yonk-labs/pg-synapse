@@ -96,7 +96,7 @@ async fn resolve_connection(
         Some(secret_name) => {
             let srows = local
                 .query(
-                    "SELECT value FROM synapse.secrets WHERE name = $1",
+                    "SELECT synapse.secret_value($1) AS value",
                     &[Value::String(secret_name.clone())],
                     None,
                     None,
@@ -336,7 +336,10 @@ mod tests {
                     .into_iter()
                     .collect());
             }
-            if sql.contains("synapse.secrets") {
+            // Matches the secret lookup by function name, which is what the
+            // real query now uses: decryption lives in synapse.secret_value so
+            // there is one expression rather than one per caller.
+            if sql.contains("synapse.secret_value") || sql.contains("synapse.secrets") {
                 return Ok(self
                     .secrets
                     .lock()

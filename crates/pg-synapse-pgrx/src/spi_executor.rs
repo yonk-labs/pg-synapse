@@ -461,7 +461,11 @@ impl ProfileSource for SpiProfileSource {
             let arg: DatumWithOid<'_> = DatumWithOid::from(names_owned);
             let table = client
                 .select(
-                    "SELECT name, value FROM synapse.secrets WHERE name = ANY($1)",
+                    // synapse.secret_value is the single decrypt path, shared
+                    // with the remote-database tools so there is one
+                    // expression to get right rather than two.
+                    "SELECT name, synapse.secret_value(name) AS value \
+                     FROM synapse.secrets WHERE name = ANY($1)",
                     None,
                     &[arg],
                 )
