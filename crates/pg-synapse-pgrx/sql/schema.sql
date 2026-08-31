@@ -120,6 +120,12 @@ CREATE TABLE IF NOT EXISTS synapse.executions (
   cost_usd      NUMERIC(12,6),
   duration_ms   BIGINT,
   caller_role   TEXT,
+  -- The model that answered this run, resolved from the agent's LLM profile
+  -- when the row is written. Auditability needs to answer "which model
+  -- produced this", not just "which agent". Resolved at write time rather
+  -- than carried through the kernel, so if a profile is repointed mid-run
+  -- this records the profile as it stood when the run finished.
+  model         TEXT,
   started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at   TIMESTAMPTZ
 );

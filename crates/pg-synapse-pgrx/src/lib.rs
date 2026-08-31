@@ -973,3 +973,71 @@ pub mod pg_test {
         vec![]
     }
 }
+
+/// Map an `execute` envelope onto a queue terminal status.
+///
+/// The queue used to decide this by asking whether an `error` key was present,
+/// which is true only for `OutcomeStatus::Errored`. That left three other
+/// non-success terminal states recorded as `done`: `max_iterations`,
+/// `timed_out`, and `cost_cap_exceeded`. The last two are the wall-clock and
+/// cost guardrails firing, so a guardrail doing its job was being written down
+/// as a successful run, and anyone auditing `synapse.agent_queue` to ask
+/// whether last night's scheduled work completed got the wrong answer.
+///
+/// Only `completed` is a success. Everything else carries a reason.
+///
+/// Returned as (queue status, error reason). Pure, so it is testable without a
+/// live Postgres backend.
+pub(crate) fn queue_status_for(envelope: &serde_json::Value) -> (&'static str, Option<String>) {
+    let status = envelope
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("errored");
+    if status == "completed" {
+        return ("done", None);
+    }
+    let reason = envelope
+        .get("error")
+        .and_then(|e| e.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("run ended with status \"{status}\""));
+    ("error", Some(reason))
+}
+
+#[cfg(test)]
+mod queue_status_tests {
+    use super::queue_status_for;
+    use serde_json::json;
+
+    #[test]
+    fn completed_is_the_only_success() {
+        let (status, err) = queue_status_for(&json!({"status": "completed", "output": "hi"}));
+        assert_eq!(status, "done");
+        assert!(err.is_none());
+    }
+
+    /// The regression this function exists for. Each of these previously
+    /// landed as "done" because no `error` key was present.
+    #[test]
+    fn guardrail_outcomes_are_errors_not_successes() {
+        for s in ["timed_out", "cost_cap_exceeded", "max_iterations"] {
+            let (status, err) = queue_status_for(&json!({"status": s, "output": "partial"}));
+            assert_eq!(status, "error", "{s} must not be recorded as done");
+            assert!(err.unwrap().contains(s), "{s} must say why it stopped");
+        }
+    }
+
+    #[test]
+    fn errored_keeps_its_own_message() {
+        let (status, err) = queue_status_for(&json!({"status": "errored", "error": "boom"}));
+        assert_eq!(status, "error");
+        assert_eq!(err.as_deref(), Some("boom"));
+    }
+
+    /// A malformed envelope is treated as a failure, never as a success.
+    #[test]
+    fn missing_status_is_not_a_success() {
+        let (status, _) = queue_status_for(&json!({}));
+        assert_eq!(status, "error");
+    }
+}

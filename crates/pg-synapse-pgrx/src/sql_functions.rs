@@ -50,6 +50,41 @@ fn resolve_trace_level(agent_name: &str) -> pg_synapse_core::types::TraceLevel {
     level_str.and_then(|s| s.parse().ok()).unwrap_or_default()
 }
 
+/// Record a run that failed before producing an outcome.
+///
+/// `log_execution` needs an `ExecutorOutcome`, which a failed run never
+/// produces, so failures used to write nothing to `synapse.executions` at all:
+/// cost cap trips, kernel build failures, provider errors, and endpoint
+/// outages all vanished. That left the audit table containing only runs that
+/// succeeded, which quietly over-reports success and defeats the point of
+/// having it.
+///
+/// Best effort by design: a failure to record a failure must not itself
+/// become an error the caller sees.
+pub(crate) fn log_failed_execution(agent: &str, input: &str, error: &str, caller: Option<&str>) {
+    use pgrx::datum::DatumWithOid;
+    let args: Vec<DatumWithOid<'_>> = vec![
+        DatumWithOid::from(uuid::Uuid::new_v4().to_string()),
+        DatumWithOid::from(agent.to_string()),
+        DatumWithOid::from(input.to_string()),
+        DatumWithOid::from(error.to_string()),
+        match caller {
+            Some(c) => DatumWithOid::from(c.to_string()),
+            None => DatumWithOid::null::<String>(),
+        },
+    ];
+    let _ = Spi::run_with_args(
+        "INSERT INTO synapse.executions \
+           (execution_id, agent_name, input, output, status, caller_role, model, finished_at) \
+         VALUES ($1::uuid, $2, $3, $4, 'errored', $5, \
+           (SELECT p.model FROM synapse.agents a \
+              JOIN synapse.llm_profiles p ON p.name = a.llm_profile_main \
+             WHERE a.name = $2), \
+           now())",
+        &args,
+    );
+}
+
 pub(crate) fn log_execution(
     o: &pg_synapse_core::types::ExecutorOutcome,
     agent: &str,
@@ -96,7 +131,15 @@ pub(crate) fn log_execution(
     ];
 
     Spi::run_with_args(
-        "INSERT INTO synapse.executions (execution_id, agent_name, input, output, status, tokens_in, tokens_out, cost_usd, duration_ms, caller_role, finished_at) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())",
+        // `model` is resolved inline from the agent's profile rather than
+        // passed in: ExecutorOutcome does not carry it, and a subquery costs
+        // nothing extra here while a kernel change would touch every executor.
+        "INSERT INTO synapse.executions (execution_id, agent_name, input, output, status, tokens_in, tokens_out, cost_usd, duration_ms, caller_role, model, finished_at) \
+         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, \
+           (SELECT p.model FROM synapse.agents a \
+              JOIN synapse.llm_profiles p ON p.name = a.llm_profile_main \
+             WHERE a.name = $2), \
+           now())",
         &args,
     )
     .map_err(|e| e.to_string())?;
@@ -170,7 +213,7 @@ pub(crate) mod synapse {
     use pgrx::prelude::*;
     use serde_json::json;
 
-    use super::{log_execution, resolve_trace_level, status_label};
+    use super::{log_execution, log_failed_execution, resolve_trace_level, status_label};
     use crate::runtime_holder::{kernel_handle, rebuild_kernel, tokio};
 
     /// Run the named agent against `input`. Returns a JSON object with the
@@ -220,10 +263,14 @@ pub(crate) mod synapse {
                     })).collect::<Vec<_>>(),
                 }))
             }
-            Err(e) => JsonB(json!({
-                "error": e.to_string(),
-                "status": "errored",
-            })),
+            Err(e) => {
+                let msg = e.to_string();
+                log_failed_execution(agent_name, input, &msg, caller_role.as_deref());
+                JsonB(json!({
+                    "error": msg,
+                    "status": "errored",
+                }))
+            }
         }
     }
 
@@ -776,20 +823,10 @@ pub(crate) mod synapse {
             // Re-use the existing execute path (calls into the kernel).
             let result_jsonb = execute(&agent, &input);
 
-            // Determine done vs error from the returned envelope.
-            let (new_status, result_val, error_val) = {
-                let v = &result_jsonb.0;
-                if v.get("error").is_some() {
-                    let err_str = v
-                        .get("error")
-                        .and_then(|e| e.as_str())
-                        .unwrap_or("unknown error")
-                        .to_string();
-                    ("error", None::<serde_json::Value>, Some(err_str))
-                } else {
-                    ("done", Some(v.clone()), None)
-                }
-            };
+            // Decide the queue's terminal status from the envelope. See
+            // `queue_status_for`: only "completed" is a success.
+            let (new_status, error_val) = crate::queue_status_for(&result_jsonb.0);
+            let result_val = Some(result_jsonb.0.clone());
 
             let fin_args: Vec<DatumWithOid<'_>> = vec![
                 DatumWithOid::from(new_status.to_string()),
