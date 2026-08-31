@@ -8,6 +8,7 @@ mod db;
 mod error;
 mod questions;
 mod runs;
+mod scan;
 mod scenarios;
 mod schedules;
 
@@ -139,6 +140,9 @@ async fn main() {
             "/api/connection",
             get(api::connection_list).post(api::connection_add),
         )
+        .route("/api/connection/{name}/scan", post(scan::scan))
+        .route("/api/connection/{name}/review", post(scan::review))
+        .route("/api/connection/{name}/gate", get(scan::gate))
         .route("/api/apps", get(schedules::app_list))
         .route("/api/runs", get(schedules::all_runs))
         .route("/api/build-metrics", get(schedules::build_metrics))

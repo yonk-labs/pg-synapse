@@ -62,6 +62,14 @@ CREATE TABLE IF NOT EXISTS synapse.llm_profiles (
   api_key_secret   TEXT,
   base_url         TEXT,
   params           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- The scan of this database, and whether a human has confirmed it. An agent
+  -- must not be pointed at a database nobody has looked at: the scan is what a
+  -- generated agent reads so it does not invent column names, and the
+  -- confirmation is the moment a DBA gets to say no.
+  scan_json        JSONB,
+  scanned_at       TIMESTAMPTZ,
+  reviewed_at      TIMESTAMPTZ,
+  reviewed_by      TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
