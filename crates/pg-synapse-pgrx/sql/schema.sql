@@ -15,6 +15,25 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_user') THEN
     CREATE ROLE synapse_user NOLOGIN;
   END IF;
+  -- The role that owns the extension's functions, and therefore the role that
+  -- agent SQL executes as.
+  --
+  -- The SQL surface is SECURITY DEFINER, so agent statements run with the
+  -- privileges of whoever owns those functions. Owned by a superuser, that
+  -- means an agent tool call can reach the operating system:
+  -- `COPY t FROM PROGRAM 'id -un'` is a superuser-only feature and it worked.
+  -- A natural-language prompt reaching a shell is not a theoretical concern
+  -- for an agent whose job is reading untrusted web pages.
+  --
+  -- Owning them as a plain role removes the escalation entirely: the same
+  -- statement now fails because the role is not a superuser, enforced by
+  -- Postgres rather than by our own checking.
+  --
+  -- NOSUPERUSER and NOBYPASSRLS are stated rather than assumed, because both
+  -- are the point.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_owner') THEN
+    CREATE ROLE synapse_owner NOLOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS;
+  END IF;
 END
 $bootstrap_roles$;
 
@@ -293,4 +312,14 @@ GRANT SELECT ON synapse.questions   TO synapse_user;
 GRANT SELECT ON synapse.apps        TO synapse_user;
 GRANT SELECT ON synapse.app_agents  TO synapse_user;
 GRANT SELECT ON synapse.schedules   TO synapse_user;
+
+-- synapse_owner runs every agent statement, so it needs exactly what the
+-- extension itself does and nothing more: its own schema, its own tables, and
+-- the ability to create the schemas generated apps live in. Notably absent:
+-- superuser, CREATEROLE, and BYPASSRLS.
+GRANT USAGE, CREATE ON SCHEMA synapse TO synapse_owner;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_owner;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA synapse TO synapse_owner;
+ALTER DEFAULT PRIVILEGES IN SCHEMA synapse
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO synapse_owner;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_admin;

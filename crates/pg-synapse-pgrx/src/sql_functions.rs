@@ -900,7 +900,15 @@ pub(crate) mod synapse {
     ///
     /// Identifier safety: table name, function name, and trigger name are
     /// injected via `format(%I)` in the generated SQL, not via string concat.
-    #[pg_extern(security_definer)]
+    // SECURITY INVOKER on purpose, unlike the rest of this surface. Attaching a
+    // trigger is DDL against the caller's own table, so it should require the
+    // caller's own privileges: a table owner may instrument their table, and
+    // nobody may instrument a table they do not own. Running it as the
+    // extension owner would either need that role to hold TRIGGER on every
+    // table in the database, or fail, and the first of those is a far worse
+    // trade than the second. EXECUTE is still restricted to synapse_admin in
+    // grants.sql.
+    #[pg_extern]
     pub fn attach_agent_trigger(
         target_table: &str,
         agent: &str,
@@ -1042,7 +1050,9 @@ END;"#,
 
     /// Remove the trigger and trigger function previously created by
     /// `synapse.attach_agent_trigger` for `target_table`.
-    #[pg_extern(security_definer)]
+    // SECURITY INVOKER for the same reason as attach_agent_trigger: dropping a
+    // trigger is DDL on the caller's table.
+    #[pg_extern]
     pub fn detach_agent_trigger(target_table: &str) {
         let safe_name = target_table.replace('.', "_").replace('"', "");
         let fn_name = format!("synapse_trig_{safe_name}");

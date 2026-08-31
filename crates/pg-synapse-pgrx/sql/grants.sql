@@ -73,3 +73,54 @@ GRANT EXECUTE ON FUNCTION synapse.detach_agent_trigger(text) TO synapse_admin;
 -- above stripped any PUBLIC path. Callers reach secret values exclusively
 -- through SECURITY DEFINER functions, never via a direct table read.
 REVOKE ALL ON synapse.secrets FROM synapse_user;
+
+-- ---------------------------------------------------------------------------
+-- Ownership: agent SQL must not run as a superuser.
+--
+-- Every function above is SECURITY DEFINER, so an agent's statements execute
+-- with the privileges of whoever owns them. Owned by the installing superuser,
+-- that means a tool call can reach the operating system: verified on
+-- 2026-08-31, `COPY t FROM PROGRAM 'id -un'` through synapse.tool_call
+-- returned `postgres`. For an agent whose job is reading untrusted web pages,
+-- a natural-language prompt reaching a shell is not a hypothetical.
+--
+-- Reassigning ownership to a plain role closes it without changing any Rust.
+-- The same statement now fails with "permission denied to COPY to or from an
+-- external program" because the role genuinely lacks the privilege, enforced
+-- by Postgres rather than by us remembering to check.
+--
+-- Looped over the catalog rather than listed, so a function added later is
+-- covered automatically instead of being quietly left running as superuser.
+--
+-- This constrains what an agent can do. It does NOT make an agent run as the
+-- role that invoked it: Postgres forbids SET ROLE inside a SECURITY DEFINER
+-- function, so per-caller isolation needs these entry points to become
+-- SECURITY INVOKER first. Tracked as F2 in spec/pg-one/SPEC.md.
+-- What the constrained owner still needs.
+--
+-- attach_agent_trigger creates trigger objects on the caller's tables, and the
+-- builder creates a schema per generated app, so the owner needs CREATE where
+-- those live. `public` is the default because that is where an unconfigured
+-- database keeps its tables.
+--
+-- An operator running this for real should REVOKE this and grant only the
+-- schemas agents are meant to touch. It is a default, not a recommendation,
+-- and it is deliberately narrower than what was here before: this role is not
+-- a superuser, so no grant on a schema can restore COPY ... FROM PROGRAM or
+-- pg_read_file.
+GRANT USAGE, CREATE ON SCHEMA public TO synapse_owner;
+
+DO $harden_ownership$
+DECLARE
+  fn record;
+BEGIN
+  FOR fn IN
+    SELECT p.oid::regprocedure AS sig
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'synapse'
+  LOOP
+    EXECUTE format('ALTER FUNCTION %s OWNER TO synapse_owner', fn.sig);
+  END LOOP;
+END
+$harden_ownership$;
