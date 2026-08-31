@@ -84,6 +84,17 @@
   #build-trace summary { cursor:pointer; color:var(--muted); font-size:13px; }
   #build-trace pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px;
     font-family:var(--mono); font-size:12px; white-space:pre-wrap; margin-top:8px; max-height:280px; overflow:auto; }
+  .admin-tog { color:var(--muted); font-size:12px; margin-left:14px; cursor:pointer; user-select:none; }
+  .admin-tog input { vertical-align:middle; margin-right:4px; }
+  .sys-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:6px;
+    background:#2a2f3a; color:var(--muted); font-size:10.5px; font-family:var(--mono); vertical-align:middle; }
+  .s-h { font-size:13px; color:var(--muted); margin:26px 0 12px; font-weight:600; }
+  .s-card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 16px; margin-bottom:10px; }
+  .s-card .s-kind { color:var(--accent); font-size:11px; font-family:var(--mono); margin-bottom:6px; }
+  .s-card .s-text { font-size:13.5px; line-height:1.55; margin-bottom:10px; }
+  .s-card .s-why { color:var(--muted); font-size:12px; line-height:1.5; margin-bottom:10px; }
+  .s-card .s-meta { color:var(--muted); font-size:11.5px; font-family:var(--mono); }
   .q-intro { color:var(--muted); font-size:12.5px; line-height:1.6; margin-bottom:14px; max-width:640px; }
   .q-card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:10px; }
   .q-card .q-ask { font-weight:600; font-size:14px; margin-bottom:8px; }
@@ -220,9 +231,11 @@
     <button data-nav="dashboard">Your apps</button>
     <button data-nav="browse">Browse data</button>
     <button data-nav="connections">Connections</button>
+    <button data-nav="samples">Samples</button>
   </nav>
   <div class="grow"></div>
   <div id="conn"><span class="dot"></span><span id="conn-text">checking connection...</span><a id="conn-change" href="#" style="display:none">change</a></div>
+  <label class="admin-tog" title="Show the harness's own agents and the synapse schema. A view filter, not a security boundary: everything stays reachable over SQL and over the API with ?admin=1."><input type="checkbox" id="admin-tog" /> admin</label>
 </div>
 
 <div id="connect-strip">
@@ -357,6 +370,15 @@
       </div>
       <div class="embed-note" id="embed-note"></div>
     </div>
+  </section>
+
+  <section class="view" id="view-samples">
+    <div class="head"><h2>Samples</h2></div>
+    <p class="sub">Prompts that work, and data to feed them. Click a prompt to load it into the builder, or download a file and attach it.</p>
+    <h3 class="s-h">Prompts</h3>
+    <div id="sample-prompts"></div>
+    <h3 class="s-h">Data files</h3>
+    <div id="sample-files"></div>
   </section>
 
   <!-- BROWSE -->
@@ -512,6 +534,14 @@ const APP_BUILDER = {
   cost_cap_usd: 0,
 };
 
+// ---- admin view flag ----
+// Hides the harness's own agents and the synapse schema so the app list shows
+// the user's apps and nothing else. This is presentation, not permission:
+// everything is still reachable over SQL and over the API with ?admin=1, and
+// the label says so on hover rather than implying a security boundary.
+let ADMIN = localStorage.getItem("pgone_admin") === "1";
+function adminQ(sep) { return ADMIN ? (sep || "?") + "admin=1" : ""; }
+
 // ---- nav ----
 function showView(name) {
   document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
@@ -519,13 +549,24 @@ function showView(name) {
   if (name === "dashboard") renderDashboard();
   if (name === "browse") loadBrowseTree();
   if (name === "connections") loadConnections();
+  if (name === "samples") loadSamples();
 }
 document.querySelectorAll("[data-nav]").forEach((el) =>
   el.addEventListener("click", (e) => { e.preventDefault(); showView(el.dataset.nav); }));
 
+$("admin-tog").checked = ADMIN;
+$("admin-tog").onchange = async () => {
+  ADMIN = $("admin-tog").checked;
+  localStorage.setItem("pgone_admin", ADMIN ? "1" : "0");
+  await loadBootstrap();
+  renderDashboard();
+  const active = document.querySelector(".view.active");
+  if (active && active.id === "view-browse") loadBrowseTree();
+};
+
 // ---- bootstrap / connection ----
 async function loadBootstrap() {
-  const r = await api("/api/bootstrap");
+  const r = await api("/api/bootstrap" + adminQ());
   if (!r.ok) return;
   BOOT = r;
   CONNECTED = (r.profiles || []).some((p) => p.name === "vllm-default");
@@ -722,7 +763,7 @@ function renderDashboard(highlight) {
   grid.innerHTML = agents.map((a) => {
     const desc = (a.system_prompt || "").replace(/\s+/g, " ").trim();
     return '<button class="app-card' + (a.name === highlight ? " new" : "") + '" data-agent="' + esc(a.name) + '">' +
-      '<div class="name">' + esc(a.name) + '</div>' +
+      '<div class="name">' + esc(a.name) + (a.system ? '<span class="sys-badge">system</span>' : "") + '</div>' +
       '<div class="desc">' + esc(desc) + '</div>' +
       '<div class="meta">' + (a.tools || []).map((t) => '<span class="tag">' + esc(t) + '</span>').join("") +
       '<span class="tag">max ' + esc(a.max_iterations) + '</span></div>' +
@@ -809,7 +850,7 @@ $("run-go").onclick = () => {
 async function loadAgentTables(agentName) {
   const list = $("tables-list"), out = $("table-data");
   list.innerHTML = ""; out.innerHTML = '<div class="hint">loading...</div>';
-  const r = await api("/api/schema/tree");
+  const r = await api("/api/schema/tree" + adminQ());
   if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not load schema") + '</div>'; return; }
   const schema = (r.tree || []).find((s) => s.schema === agentName);
   if (!schema || !schema.tables.length) {
@@ -839,6 +880,60 @@ async function loadTableData(schema, table) {
       const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
       return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
     }).join("") + "</tr>").join("") + "</table>";
+}
+
+// ---- samples ----
+// Prompts are grouped by the kind of job they represent, because the useful
+// thing to show a newcomer is not one clever prompt but the shape of the four
+// or five jobs this is actually good at.
+const SAMPLE_PROMPTS = [
+  { kind: "watch and judge",
+    text: "Track Postgres news. Every morning search the news for PostgreSQL articles, read each one, and store the title, source, publication date and a short summary in a table.",
+    why: "Recurring ingest with judgment applied. The agent decides what counts as Postgres news and writes typed rows. This is the app the Questions tab then mines." },
+  { kind: "clean and classify",
+    text: "I have messy product reviews from several channels. Build me an app that splits them into people, products and reviews, and scores the sentiment of each one.",
+    why: "Existing free text becomes structured rows with foreign keys. Pair it with the reviews CSV below." },
+  { kind: "triage and route",
+    text: "Build a support ticket triage app. For each ticket work out the category, the urgency, and which team should own it, and flag anything that looks like an outage.",
+    why: "Judgment no CASE statement can express. Pair it with the tickets CSV below." },
+  { kind: "categorise the uncategorisable",
+    text: "Take raw expense descriptions off a card feed and sort them into categories like travel, software, meals and equipment, with a confidence for each.",
+    why: "The classic problem a regex cannot solve. Pair it with the expenses CSV below." },
+  { kind: "watch the database itself",
+    text: "Watch this database for slow queries. Look at pg_stat_statements, find the worst offenders, and suggest an index for each one with the reason it would help.",
+    why: "The subject of the app is the database's own telemetry, so no data moves anywhere at all." },
+];
+
+function loadSamples() {
+  $("sample-prompts").innerHTML = SAMPLE_PROMPTS.map((p, i) =>
+    '<div class="s-card">' +
+      '<div class="s-kind">' + esc(p.kind) + '</div>' +
+      '<div class="s-text">' + esc(p.text) + '</div>' +
+      '<div class="s-why">' + esc(p.why) + '</div>' +
+      '<button class="btn primary" data-prompt="' + i + '">Use this prompt</button>' +
+    '</div>'
+  ).join("");
+  $("sample-prompts").querySelectorAll("button[data-prompt]").forEach((b) => b.onclick = () => {
+    $("build-input").value = SAMPLE_PROMPTS[+b.dataset.prompt].text;
+    showView("build");
+    $("build-input").focus();
+  });
+  loadSampleFiles();
+}
+
+async function loadSampleFiles() {
+  const out = $("sample-files");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/samples");
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not load samples") + '</div>'; return; }
+  out.innerHTML = (r.samples || []).map((f) =>
+    '<div class="s-card">' +
+      '<div class="s-text">' + esc(f.filename) + '</div>' +
+      '<div class="s-why">' + esc(f.description) + '</div>' +
+      '<a class="btn primary" href="/api/sample/' + encodeURIComponent(f.name) + '" download>Download</a>' +
+      '<div class="s-meta" style="margin-top:8px">' + f.bytes + ' bytes</div>' +
+    '</div>'
+  ).join("");
 }
 
 // ---- named questions ----
@@ -942,7 +1037,7 @@ $("embed-copy").onclick = async () => {
 let BROWSE_SEL = null;
 async function loadBrowseTree() {
   const tree = $("browse-tree");
-  const r = await api("/api/schema/tree");
+  const r = await api("/api/schema/tree" + adminQ());
   if (!r.ok) { tree.innerHTML = '<div class="hint">' + esc(r.error || "unavailable") + '</div>'; return; }
   tree.innerHTML = (r.tree || []).map((s) =>
     '<div class="sch" data-s="' + esc(s.schema) + '">' + esc(s.schema) + '</div>' +

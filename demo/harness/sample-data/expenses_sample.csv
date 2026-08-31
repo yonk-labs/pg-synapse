@@ -1,0 +1,13 @@
+expense_id,submitted_at,employee,amount_usd,raw_description
+E-2001,2026-07-02,j.okafor,42.15,"UBER TRIP 7/1 AIRPORT->HOTEL SFO"
+E-2002,2026-07-02,j.okafor,318.00,"MARRIOTT UNION SQ 1 NIGHT"
+E-2003,2026-07-03,m.lindqvist,12.80,"blue bottle coffee - team standup"
+E-2004,2026-07-03,m.lindqvist,1450.00,"AWS JULY - rds + s3"
+E-2005,2026-07-05,r.delacruz,88.44,"dinner w/ Contoso (4 ppl) - client"
+E-2006,2026-07-08,r.delacruz,9.99,"github copilot seat"
+E-2007,2026-07-09,j.okafor,2100.00,"PGCONF EU CONFERENCE TICKET + WORKSHOP"
+E-2008,2026-07-11,a.nakamura,64.20,"office supplies, whiteboard markers, sticky notes"
+E-2009,2026-07-14,a.nakamura,499.00,"standing desk - home office stipend"
+E-2010,2026-07-15,m.lindqvist,27.50,"lyft to customer site"
+E-2011,2026-07-18,r.delacruz,3200.00,"datadog annual - team of 8"
+E-2012,2026-07-22,j.okafor,15.00,"airport wifi"

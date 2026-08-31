@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -59,6 +61,18 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
         "Compress text to a short extractive brief within a token budget",
     ),
 ];
+
+/// Agents the harness itself ships: the builder and its helpers. They are
+/// machinery, not the user's apps, so the app list hides them by default.
+///
+/// This is a VIEW filter, not access control. Anything hidden here is still
+/// fully reachable over SQL and over the API with `?admin=1`. Presenting it as
+/// a security boundary would be a lie, and the point of the admin flag is to
+/// keep a demo legible, not to keep anyone out.
+pub const SYSTEM_AGENTS: &[&str] = &["app_builder", "db_architect", "data_analyst"];
+
+/// Schemas that belong to the machinery rather than to a user's app.
+pub const SYSTEM_SCHEMAS: &[&str] = &["synapse", "public"];
 
 const EXECUTORS: &[&str] = &["conversation", "react", "reflection"];
 
@@ -183,9 +197,34 @@ const PROBE_QUERIES: &[(&str, &str)] = &[
 
 // ---- bootstrap ----
 
-pub async fn bootstrap(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+/// Query flag shared by the endpoints that can reveal harness internals.
+#[derive(Deserialize, Default)]
+pub struct AdminQuery {
+    #[serde(default, deserialize_with = "truthy")]
+    pub admin: bool,
+}
+
+/// Accept the spellings a human actually types in a URL bar. serde's bool
+/// wants exactly `true` or `false`, but `?admin=1` is the natural form and
+/// hand-typing this URL is precisely the admin use case, so rejecting it with
+/// a deserialization error would be perverse.
+fn truthy<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(d)?;
+    Ok(matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    ))
+}
+
+pub async fn bootstrap(
+    State(state): State<AppState>,
+    Query(q): Query<AdminQuery>,
+) -> Result<Json<Value>, HarnessError> {
     let client = db::connect(&state.db_url).await?;
-    let agents = db::jsonb_rows(
+    let mut agents = db::jsonb_rows(
         &client,
         "SELECT to_jsonb(a)::text FROM (SELECT name, system_prompt, executor_name, \
          llm_profile_main, tools, max_iterations, timeout_ms, cost_cap_usd::float8, trace_level \
@@ -193,6 +232,23 @@ pub async fn bootstrap(State(state): State<AppState>) -> Result<Json<Value>, Har
         &[],
     )
     .await?;
+
+    // Tag every agent so the UI can badge the machinery, then drop the system
+    // ones unless admin asked for them. Tagging before filtering means the
+    // admin view can show what is what rather than an undifferentiated list.
+    for a in &mut agents {
+        let is_system = a
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|n| SYSTEM_AGENTS.contains(&n))
+            .unwrap_or(false);
+        if let Some(obj) = a.as_object_mut() {
+            obj.insert("system".to_owned(), Value::Bool(is_system));
+        }
+    }
+    if !q.admin {
+        agents.retain(|a| a.get("system") != Some(&Value::Bool(true)));
+    }
     let profiles = db::jsonb_rows(
         &client,
         "SELECT to_jsonb(p)::text FROM (SELECT name, provider, model, base_url, \
@@ -1065,9 +1121,12 @@ async fn require_table(
 
 /// Convenience for the bottom-dock tree: schemas each with their table list,
 /// one row per schema. Keeps the client tree render a single call.
-pub async fn schema_tree(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+pub async fn schema_tree(
+    State(state): State<AppState>,
+    Query(q): Query<AdminQuery>,
+) -> Result<Json<Value>, HarnessError> {
     let client = db::connect(&state.db_url).await?;
-    let tree = db::jsonb_rows(
+    let mut tree = db::jsonb_rows(
         &client,
         "SELECT to_jsonb(x)::text FROM ( \
            SELECT table_schema AS schema, \
@@ -1079,6 +1138,14 @@ pub async fn schema_tree(State(state): State<AppState>) -> Result<Json<Value>, H
         &[],
     )
     .await?;
+    if !q.admin {
+        tree.retain(|t| {
+            t.get("schema")
+                .and_then(Value::as_str)
+                .map(|n| !SYSTEM_SCHEMAS.contains(&n))
+                .unwrap_or(true)
+        });
+    }
     Ok(Json(json!({"ok": true, "tree": tree})))
 }
 
@@ -1486,6 +1553,68 @@ pub async fn upload_sample(State(state): State<AppState>) -> Result<Json<Value>,
         "path": format!("uploads/{filename}"),
         "bytes": crate::SAMPLE_REVIEWS_CSV.len(),
     })))
+}
+
+// ---- sample data ----
+//
+// Every sample is compiled into the binary, so a download works with no
+// filesystem dependency and no chance of serving a path the caller chose.
+// The name is matched against a fixed list rather than joined onto a
+// directory, which is why there is no traversal check to get wrong.
+
+/// The samples offered on the Samples page: (name, filename, description).
+pub const SAMPLES: &[(&str, &str, &str)] = &[
+    (
+        "reviews",
+        "product_reviews_sample.csv",
+        "Messy product reviews from three channels, with missing names and mixed sentiment. Good for a clean-and-classify app.",
+    ),
+    (
+        "tickets",
+        "support_tickets_sample.csv",
+        "Ten support tickets in free text, one of them a production outage. Good for triage, routing, and priority.",
+    ),
+    (
+        "expenses",
+        "expenses_sample.csv",
+        "Raw expense descriptions straight off a card feed. Good for categorising text no regex can categorise.",
+    ),
+];
+
+fn sample_body(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "reviews" => Some(("product_reviews_sample.csv", crate::SAMPLE_REVIEWS_CSV)),
+        "tickets" => Some(("support_tickets_sample.csv", crate::SAMPLE_TICKETS_CSV)),
+        "expenses" => Some(("expenses_sample.csv", crate::SAMPLE_EXPENSES_CSV)),
+        _ => None,
+    }
+}
+
+pub async fn sample_list() -> Json<Value> {
+    let samples: Vec<Value> = SAMPLES
+        .iter()
+        .map(|(name, filename, desc)| {
+            let bytes = sample_body(name).map(|(_, b)| b.len()).unwrap_or(0);
+            json!({"name": name, "filename": filename, "description": desc, "bytes": bytes})
+        })
+        .collect();
+    Json(json!({"ok": true, "samples": samples}))
+}
+
+pub async fn sample_download(Path(name): Path<String>) -> Result<Response, HarnessError> {
+    let (filename, body) = sample_body(&name)
+        .ok_or_else(|| HarnessError::NotFound(format!("no sample named \"{name}\"")))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response())
 }
 
 // ---- external database connections (pg-one), via remote_query/remote_exec ----

@@ -43,6 +43,8 @@ const PGONE_HTML: &str = include_str!("../static/pgone.html");
 /// has something real to work with without the builder agent having to
 /// invent source data during its own run.
 pub const SAMPLE_REVIEWS_CSV: &str = include_str!("../sample-data/product_reviews_sample.csv");
+pub const SAMPLE_TICKETS_CSV: &str = include_str!("../sample-data/support_tickets_sample.csv");
+pub const SAMPLE_EXPENSES_CSV: &str = include_str!("../sample-data/expenses_sample.csv");
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
@@ -126,6 +128,8 @@ async fn main() {
             "/api/connection",
             get(api::connection_list).post(api::connection_add),
         )
+        .route("/api/samples", get(api::sample_list))
+        .route("/api/sample/{name}", get(api::sample_download))
         .route("/api/question", post(questions::save))
         .route("/api/app/{app}/questions", get(questions::list))
         .route("/api/app/{app}/q/{name}", get(questions::run))
