@@ -67,6 +67,19 @@ pub static DEFAULT_COST_CAP_USD: GucSetting<Option<CString>> =
 /// Whether to write trace rows. Default true.
 pub static TRACE_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 
+/// Ceiling on how many queued agent runs may be in flight at once.
+///
+/// An agent run holds a backend for the length of an LLM call, which is
+/// seconds, not milliseconds. Without a cap, a schedule that comes due for
+/// twenty apps at the same moment tries to run twenty of them, and the
+/// connection pool is what breaks. This bounds the queue, so a busy morning is
+/// slow rather than an outage.
+///
+/// ponytail: bounds the queue only. A human calling synapse.execute directly
+/// uses their own backend and is governed by Postgres' own connection limits,
+/// which is the right place for that.
+pub static MAX_CONCURRENT_RUNS: GucSetting<i32> = GucSetting::<i32>::new(4);
+
 /// If set, the extension forwards to a sidecar at this URL instead of running
 /// the kernel in-process. (Plumbing for N5; registered here so operators can
 /// set it and `all_gucs_registered` sees it.)
@@ -170,6 +183,17 @@ pub fn register_gucs() {
         c"Empty string means no cap. Any other value is parsed as a number.",
         &DEFAULT_COST_CAP_USD,
         GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        c"pg_synapse.max_concurrent_runs",
+        c"Ceiling on queued agent runs in flight at once.",
+        c"Bounds drain_queue so a burst of due schedules cannot exhaust the connection pool. Default: 4.",
+        &MAX_CONCURRENT_RUNS,
+        1,
+        1024,
+        GucContext::Suset,
         GucFlags::default(),
     );
 

@@ -830,6 +830,23 @@ pub(crate) mod synapse {
     /// stuck-job reaper (v0.2) can detect and retry those.
     #[pg_extern(security_definer)]
     pub fn drain_queue(max_jobs: default!(i32, "10")) -> i32 {
+        // Respect the concurrency ceiling before claiming anything. An agent
+        // run holds a backend for the length of an LLM call, so twenty
+        // schedules coming due together would otherwise try to run twenty at
+        // once and take the connection pool with them. Claiming fewer makes a
+        // busy morning slow instead of an outage; the rest stay queued and are
+        // picked up on the next drain.
+        let cap = crate::schema_guc::MAX_CONCURRENT_RUNS.get();
+        let running: i64 =
+            Spi::get_one("SELECT count(*) FROM synapse.agent_queue WHERE status = 'running'")
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+        let headroom = (cap as i64 - running).max(0);
+        if headroom == 0 {
+            return 0;
+        }
+        let max_jobs = max_jobs.min(headroom as i32);
         // Atomic claim: a single UPDATE whose subquery does the
         // FOR UPDATE SKIP LOCKED selection. An UPDATE is unambiguously a
         // write, so this avoids the "SELECT FOR UPDATE not allowed in a
