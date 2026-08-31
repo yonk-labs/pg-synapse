@@ -6,6 +6,7 @@
 mod api;
 mod db;
 mod error;
+mod mcp;
 mod questions;
 mod runs;
 mod scan;
@@ -143,6 +144,7 @@ async fn main() {
         .route("/api/connection/{name}/scan", post(scan::scan))
         .route("/api/connection/{name}/review", post(scan::review))
         .route("/api/connection/{name}/gate", get(scan::gate))
+        .route("/mcp", post(mcp::rpc))
         .route("/api/apps", get(schedules::app_list))
         .route("/api/runs", get(schedules::all_runs))
         .route("/api/build-metrics", get(schedules::build_metrics))
