@@ -81,6 +81,25 @@ CREATE TABLE IF NOT EXISTS synapse.connections (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Durable named questions. A question is compiled to SQL once (by an agent or
+-- by hand) and executed by Postgres on every later invocation, so no model runs
+-- at query time. kind='sql' is deterministic and chartable; kind='agent' is
+-- reserved for judgment-shaped questions that must re-run the agent.
+-- confirmed_at records that a human approved the compiled SQL: it is the gate
+-- that keeps model-authored SQL from running unreviewed.
+CREATE TABLE IF NOT EXISTS synapse.questions (
+  app          TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  nl_text      TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'sql',
+  sql_text     TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  confirmed_at TIMESTAMPTZ,
+  PRIMARY KEY (app, name),
+  CONSTRAINT questions_kind_check CHECK (kind IN ('sql', 'agent')),
+  CONSTRAINT questions_sql_present CHECK (kind <> 'sql' OR sql_text IS NOT NULL)
+);
+
 CREATE TABLE IF NOT EXISTS synapse.tools (
   name         TEXT PRIMARY KEY,
   description  TEXT,
@@ -150,4 +169,5 @@ GRANT SELECT ON synapse.executions TO synapse_user;
 GRANT SELECT ON synapse.messages   TO synapse_user;
 GRANT SELECT ON synapse.traces     TO synapse_user;
 GRANT SELECT ON synapse.agent_queue TO synapse_user;
+GRANT SELECT ON synapse.questions   TO synapse_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_admin;

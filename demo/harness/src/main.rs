@@ -6,6 +6,7 @@
 mod api;
 mod db;
 mod error;
+mod questions;
 mod runs;
 mod scenarios;
 
@@ -125,6 +126,9 @@ async fn main() {
             "/api/connection",
             get(api::connection_list).post(api::connection_add),
         )
+        .route("/api/question", post(questions::save))
+        .route("/api/app/{app}/questions", get(questions::list))
+        .route("/api/app/{app}/q/{name}", get(questions::run))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&addr)
