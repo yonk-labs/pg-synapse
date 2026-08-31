@@ -199,11 +199,9 @@ impl ProfileSource for SqlxProfileSource {
 
 /// sqlx-backed SqlExecutor for the `sql_query` / `sql_exec` tools.
 ///
-/// Binds JSON params positionally ($1, $2, ...) as Option<String>, relying on
-/// Postgres implicit casts to interpret the text. This covers the agent use-
-/// case (LLM-generated params are always simple scalars). A typed binding
-/// layer (matching the pgrx SpiSqlExecutor's json_to_datum) is a v0.2
-/// refinement.
+/// Binds JSON params positionally ($1, $2, ...) with a Postgres type chosen
+/// from the JSON type, matching the pgrx SpiSqlExecutor's `json_to_datum` so
+/// both hosts treat the same params the same way.
 ///
 /// Per-call SET ROLE (to impersonate `caller_role`) is deferred to v0.2.
 pub struct SqlxSqlExecutor {
@@ -217,15 +215,56 @@ impl SqlxSqlExecutor {
     }
 }
 
-/// Convert a JSON value to Option<String> for sqlx text binding.
-/// Null maps to None (SQL NULL); everything else serializes to its text form.
-fn json_to_text(v: &Value) -> Option<String> {
+/// Bind one JSON param with a type matching its JSON type.
+///
+/// Binding everything as text (the previous behaviour) relied on Postgres
+/// implicit casts that do not exist: `WHERE qty > $1` against an integer
+/// column fails with "operator does not exist: integer > text", and an
+/// INSERT fails with "column is of type integer but expression is of type
+/// text". That is the common agent case, not a rare one.
+fn bind_json<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    v: &Value,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    match classify_param(v) {
+        Bound::Null => q.bind(None::<String>),
+        Bound::Bool(b) => q.bind(b),
+        Bound::Int(i) => q.bind(i),
+        Bound::Float(f) => q.bind(f),
+        Bound::Text(s) => q.bind(s),
+    }
+}
+
+/// The Postgres type `bind_json` picks for a param. Split out from the bind
+/// itself so the choice can be asserted without a live database.
+#[derive(Debug, PartialEq)]
+enum Bound {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
+}
+
+fn classify_param(v: &Value) -> Bound {
     match v {
-        Value::Null => None,
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        Value::Object(_) | Value::Array(_) => Some(v.to_string()),
+        Value::Null => Bound::Null,
+        Value::Bool(b) => Bound::Bool(*b),
+        Value::Number(n) => match n.as_i64() {
+            Some(i) => Bound::Int(i),
+            // u64 too large for i64, or a float: widen through f64.
+            None => Bound::Float(n.as_f64().unwrap_or(0.0)),
+        },
+        // LLMs routinely stringify numbers ("5" for an integer column). The
+        // pgrx executor coerces them the same way, so keep the two in step.
+        Value::String(s) => match s.parse::<i64>() {
+            Ok(i) => Bound::Int(i),
+            Err(_) => match s.parse::<f64>() {
+                Ok(f) if f.is_finite() => Bound::Float(f),
+                _ => Bound::Text(s.clone()),
+            },
+        },
+        Value::Object(_) | Value::Array(_) => Bound::Text(v.to_string()),
     }
 }
 
@@ -313,7 +352,7 @@ impl SqlExecutor for SqlxSqlExecutor {
 
         let mut q = sqlx::query(sql);
         for v in params {
-            q = q.bind(json_to_text(v));
+            q = bind_json(q, v);
         }
         let rows = q
             .fetch_all(&self.pool)
@@ -347,7 +386,7 @@ impl SqlExecutor for SqlxSqlExecutor {
 
         let mut q = sqlx::query(sql);
         for v in params {
-            q = q.bind(json_to_text(v));
+            q = bind_json(q, v);
         }
         let result = q
             .execute(&self.pool)
@@ -364,4 +403,53 @@ impl SqlExecutor for SqlxSqlExecutor {
 #[allow(dead_code)]
 fn _use_try_numeric_f64() {
     let _ = try_numeric_f64 as fn(&sqlx::postgres::PgRow, &str) -> Option<f64>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Bound, classify_param};
+    use serde_json::json;
+
+    /// Params used to bind as text unconditionally, so any non-text column
+    /// or operator failed: "operator does not exist: integer > text" on a
+    /// SELECT, "column is of type integer but expression is of type text"
+    /// on an INSERT. These are the cases that regressed.
+    #[test]
+    fn numbers_bind_as_numbers() {
+        assert_eq!(classify_param(&json!(10)), Bound::Int(10));
+        assert_eq!(classify_param(&json!(-3)), Bound::Int(-3));
+        assert_eq!(classify_param(&json!(1.5)), Bound::Float(1.5));
+    }
+
+    /// An LLM emitting "5" for an integer column must still land as an
+    /// integer, matching the pgrx SpiSqlExecutor's coercion.
+    #[test]
+    fn stringified_numbers_coerce() {
+        assert_eq!(classify_param(&json!("5")), Bound::Int(5));
+        assert_eq!(classify_param(&json!("2.5")), Bound::Float(2.5));
+    }
+
+    #[test]
+    fn non_numeric_stays_text() {
+        assert_eq!(
+            classify_param(&json!("flange")),
+            Bound::Text("flange".into())
+        );
+        assert_eq!(
+            classify_param(&json!("1.0abc")),
+            Bound::Text("1.0abc".into())
+        );
+        assert_eq!(classify_param(&json!("NaN")), Bound::Text("NaN".into()));
+        assert_eq!(classify_param(&json!("inf")), Bound::Text("inf".into()));
+    }
+
+    #[test]
+    fn null_bool_and_containers() {
+        assert_eq!(classify_param(&json!(null)), Bound::Null);
+        assert_eq!(classify_param(&json!(true)), Bound::Bool(true));
+        assert_eq!(
+            classify_param(&json!({"a": 1})),
+            Bound::Text("{\"a\":1}".into())
+        );
+    }
 }

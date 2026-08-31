@@ -128,7 +128,18 @@ async fn resolve_connection(
 /// across calls: a demo-scale tool that runs occasionally does not need
 /// connection reuse, and a fresh connection per call means a rotated
 /// remote password takes effect on the very next tool call.
-async fn open_remote(info: &ConnectionInfo, tool_name: &str) -> Result<SqlxSqlExecutor, ToolError> {
+///
+/// `read_only` opens the session with `default_transaction_read_only=on`, so
+/// the remote Postgres itself rejects any write. `remote_query` describes
+/// itself to the model as read-only; without this it was not, and an INSERT
+/// passed to it succeeded while returning an innocuous empty result set.
+/// Enforcing it server-side beats inspecting the SQL: no parser to outwit,
+/// and CTEs, functions, and triggers are covered for free.
+async fn open_remote(
+    info: &ConnectionInfo,
+    tool_name: &str,
+    read_only: bool,
+) -> Result<SqlxSqlExecutor, ToolError> {
     let mut opts = PgConnectOptions::new()
         .host(&info.host)
         .port(info.port as u16)
@@ -137,6 +148,9 @@ async fn open_remote(info: &ConnectionInfo, tool_name: &str) -> Result<SqlxSqlEx
         .disable_statement_logging();
     if let Some(pw) = &info.password {
         opts = opts.password(pw);
+    }
+    if read_only {
+        opts = opts.options([("default_transaction_read_only", "on")]);
     }
     let pool = PgPoolOptions::new()
         .max_connections(1)
@@ -189,7 +203,7 @@ impl Tool for RemoteQueryTool {
             })?;
         let info =
             resolve_connection(self.local.as_ref(), &args.connection, "remote_query").await?;
-        let remote = open_remote(&info, "remote_query").await?;
+        let remote = open_remote(&info, "remote_query", true).await?;
         let rows = remote
             .query(&args.query, &args.params, ctx.caller_role.as_deref())
             .await?;
@@ -221,7 +235,7 @@ impl Tool for RemoteExecTool {
                 reason: e.to_string(),
             })?;
         let info = resolve_connection(self.local.as_ref(), &args.connection, "remote_exec").await?;
-        let remote = open_remote(&info, "remote_exec").await?;
+        let remote = open_remote(&info, "remote_exec", false).await?;
         let rows_affected = remote
             .execute(&args.query, &args.params, ctx.caller_role.as_deref())
             .await?;
