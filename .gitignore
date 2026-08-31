@@ -21,3 +21,7 @@ secrets.*
 **/.secrets/
 .autonomy/
 .remember/
+
+# Local product specs (specy). May contain commercially sensitive context;
+# this is a public repo. Keep untracked.
+spec/
