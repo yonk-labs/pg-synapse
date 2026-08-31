@@ -9,6 +9,7 @@ mod error;
 mod questions;
 mod runs;
 mod scenarios;
+mod schedules;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -128,6 +129,12 @@ async fn main() {
             "/api/connection",
             get(api::connection_list).post(api::connection_add),
         )
+        .route("/api/apps", get(schedules::app_list))
+        .route("/api/app/{app}/schedules", get(schedules::schedule_list))
+        .route("/api/app/{app}/runs", get(schedules::app_runs))
+        .route("/api/schedule", post(schedules::schedule_add))
+        .route("/api/schedule/{id}/drop", post(schedules::schedule_drop))
+        .route("/api/tick", post(schedules::tick))
         .route("/api/samples", get(api::sample_list))
         .route("/api/sample/{name}", get(api::sample_download))
         .route("/api/question", post(questions::save))

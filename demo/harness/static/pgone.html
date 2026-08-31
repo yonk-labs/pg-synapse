@@ -104,6 +104,13 @@
   .q-card details pre { background:#0d1117; border:1px solid var(--border); border-radius:8px;
     padding:10px; overflow-x:auto; font-size:11.5px; margin-top:8px; white-space:pre-wrap; }
   .q-result { margin-top:12px; }
+  .sc-row { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px; }
+  .sc-row .sc-what { font-size:13.5px; margin-bottom:6px; }
+  .sc-row .sc-when { color:var(--muted); font-size:11.5px; font-family:var(--mono); }
+  .run-row { display:flex; gap:12px; align-items:baseline; padding:7px 10px;
+    border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
+  .run-ok { color:#4ade80; } .run-bad { color:#f87171; }
   .q-unconfirmed { color:#e0a458; font-size:11.5px; margin-bottom:8px; }
   .q-new { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
   .q-new summary { color:var(--muted); font-size:12.5px; cursor:pointer; margin-bottom:12px; }
@@ -326,6 +333,7 @@
       <button data-pane="run" class="active">Run</button>
       <button data-pane="tables">Tables</button>
       <button data-pane="questions">Questions</button>
+      <button data-pane="schedule">Schedule</button>
       <button data-pane="embed">Embed / API</button>
     </div>
 
@@ -357,6 +365,25 @@
         <div><button class="btn primary" id="q-save">Save question</button></div>
         <div id="q-save-status"></div>
       </details>
+    </div>
+
+    <div class="pane" id="pane-schedule">
+      <div class="q-intro">
+        An agent that runs once produces a result. An agent that runs on a
+        schedule produces a dataset, and only a dataset can be mined. Set the
+        first run to the time you want it to happen; it keeps that time.
+      </div>
+      <div id="sched-list"></div>
+      <details class="q-new">
+        <summary>add a schedule</summary>
+        <input type="text" id="sc-input" placeholder="what should it do each time?" />
+        <input type="text" id="sc-every" placeholder="how often (1 day, 6 hours, 30 minutes)" value="1 day" />
+        <input type="text" id="sc-first" placeholder="first run, e.g. 2026-09-01 09:00 (blank = one interval from now)" />
+        <div><button class="btn primary" id="sc-save">Add schedule</button></div>
+        <div id="sc-status"></div>
+      </details>
+      <h3 class="s-h">Recent runs</h3>
+      <div id="sched-runs"></div>
     </div>
 
     <div class="pane" id="pane-embed">
@@ -805,6 +832,7 @@ function openDetail(name) {
   setPane("run");
   loadAgentTables(a.name);
   loadQuestions(a.name);
+  loadSchedules(a.name);
   renderEmbed(a.name, document.querySelector(".embed-tabs button.active")?.dataset.embed || "sql");
 }
 document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.onclick = () => setPane(b.dataset.pane));
@@ -881,6 +909,80 @@ async function loadTableData(schema, table) {
       return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
     }).join("") + "</tr>").join("") + "</table>";
 }
+
+// ---- schedules ----
+async function loadSchedules(app) {
+  const list = $("sched-list");
+  list.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/schedules");
+  if (!r.ok) { list.innerHTML = '<div class="hint">' + esc(r.error || "could not load") + '</div>'; return; }
+  if (!r.schedules || !r.schedules.length) {
+    list.innerHTML = '<div class="hint">not scheduled. It only runs when you click Run.</div>';
+  } else {
+    list.innerHTML = r.schedules.map((s) =>
+      '<div class="sc-row">' +
+        '<div class="sc-what">' + esc(s.input) + '</div>' +
+        '<div class="sc-when">every ' + esc(s.every) +
+          ' &middot; next ' + esc(fmtTime(s.next_run_at)) +
+          (s.last_run_at ? ' &middot; last ' + esc(fmtTime(s.last_run_at)) : " &middot; never run") +
+          (s.enabled ? "" : " &middot; DISABLED") + '</div>' +
+        '<div style="margin-top:10px"><button class="btn" data-drop="' + esc(s.schedule_id) + '">Remove</button> ' +
+        '<button class="btn primary" id="sc-now">Run due schedules now</button></div>' +
+      '</div>'
+    ).join("");
+    list.querySelectorAll("button[data-drop]").forEach((b) => b.onclick = async () => {
+      await api("/api/schedule/" + encodeURIComponent(b.dataset.drop) + "/drop", "POST", {});
+      loadSchedules(app);
+    });
+    const now = list.querySelector("#sc-now");
+    if (now) now.onclick = async () => {
+      now.disabled = true; now.textContent = "firing...";
+      const t = await api("/api/tick", "POST", {});
+      now.textContent = t.ok ? ("fired " + t.fired) : "failed";
+      setTimeout(() => loadSchedules(app), 800);
+    };
+  }
+  loadRuns(app);
+}
+
+function fmtTime(iso) {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// A schedule you cannot see failing is worse than no schedule, so failed runs
+// are shown in the same list as successful ones rather than hidden.
+async function loadRuns(app) {
+  const out = $("sched-runs");
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/runs");
+  if (!r.ok || !r.runs || !r.runs.length) { out.innerHTML = '<div class="hint">no runs yet</div>'; return; }
+  out.innerHTML = r.runs.map((x) => {
+    const ok = x.status === "completed";
+    return '<div class="run-row">' +
+      '<span class="' + (ok ? "run-ok" : "run-bad") + '">' + esc(x.status) + '</span>' +
+      '<span>' + esc(fmtTime(x.started_at)) + '</span>' +
+      '<span style="color:var(--muted)">' + esc(x.model || "") + '</span>' +
+      '<span style="color:var(--muted)">' + (x.duration_ms || 0) + 'ms</span>' +
+      '<span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.output || "") + '</span>' +
+    '</div>';
+  }).join("");
+}
+
+$("sc-save").onclick = async () => {
+  const st = $("sc-status");
+  const body = {
+    app: CURRENT_AGENT, agent: CURRENT_AGENT,
+    input: ($("sc-input").value || "").trim(),
+    every: ($("sc-every").value || "").trim(),
+    first_run_at: ($("sc-first").value || "").trim() || null,
+  };
+  if (!body.input || !body.every) { st.textContent = "what to do and how often are both required"; return; }
+  st.textContent = "saving...";
+  const r = await api("/api/schedule", "POST", body);
+  st.textContent = r.ok ? "scheduled" : (r.error || "failed");
+  if (r.ok) { $("sc-input").value = ""; $("sc-first").value = ""; loadSchedules(CURRENT_AGENT); }
+};
 
 // ---- samples ----
 // Prompts are grouped by the kind of job they represent, because the useful
