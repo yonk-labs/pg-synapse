@@ -437,6 +437,84 @@ BEGIN
 END;
 $$;
 
+
+-- ---------------------------------------------------------------------------
+-- Privileged reads, behind SECURITY DEFINER.
+--
+-- The kernel needs agent rows, provider profiles and secret values to start.
+-- It is built lazily and cached for the process, by whichever caller happens
+-- to trigger it first, so if the entry points ran with invoker rights that
+-- caller would need SELECT on all of them, secrets included. That is both
+-- unacceptable and arbitrary: privilege would land on whoever won a race.
+--
+-- Routing the reads through definer functions decouples the two. The entry
+-- points can then drop to the caller's rights for the agent's own SQL without
+-- dragging secret access along with them, which is the prerequisite for F2.
+--
+-- Each returns jsonb so the Rust side does one decode instead of a column
+-- list that has to be kept in step with the table.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION synapse.config_agents()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM (
+    SELECT name, system_prompt, soul, executor_name, llm_profile_main,
+           llm_profile_small, llm_profile_judge, embedding_profile, tools,
+           max_iterations, timeout_ms, cost_cap_usd, trace_level
+    FROM synapse.agents) a
+$$;
+
+CREATE OR REPLACE FUNCTION synapse.config_llm_profiles()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(p)), '[]'::jsonb) FROM (
+    SELECT name, provider, model, api_key_secret, base_url,
+           COALESCE(params, '{}'::jsonb) AS params
+    FROM synapse.llm_profiles) p
+$$;
+
+CREATE OR REPLACE FUNCTION synapse.config_embedding_profiles()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(e)), '[]'::jsonb) FROM (
+    SELECT name, provider, model, dimension, api_key_secret, base_url,
+           COALESCE(params, '{}'::jsonb) AS params
+    FROM synapse.embedding_profiles) e
+$$;
+
+-- Secrets are the reason this indirection exists. Never granted to a user
+-- role, reachable only through this function, and the function returns only
+-- the names the kernel asked for rather than the whole table.
+CREATE OR REPLACE FUNCTION synapse.config_secrets(names text[])
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER STABLE AS $config_secrets$
+DECLARE
+  out_val jsonb := '{}'::jsonb;
+  r record;
+BEGIN
+  FOR r IN SELECT s.name FROM synapse.secrets s WHERE s.name = ANY(names)
+  LOOP
+    out_val := out_val || jsonb_build_object(r.name, synapse.secret_value(r.name));
+  END LOOP;
+  RETURN out_val;
+END
+$config_secrets$;
+
+-- The audit write, for the same reason in the other direction: a low
+-- privilege caller must still be recordable, or the first thing invoker
+-- rights would break is the audit trail.
+CREATE OR REPLACE FUNCTION synapse.record_execution(
+  p_execution_id uuid, p_agent text, p_input text, p_output text,
+  p_status text, p_tokens_in int, p_tokens_out int, p_cost numeric,
+  p_duration_ms bigint, p_caller_role text)
+RETURNS void LANGUAGE sql SECURITY DEFINER AS $$
+  INSERT INTO synapse.executions
+    (execution_id, agent_name, input, output, status, tokens_in, tokens_out,
+     cost_usd, duration_ms, caller_role, model, finished_at)
+  VALUES (p_execution_id, p_agent, p_input, p_output, p_status, p_tokens_in,
+          p_tokens_out, p_cost, p_duration_ms, p_caller_role,
+          (SELECT p.model FROM synapse.agents a
+             JOIN synapse.llm_profiles p ON p.name = a.llm_profile_main
+            WHERE a.name = p_agent),
+          now())
+$$;
+
 -- Operator-driven drain (pg_cron or a sidecar poller) runs synapse.drain_queue().
 -- A true background worker drain is the v0.2 upgrade (design spec D8).
 CREATE TABLE IF NOT EXISTS synapse.agent_queue (

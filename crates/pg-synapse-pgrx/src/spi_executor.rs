@@ -323,168 +323,57 @@ fn with_savepoint<T>(
 /// `ProfileSource` reading from the `pg_synapse.*` tables via SPI.
 pub struct SpiProfileSource;
 
+/// Read one of the `synapse.config_*` definer functions and decode its jsonb.
+///
+/// The config functions exist so the kernel's startup reads do not require the
+/// caller to hold SELECT on agents, profiles and secrets. Decoding jsonb into
+/// the row type directly also removes four hand-written column-index decoders
+/// that had to be kept in step with the table by hand.
+fn config_json<T: serde::de::DeserializeOwned>(sql: &str) -> Result<T, RuntimeError> {
+    let raw: Option<JsonB> = Spi::get_one(sql).map_err(|e| RuntimeError::Config(e.to_string()))?;
+    let value = raw.map(|j| j.0).unwrap_or(Value::Array(Vec::new()));
+    serde_json::from_value(value).map_err(|e| RuntimeError::Config(format!("config decode: {e}")))
+}
+
 #[async_trait]
 impl ProfileSource for SpiProfileSource {
     async fn llm_profiles(&self) -> Result<Vec<LlmProfileRow>, RuntimeError> {
-        Spi::connect(|client| -> Result<Vec<LlmProfileRow>, RuntimeError> {
-            let table = client
-                .select(
-                    "SELECT name, provider, model, api_key_secret, base_url, COALESCE(params, '{}'::jsonb) FROM synapse.llm_profiles",
-                    None,
-                    &[],
-                )
-                .map_err(|e| RuntimeError::Config(e.to_string()))?;
-            let mut out = Vec::new();
-            for row in table {
-                out.push(LlmProfileRow {
-                    name: row
-                        .get::<String>(1)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    provider: row
-                        .get::<String>(2)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    model: row
-                        .get::<String>(3)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    api_key_secret: row.get::<String>(4).ok().flatten(),
-                    base_url: row.get::<String>(5).ok().flatten(),
-                    params: row
-                        .get::<JsonB>(6)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .map(|j| j.0)
-                        .unwrap_or(Value::Object(Default::default())),
-                });
-            }
-            Ok(out)
-        })
+        config_json("SELECT synapse.config_llm_profiles()")
     }
 
     async fn embedding_profiles(&self) -> Result<Vec<EmbeddingProfileRow>, RuntimeError> {
-        Spi::connect(|client| -> Result<Vec<EmbeddingProfileRow>, RuntimeError> {
-            let table = client
-                .select(
-                    "SELECT name, provider, model, dimension, api_key_secret, base_url, COALESCE(params, '{}'::jsonb) FROM synapse.embedding_profiles",
-                    None,
-                    &[],
-                )
-                .map_err(|e| RuntimeError::Config(e.to_string()))?;
-            let mut out = Vec::new();
-            for row in table {
-                out.push(EmbeddingProfileRow {
-                    name: row
-                        .get::<String>(1)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    provider: row
-                        .get::<String>(2)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    model: row
-                        .get::<String>(3)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    dimension: row.get::<i32>(4).ok().flatten().unwrap_or(0) as u32,
-                    api_key_secret: row.get::<String>(5).ok().flatten(),
-                    base_url: row.get::<String>(6).ok().flatten(),
-                    params: row
-                        .get::<JsonB>(7)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .map(|j| j.0)
-                        .unwrap_or(Value::Object(Default::default())),
-                });
-            }
-            Ok(out)
-        })
+        config_json("SELECT synapse.config_embedding_profiles()")
     }
 
     async fn agents(&self) -> Result<Vec<AgentRow>, RuntimeError> {
-        Spi::connect(|client| -> Result<Vec<AgentRow>, RuntimeError> {
-            let table = client
-                .select(
-                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms, cost_cap_usd, trace_level FROM synapse.agents",
-                    None,
-                    &[],
-                )
-                .map_err(|e| RuntimeError::Config(e.to_string()))?;
-            let mut out = Vec::new();
-            for row in table {
-                let mut agent = AgentRow {
-                    name: row
-                        .get::<String>(1)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    system_prompt: row
-                        .get::<String>(2)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_default(),
-                    soul: row.get::<String>(3).ok().flatten(),
-                    executor_name: row
-                        .get::<String>(4)
-                        .map_err(|e| RuntimeError::Config(e.to_string()))?
-                        .unwrap_or_else(|| "conversation".into()),
-                    llm_profile_main: row.get::<String>(5).ok().flatten(),
-                    llm_profile_small: row.get::<String>(6).ok().flatten(),
-                    llm_profile_judge: row.get::<String>(7).ok().flatten(),
-                    embedding_profile: row.get::<String>(8).ok().flatten(),
-                    tools: row.get::<Vec<String>>(9).ok().flatten().unwrap_or_default(),
-                    max_iterations: row.get::<i32>(10).ok().flatten().unwrap_or(10) as u32,
-                    timeout_ms: row.get::<i64>(11).ok().flatten().unwrap_or(60_000) as u64,
-                    // `cost_cap_usd` is `NUMERIC(12,6)`. pgrx 0.18 maps NUMERIC
-                    // to `AnyNumeric`; `f64::try_from(AnyNumeric)` converts via
-                    // Postgres' `numeric_float8`. Precision tradeoff: an f64
-                    // carries ~15-17 significant decimal digits, far more than
-                    // the 12-digit / 6-decimal USD cost cap needs, so the
-                    // round-trip is lossless for any value the column can hold.
-                    cost_cap_usd: row
-                        .get::<pgrx::AnyNumeric>(12)
-                        .ok()
-                        .flatten()
-                        .and_then(|n| f64::try_from(n).ok()),
-                    trace_level: row.get::<String>(13).ok().flatten(),
-                };
-                crate::schema_guc::apply_guc_fallbacks(&mut agent);
-                out.push(agent);
-            }
-            Ok(out)
-        })
+        let mut rows: Vec<AgentRow> = config_json("SELECT synapse.config_agents()")?;
+        // A row left NULL or zero by the operator is filled from the matching
+        // GUC before it reaches the kernel. This is the single seam for that,
+        // so it has to happen here rather than being an artefact of how the
+        // row was decoded.
+        for agent in &mut rows {
+            crate::schema_guc::apply_guc_fallbacks(agent);
+        }
+        Ok(rows)
     }
 
     async fn secrets(&self, names: &[&str]) -> Result<HashMap<String, String>, RuntimeError> {
         if names.is_empty() {
             return Ok(HashMap::new());
         }
+        // Through the definer function, which is the only path to a secret
+        // value: the table itself is never granted to a user role, and the
+        // function returns only the names asked for rather than the lot.
         let names_owned: Vec<String> = names.iter().map(|s| (*s).to_string()).collect();
-        Spi::connect(|client| -> Result<HashMap<String, String>, RuntimeError> {
-            let arg: DatumWithOid<'_> = DatumWithOid::from(names_owned);
-            let table = client
-                .select(
-                    // synapse.secret_value is the single decrypt path, shared
-                    // with the remote-database tools so there is one
-                    // expression to get right rather than two.
-                    "SELECT name, synapse.secret_value(name) AS value \
-                     FROM synapse.secrets WHERE name = ANY($1)",
-                    None,
-                    &[arg],
-                )
-                .map_err(|e| RuntimeError::Config(e.to_string()))?;
-            let mut out = HashMap::new();
-            for row in table {
-                let n = row
-                    .get::<String>(1)
-                    .map_err(|e| RuntimeError::Config(e.to_string()))?
-                    .unwrap_or_default();
-                let v = row
-                    .get::<String>(2)
-                    .map_err(|e| RuntimeError::Config(e.to_string()))?
-                    .unwrap_or_default();
-                if !n.is_empty() {
-                    out.insert(n, v);
-                }
-            }
-            Ok(out)
-        })
+        let raw: Option<JsonB> = Spi::get_one_with_args(
+            "SELECT synapse.config_secrets($1)",
+            &[DatumWithOid::from(names_owned)],
+        )
+        .map_err(|e| RuntimeError::Config(e.to_string()))?;
+        let value = raw
+            .map(|j| j.0)
+            .unwrap_or(Value::Object(Default::default()));
+        serde_json::from_value(value)
+            .map_err(|e| RuntimeError::Config(format!("secret decode: {e}")))
     }
 }
