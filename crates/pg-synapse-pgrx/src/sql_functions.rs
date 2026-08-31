@@ -222,7 +222,18 @@ pub(crate) mod synapse {
     /// instead of raising a Postgres error.
     #[pg_extern(security_definer, parallel_safe)]
     pub fn execute(agent_name: &str, input: &str) -> JsonB {
-        let caller_role: Option<String> = Spi::get_one("SELECT current_user::text").ok().flatten();
+        // NOT `current_user`: this function is SECURITY DEFINER, so inside it
+        // `current_user` is the extension owner, and recording that as the
+        // caller made `synapse.executions.caller_role` say "postgres" for
+        // every run regardless of who asked. `role` reflects an explicit
+        // SET ROLE and falls back to the login role when none is set, which
+        // is the identity a grant or an RLS policy would actually be written
+        // against.
+        let caller_role: Option<String> = Spi::get_one(
+            "SELECT COALESCE(NULLIF(current_setting('role', true), 'none'), session_user::text)",
+        )
+        .ok()
+        .flatten();
 
         let kernel = match kernel_handle() {
             Ok(k) => k,
@@ -618,7 +629,18 @@ pub(crate) mod synapse {
     /// output as JSONB, or `{"error": "...", "status": "errored"}`.
     #[pg_extern(security_definer)]
     pub fn tool_call(tool_name: &str, input: JsonB) -> JsonB {
-        let caller_role: Option<String> = Spi::get_one("SELECT current_user::text").ok().flatten();
+        // NOT `current_user`: this function is SECURITY DEFINER, so inside it
+        // `current_user` is the extension owner, and recording that as the
+        // caller made `synapse.executions.caller_role` say "postgres" for
+        // every run regardless of who asked. `role` reflects an explicit
+        // SET ROLE and falls back to the login role when none is set, which
+        // is the identity a grant or an RLS policy would actually be written
+        // against.
+        let caller_role: Option<String> = Spi::get_one(
+            "SELECT COALESCE(NULLIF(current_setting('role', true), 'none'), session_user::text)",
+        )
+        .ok()
+        .flatten();
 
         let kernel = match kernel_handle() {
             Ok(k) => k,
@@ -647,7 +669,18 @@ pub(crate) mod synapse {
     /// `NOTES.md`.
     #[pg_extern(security_definer)]
     pub fn execute_async(agent_name: &str, input: &str) -> pgrx::Uuid {
-        let caller_role: Option<String> = Spi::get_one("SELECT current_user::text").ok().flatten();
+        // NOT `current_user`: this function is SECURITY DEFINER, so inside it
+        // `current_user` is the extension owner, and recording that as the
+        // caller made `synapse.executions.caller_role` say "postgres" for
+        // every run regardless of who asked. `role` reflects an explicit
+        // SET ROLE and falls back to the login role when none is set, which
+        // is the identity a grant or an RLS policy would actually be written
+        // against.
+        let caller_role: Option<String> = Spi::get_one(
+            "SELECT COALESCE(NULLIF(current_setting('role', true), 'none'), session_user::text)",
+        )
+        .ok()
+        .flatten();
 
         // Pre-insert a 'queued' row keyed by a fresh id so a poller can see
         // the execution exists even if the run below fails hard.
