@@ -193,7 +193,9 @@ pub async fn all_runs(State(state): State<AppState>) -> Result<Json<Value>, Harn
         &[],
     )
     .await?;
-    Ok(Json(json!({"ok": true, "runs": runs, "stats": stats, "queue": queue})))
+    Ok(Json(
+        json!({"ok": true, "runs": runs, "stats": stats, "queue": queue}),
+    ))
 }
 
 /// The scheduler driver: call `synapse.tick()` on a cadence, then drain what it
