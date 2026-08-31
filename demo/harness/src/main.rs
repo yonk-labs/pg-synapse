@@ -88,6 +88,16 @@ async fn main() {
         upload_dir,
     };
 
+    // The scheduler driver. pg_cron is the better answer for a deployment the
+    // user owns (it survives this process dying), but it needs
+    // shared_preload_libraries and a restart, which a demo container should
+    // not demand. See schedules::spawn_driver.
+    let scheduler_secs: u64 = std::env::var("SCHEDULER_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    schedules::spawn_driver(state.db_url.clone(), scheduler_secs);
+
     let app = Router::new()
         .route("/", get(index))
         .route("/sidecar", get(sidecar_page))

@@ -148,3 +148,54 @@ pub async fn app_runs(
     .await?;
     Ok(Json(json!({"ok": true, "app": app, "runs": runs})))
 }
+
+/// The scheduler driver: call `synapse.tick()` on a cadence, then drain what it
+/// enqueued.
+///
+/// `synapse.tick()` deliberately has no opinion about who calls it, so any
+/// driver works: pg_cron inside the database, a systemd timer, or this. This
+/// one exists because pg_cron needs `shared_preload_libraries` and a restart,
+/// which a container running someone's demo should not require. **For a
+/// deployment the user owns, pg_cron is the better driver**: it survives the
+/// harness being down, and scheduling should not depend on a web process.
+///
+/// Set `SCHEDULER_INTERVAL_SECS=0` to turn it off entirely (NN-7: every
+/// capability has an off switch).
+pub fn spawn_driver(db_url: String, every_secs: u64) {
+    if every_secs == 0 {
+        println!("scheduler driver disabled (SCHEDULER_INTERVAL_SECS=0)");
+        return;
+    }
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(every_secs));
+        // A slow drain must not cause a burst of catch-up ticks afterwards.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            // Errors are logged and swallowed on purpose: a database blip must
+            // not kill the driver, or scheduling silently stops for good.
+            match db::connect(&db_url).await {
+                Ok(client) => {
+                    let fired: i64 = match client.query_one("SELECT synapse.tick()", &[]).await {
+                        Ok(row) => row.get::<_, i32>(0) as i64,
+                        Err(e) => {
+                            eprintln!("scheduler tick failed: {e}");
+                            continue;
+                        }
+                    };
+                    if fired > 0 {
+                        println!("scheduler fired {fired} job(s)");
+                        // Draining here rather than in a second driver keeps
+                        // "due" and "run" adjacent: a job enqueued by a tick
+                        // nobody drains is just a differently shaped silence.
+                        if let Err(e) = client.query_one("SELECT synapse.drain_queue(5)", &[]).await
+                        {
+                            eprintln!("scheduler drain failed: {e}");
+                        }
+                    }
+                }
+                Err(e) => eprintln!("scheduler could not connect: {e}"),
+            }
+        }
+    });
+}
