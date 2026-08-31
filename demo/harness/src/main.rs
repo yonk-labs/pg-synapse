@@ -140,6 +140,7 @@ async fn main() {
             get(api::connection_list).post(api::connection_add),
         )
         .route("/api/apps", get(schedules::app_list))
+        .route("/api/runs", get(schedules::all_runs))
         .route("/api/app/{app}/schedules", get(schedules::schedule_list))
         .route("/api/app/{app}/runs", get(schedules::app_runs))
         .route("/api/schedule", post(schedules::schedule_add))

@@ -111,6 +111,18 @@
   .run-row { display:flex; gap:12px; align-items:baseline; padding:7px 10px;
     border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
   .run-ok { color:#4ade80; } .run-bad { color:#f87171; }
+  .stat-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 16px; min-width:104px; }
+  .stat .v { font-size:22px; font-weight:700; font-family:var(--mono); }
+  .stat .k { color:var(--muted); font-size:11px; margin-top:3px; }
+  .act-card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px; }
+  .act-head { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+    font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .act-agent { color:var(--fg); font-weight:600; font-size:13px; font-family:var(--mono); }
+  .act-io { font-size:12px; line-height:1.5; margin-top:8px; }
+  .act-io .lbl { color:var(--muted); font-family:var(--mono); font-size:10.5px; }
   .q-unconfirmed { color:#e0a458; font-size:11.5px; margin-bottom:8px; }
   .q-new { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
   .q-new summary { color:var(--muted); font-size:12.5px; cursor:pointer; margin-bottom:12px; }
@@ -238,6 +250,7 @@
     <button data-nav="dashboard">Your apps</button>
     <button data-nav="browse">Browse data</button>
     <button data-nav="connections">Connections</button>
+    <button data-nav="activity">Activity</button>
     <button data-nav="samples">Samples</button>
   </nav>
   <div class="grow"></div>
@@ -397,6 +410,16 @@
       </div>
       <div class="embed-note" id="embed-note"></div>
     </div>
+  </section>
+
+  <section class="view" id="view-activity">
+    <div class="head"><h2>Activity</h2></div>
+    <p class="sub">Every run, newest first. Failures included: a history that shows only successes is the first thing that lies to you when an app stops producing.</p>
+    <div id="act-stats" class="stat-row"></div>
+    <h3 class="s-h">Queue</h3>
+    <div id="act-queue"></div>
+    <h3 class="s-h">Runs</h3>
+    <div id="act-runs"></div>
   </section>
 
   <section class="view" id="view-samples">
@@ -577,6 +600,7 @@ function showView(name) {
   if (name === "browse") loadBrowseTree();
   if (name === "connections") loadConnections();
   if (name === "samples") loadSamples();
+  if (name === "activity") loadActivity();
 }
 document.querySelectorAll("[data-nav]").forEach((el) =>
   el.addEventListener("click", (e) => { e.preventDefault(); showView(el.dataset.nav); }));
@@ -983,6 +1007,46 @@ $("sc-save").onclick = async () => {
   st.textContent = r.ok ? "scheduled" : (r.error || "failed");
   if (r.ok) { $("sc-input").value = ""; $("sc-first").value = ""; loadSchedules(CURRENT_AGENT); }
 };
+
+// ---- activity ----
+async function loadActivity() {
+  const runsEl = $("act-runs"), qEl = $("act-queue"), stEl = $("act-stats");
+  runsEl.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/runs");
+  if (!r.ok) { runsEl.innerHTML = '<div class="hint">' + esc(r.error || "could not load") + '</div>'; return; }
+
+  const s = r.stats || {};
+  stEl.innerHTML = [
+    ["total runs", s.total], ["completed", s.completed], ["failed", s.failed],
+    ["last 24h", s.last_24h], ["avg ms", s.avg_ms], ["tokens", s.tokens],
+  ].map(([k, v]) => '<div class="stat"><div class="v">' + esc(v === null || v === undefined ? "0" : v) +
+      '</div><div class="k">' + esc(k) + '</div></div>').join("");
+
+  qEl.innerHTML = (r.queue && r.queue.length)
+    ? r.queue.map((q) => '<div class="run-row"><span class="' +
+        (q.status === "done" ? "run-ok" : (q.status === "error" ? "run-bad" : "")) + '">' + esc(q.status) + '</span>' +
+        '<span>' + esc(q.agent) + '</span><span style="color:var(--muted)">' + esc(q.source || "manual") + '</span>' +
+        '<span style="color:var(--muted)">' + esc(fmtTime(q.enqueued_at)) + '</span>' +
+        (q.error ? '<span class="run-bad">' + esc(q.error) + '</span>' : "") + '</div>').join("")
+    : '<div class="hint">queue is empty</div>';
+
+  runsEl.innerHTML = r.runs.map((x) => {
+    const ok = x.status === "completed";
+    return '<div class="act-card">' +
+      '<div class="act-head">' +
+        '<span class="act-agent">' + esc(x.agent_name) + '</span>' +
+        '<span class="' + (ok ? "run-ok" : "run-bad") + '">' + esc(x.status) + '</span>' +
+        '<span>' + esc(fmtTime(x.started_at)) + '</span>' +
+        '<span>' + esc(x.model || "no model") + '</span>' +
+        '<span>' + (x.duration_ms || 0) + 'ms</span>' +
+        '<span>' + ((x.tokens_in || 0) + (x.tokens_out || 0)) + ' tok</span>' +
+        '<span>as ' + esc(x.caller_role || "unknown") + '</span>' +
+      '</div>' +
+      (x.input ? '<div class="act-io"><span class="lbl">in </span>' + esc(x.input) + '</div>' : "") +
+      (x.output ? '<div class="act-io"><span class="lbl">out </span>' + esc(x.output) + '</div>' : "") +
+    '</div>';
+  }).join("");
+}
 
 // ---- samples ----
 // Prompts are grouped by the kind of job they represent, because the useful

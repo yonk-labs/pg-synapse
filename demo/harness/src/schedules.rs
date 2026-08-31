@@ -149,6 +149,53 @@ pub async fn app_runs(
     Ok(Json(json!({"ok": true, "app": app, "runs": runs})))
 }
 
+/// Every run across every app, newest first: the activity log.
+///
+/// Failures are included rather than filtered. A run history that shows only
+/// successes is the same lie the queue used to tell by marking timed-out jobs
+/// done, and it is the first place someone looks when an app stops producing.
+pub async fn all_runs(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let runs = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(r)::text FROM ( \
+           SELECT e.execution_id::text AS execution_id, e.agent_name, e.status, e.model, \
+                  e.caller_role, e.tokens_in, e.tokens_out, e.cost_usd::float8 AS cost_usd, \
+                  e.duration_ms, e.started_at, \
+                  left(coalesce(e.input, ''), 160) AS input, \
+                  left(coalesce(e.output, ''), 400) AS output, \
+                  (ag.app IS NOT NULL) AS is_app \
+           FROM synapse.executions e \
+           LEFT JOIN synapse.app_agents ag ON ag.agent = e.agent_name \
+           ORDER BY e.started_at DESC LIMIT 100) r",
+        &[],
+    )
+    .await?;
+    let stats = db::jsonb_one(
+        &client,
+        "SELECT to_jsonb(s)::text FROM ( \
+           SELECT count(*) AS total, \
+                  count(*) FILTER (WHERE status = 'completed') AS completed, \
+                  count(*) FILTER (WHERE status <> 'completed') AS failed, \
+                  count(*) FILTER (WHERE started_at > now() - interval '24 hours') AS last_24h, \
+                  coalesce(round(avg(duration_ms))::bigint, 0) AS avg_ms, \
+                  coalesce(sum(tokens_in + tokens_out), 0) AS tokens \
+           FROM synapse.executions) s",
+        &[],
+    )
+    .await?;
+    let queue = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(q)::text FROM ( \
+           SELECT agent, status, source, enqueued_at, \
+                  left(coalesce(error, ''), 160) AS error \
+           FROM synapse.agent_queue ORDER BY enqueued_at DESC LIMIT 20) q",
+        &[],
+    )
+    .await?;
+    Ok(Json(json!({"ok": true, "runs": runs, "stats": stats, "queue": queue})))
+}
+
 /// The scheduler driver: call `synapse.tick()` on a cadence, then drain what it
 /// enqueued.
 ///
