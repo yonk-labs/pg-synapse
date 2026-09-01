@@ -634,8 +634,14 @@ const APP_BUILDER = {
     "<name> by name, telling it which of sql_query/sql_exec/read_file/remote_query/remote_exec/ " +
     "search_news/read_article/lede_compress it needs and how to use them, AND telling it to insert " +
     "multiple rows in as FEW sql_exec calls as possible (one multi-row INSERT beats one row per " +
-    "call) whenever it processes several records at once, e.g. rows from a file - it has a limited " +
-    "number of tool calls to work with, same as you do>', 'conversation', 'vllm-default', " +
+    "call) whenever it processes several records at once, e.g. rows from a file. Also tell it to " +
+    "issue INDEPENDENT writes TOGETHER in one batch rather than one after another (inserts into " +
+    "different tables do not depend on each other, and waiting between them costs a model round " +
+    "trip of several seconds each time), and to verify its work with ONE combined query at the " +
+    "end rather than checking each table separately - measured on a 15-row file, batching the " +
+    "independent inserts and collapsing six verification queries into one took a run from 15 " +
+    "model turns and 78 seconds down to 7 turns and 59 seconds. It has a limited number of tool " +
+    "calls to work with, same as you do>', 'conversation', 'vllm-default', " +
     "ARRAY['sql_query','sql_exec'<list any of read_file/remote_query/remote_exec/search_news/" +
     "read_article/lede_compress the new agent actually needs, comma-separated, each single-" +
     "quoted>], 15, 90000);\n" +
