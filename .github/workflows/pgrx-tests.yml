@@ -1,13 +1,19 @@
 name: pgrx-tests
 on:
   push:
-    paths: ['crates/pg-synapse-pgrx/**', 'crates/pg-synapse-core/**']
+    paths: ['crates/pg-synapse-pgrx/**', 'crates/pg-synapse-core/**', '.github/workflows/pgrx-tests.yml']
   pull_request:
-    paths: ['crates/pg-synapse-pgrx/**', 'crates/pg-synapse-core/**']
+    paths: ['crates/pg-synapse-pgrx/**', 'crates/pg-synapse-core/**', '.github/workflows/pgrx-tests.yml']
 
+# The pgrx in-harness tests are the only CI coverage the extension has: ci.yml
+# excludes pg_synapse_pgrx from both clippy and test, so if this job does not
+# run, nothing checks the SQL surface, the grants or the privilege matrix.
 jobs:
   pgrx:
     strategy:
+      # Without this, one leg failing cancels the others and hides whether the
+      # rest would have passed.
+      fail-fast: false
       matrix:
         pg: ["15", "16", "17"]
     runs-on: ubuntu-latest
@@ -15,16 +21,58 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
       - name: Install pg${{ matrix.pg }}
+        # From PGDG, not the Ubuntu archive. The runner image carries exactly
+        # one Postgres major, so `apt-get install postgresql-15` and
+        # `postgresql-17` both fail with "no installation candidate" against
+        # the default sources.
         run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
-          sudo apt-get install -y postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+
       - name: Install pgrx
         # Must match the pinned `pgrx = "=0.18.0"` in Cargo.toml. cargo-pgrx
         # and the pgrx crate version have to agree or `cargo pgrx test`
         # fails with a schema/path mismatch (see CLAUDE.md).
         run: cargo install --locked cargo-pgrx --version 0.18.0
+
+      - name: Make the extension dirs writable
+        # `cargo pgrx test` installs the extension into the Postgres it was
+        # pointed at, and an apt-installed Postgres owns those directories as
+        # root. Without this the install step fails, every test then reports
+        # "Could not obtain test mutex", and the real error is one line above
+        # 45 identical ones.
+        run: |
+          PGC=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          sudo chmod a+w "$($PGC --pkglibdir)" "$($PGC --sharedir)/extension"
+
       - name: pgrx init
-        run: cargo pgrx init --pg${{ matrix.pg }} $(which pg_config)
+        # The version-specific pg_config, not `which pg_config`: with several
+        # majors installable side by side, whichever lands on PATH is not
+        # necessarily the one this matrix leg is testing.
+        run: cargo pgrx init --pg${{ matrix.pg }} /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+
       - name: pgrx tests
-        run: cargo pgrx test --pg-version pg${{ matrix.pg }} -p pg-synapse-pgrx
+        # Three things this line has to get right, all of which it used to get
+        # wrong:
+        #   - the package is `pg_synapse_pgrx`, with underscores
+        #   - the PG version is a positional argument; there is no
+        #     `--pg-version` flag, so the old form never parsed
+        #   - the crate's `default` features pin `pg17`, so the pg15 and pg16
+        #     legs must opt out or they activate two pg features at once
+        # embed-ort is left off deliberately: it needs libonnxruntime on the
+        # runner and costs no coverage, the same 52 tests run without it.
+        run: |
+          cargo pgrx test \
+            --package pg_synapse_pgrx \
+            --no-default-features \
+            --features "pg${{ matrix.pg }} pg_test provider-llama-cpp provider-anthropic tools-fs tools-http tools-lede tools-calc tools-clock tools-delegate tools-remotedb tools-newssearch tools-readarticle tools-loadfile" \
+            pg${{ matrix.pg }}
