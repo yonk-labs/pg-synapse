@@ -419,11 +419,20 @@
 
     <div class="pane" id="pane-limits">
       <div class="q-intro">
-        The three guardrails. Every run stops at whichever it hits first, and
-        the stop is recorded honestly: a run that ran out of turns says
-        max_iterations, not "completed".
+        Which model this app runs on, and the three guardrails. Every run stops
+        at whichever guardrail it hits first, and the stop is recorded
+        honestly: a run that ran out of turns says max_iterations, not
+        "completed".
       </div>
       <div class="lim-grid">
+        <label>
+          <span class="lim-k">Model</span>
+          <select id="lim-tier">
+            <option value="large">Large: slower, handles harder jobs</option>
+            <option value="small">Small: much faster, may not cope</option>
+          </select>
+          <span class="lim-h" id="lim-tier-h">Pick a size, not a model. Which model each size means is set once for the whole database, so swapping models later does not mean editing every app.</span>
+        </label>
         <label>
           <span class="lim-k">Turns</span>
           <input type="number" id="lim-turns" min="1" max="100" step="1">
@@ -1189,7 +1198,26 @@ function loadLimits(agent) {
   $("lim-turns").value = agent.max_iterations ?? "";
   $("lim-secs").value = agent.timeout_ms ? Math.round(agent.timeout_ms / 1000) : "";
   $("lim-cost").value = (agent.cost_cap_usd && agent.cost_cap_usd > 0) ? agent.cost_cap_usd : "";
+  $("lim-tier").value = agent.model_tier || "large";
+  showTier(agent);
   $("lim-status").textContent = "";
+}
+
+// Say what the choice actually resolves to. A tier names a setting, and a
+// setting can be unset or pinned past, so "small" on its own would claim a
+// choice that may not be in effect.
+function showTier(agent) {
+  const h = $("lim-tier-h");
+  const base = "Pick a size, not a model. Which model each size means is set once for the whole database, so swapping models later does not mean editing every app. " +
+    "Small is worth trying for narrow jobs and is dramatically faster, but it is a real capability drop, not just a speed setting: a small model asked to work across a schema may get the answer wrong rather than slowly. Check Activity after switching.";
+  if (agent.llm_profile_main) {
+    h.textContent = base + " This app currently pins " + agent.llm_profile_main +
+      " directly; saving a size here replaces that pin with the size.";
+  } else if (agent.resolved_profile) {
+    h.textContent = base + " Right now this runs on " + agent.resolved_profile + ".";
+  } else {
+    h.textContent = base + " No model is configured for this size yet, so runs will fail until one is.";
+  }
 }
 
 $("lim-save").onclick = async () => {
@@ -1201,17 +1229,25 @@ $("lim-save").onclick = async () => {
   if (Number.isFinite(turns)) body.max_iterations = turns;
   if (Number.isFinite(secs)) body.timeout_ms = secs * 1000;
   body.cost_cap_usd = Number.isFinite(cost) ? cost : 0;
+  body.model_tier = $("lim-tier").value;
   st.className = "busy"; st.textContent = "saving...";
   const r = await api("/api/agent/" + encodeURIComponent(CURRENT_AGENT) + "/limits", "POST", body);
   st.className = "";
   if (!r.ok) { st.textContent = r.error || "could not save"; return; }
-  st.textContent = "saved: " + r.max_iterations + " turns, " +
+  st.textContent = "saved: " + r.model_tier + " model" +
+    (r.resolved_profile ? " (" + r.resolved_profile + ")" : "") + ", " +
+    r.max_iterations + " turns, " +
     Math.round(r.timeout_ms / 1000) + "s, " +
     (r.cost_cap_usd ? ("$" + r.cost_cap_usd + " cap") : "no cost cap");
   // Keep the in-page copy honest, so reopening the app shows what was saved
   // rather than what was loaded at boot.
   const a = (BOOT.agents || []).find((x) => x.name === CURRENT_AGENT);
-  if (a) { a.max_iterations = r.max_iterations; a.timeout_ms = r.timeout_ms; a.cost_cap_usd = r.cost_cap_usd; }
+  if (a) {
+    a.max_iterations = r.max_iterations; a.timeout_ms = r.timeout_ms;
+    a.cost_cap_usd = r.cost_cap_usd; a.model_tier = r.model_tier;
+    a.resolved_profile = r.resolved_profile;
+    showTier(a);
+  }
 };
 
 // ---- files ----

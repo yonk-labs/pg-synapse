@@ -207,6 +207,15 @@ pub struct LimitsReq {
     pub timeout_ms: Option<i64>,
     /// Spend ceiling in USD. Zero or absent clears it.
     pub cost_cap_usd: Option<f64>,
+    /// Which tier of model to run on: "small" or "large". Absent leaves both
+    /// the tier and any pinned profile alone.
+    ///
+    /// Setting it also clears `llm_profile_main`, which is deliberate rather
+    /// than a side effect: a pinned profile beats a tier, so an agent that
+    /// pins one would ignore this field and the control would silently do
+    /// nothing. Choosing a size *is* choosing to select by size. Anyone who
+    /// wants a specific model still sets `llm_profile_main` directly in SQL.
+    pub model_tier: Option<String>,
 }
 
 /// Set an agent's limits without touching anything else about it.
@@ -245,18 +254,28 @@ pub async fn agent_limits(
             ));
         }
     }
+    // Checked here as well as by the column's CHECK, so a typo comes back as a
+    // sentence rather than as a constraint violation.
+    if let Some(t) = req.model_tier.as_deref() {
+        if !matches!(t, "small" | "large") {
+            return Err(HarnessError::BadRequest(
+                "model tier must be \"small\" or \"large\"".to_owned(),
+            ));
+        }
+    }
 
     let client = db::connect(&state.db_url).await?;
     // COALESCE so an omitted field keeps its current value rather than being
     // nulled by a partial form.
     let n = client
         .execute(
-            "UPDATE synapse.agents SET                max_iterations = COALESCE($2, max_iterations),                timeout_ms     = COALESCE($3, timeout_ms),                cost_cap_usd   = CASE WHEN $4::float8 IS NULL THEN cost_cap_usd                                      WHEN $4::float8 <= 0 THEN NULL                                      ELSE ($4::float8)::numeric(12,6) END,                updated_at = now()              WHERE name = $1",
+            "UPDATE synapse.agents SET                max_iterations = COALESCE($2, max_iterations),                timeout_ms     = COALESCE($3, timeout_ms),                cost_cap_usd   = CASE WHEN $4::float8 IS NULL THEN cost_cap_usd                                      WHEN $4::float8 <= 0 THEN NULL                                      ELSE ($4::float8)::numeric(12,6) END,                model_tier     = COALESCE($5, model_tier),                llm_profile_main = CASE WHEN $5::text IS NULL THEN llm_profile_main ELSE NULL END,                updated_at = now()              WHERE name = $1",
             &[
                 &agent,
                 &req.max_iterations,
                 &req.timeout_ms,
                 &req.cost_cap_usd,
+                &req.model_tier,
             ],
         )
         .await?;
@@ -273,7 +292,7 @@ pub async fn agent_limits(
 
     let row = client
         .query_one(
-            "SELECT max_iterations, timeout_ms, cost_cap_usd::float8              FROM synapse.agents WHERE name = $1",
+            "SELECT max_iterations, timeout_ms, cost_cap_usd::float8, model_tier,                     synapse.agent_llm_profile(name)              FROM synapse.agents WHERE name = $1",
             &[&agent],
         )
         .await?;
@@ -283,6 +302,8 @@ pub async fn agent_limits(
         "max_iterations": row.get::<_, i32>(0),
         "timeout_ms": row.get::<_, i64>(1),
         "cost_cap_usd": row.get::<_, Option<f64>>(2),
+        "model_tier": row.get::<_, String>(3),
+        "resolved_profile": row.get::<_, Option<String>>(4),
     })))
 }
 

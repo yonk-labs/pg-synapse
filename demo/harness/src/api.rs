@@ -250,8 +250,12 @@ pub async fn bootstrap(
     let client = db::connect(&state.db_url).await?;
     let mut agents = db::jsonb_rows(
         &client,
+        // `resolved_profile` rather than just the tier: the tier says which
+        // setting applies and the setting may be unset, so showing only
+        // "small" would claim a choice that is not actually in effect.
         "SELECT to_jsonb(a)::text FROM (SELECT name, system_prompt, executor_name, \
-         llm_profile_main, tools, max_iterations, timeout_ms, cost_cap_usd::float8, trace_level \
+         llm_profile_main, tools, max_iterations, timeout_ms, cost_cap_usd::float8, trace_level, \
+         model_tier, synapse.agent_llm_profile(name) AS resolved_profile \
          FROM synapse.agents ORDER BY name) a",
         &[],
     )
