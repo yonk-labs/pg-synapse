@@ -59,16 +59,26 @@ pub static DEFAULT_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(60_000);
 /// author's, and the spec (D5) required it to be enforced rather than advised
 /// and stated as a number rather than "much shorter".
 ///
-/// **2000ms, chosen from measurement rather than taste.** On the reference
-/// stack a one-turn agent (the approve-or-reject decision inline mode exists
-/// for) completed in 826ms, while two-turn runs averaged 2564ms across five
-/// samples and reached 4604ms. So 2s leaves a single model call comfortable
-/// headroom and does not fit a second one, which keeps inline agents to the
-/// shape they are for and gives an operator one defensible sentence: the worst
-/// this does to your write path is two seconds of held locks.
+/// **2000ms, and it is a budget for the write path rather than a prediction
+/// about the model.** The number answers the DBA's question, not the model's:
+/// two seconds is roughly what a hot OLTP table can absorb without queueing,
+/// so it is what the write path can afford to lend.
 ///
-/// A slower endpoint needs this raised, and raising it is the operator's
-/// informed choice. Only ever lowers the agent's own budget, never raises it.
+/// Whether a given model fits inside it is a separate question, and measuring
+/// honestly says most do not. Six single-turn runs of a no-tool agent against
+/// the reference endpoint, a 36B model, took 1316, 1758, 1873, 2129, 4085 and
+/// 11162 milliseconds: a median right at the cap and a long tail well past it.
+/// An earlier reading of 826ms turned out to be a prefix-cache hit and is not
+/// representative.
+///
+/// That is the cap working, not failing. Inline mode holds every other
+/// session behind its locks, so a model that answers in two seconds only half
+/// the time has no business in a write path, and the honest outcomes are to
+/// use queue mode or to point the agent at a small fast model. Raising this
+/// until a slow model fits is available and is the wrong instinct: it does not
+/// make the agent quicker, it makes the lock queue longer.
+///
+/// Only ever lowers the agent's own budget, never raises it.
 pub static INLINE_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(2_000);
 
 /// Design-spec per-execution timeout fallback, in whole seconds.

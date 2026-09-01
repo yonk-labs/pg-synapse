@@ -131,6 +131,7 @@ docs/                       design spec, quickstarts, reference, recipes
 
 ## Documentation
 
+- `docs/versus-a-cron-script.md` what this does that a cron script cannot, and what it does worse
 - `docs/AGENTS-GUIDE.md` agent catalog: benchmark agents with schemas, sample code, and reactive triggers
 - `docs/design.md` the design contract
 - `docs/extension-quickstart.md` install and first agent (pgrx path)
