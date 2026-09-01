@@ -26,7 +26,7 @@ This example demonstrates the two reactive trigger modes added in T1:
 
 ```bash
 # From the repo root
-PG_SYNAPSE_LLM_BASE_URL=http://192.168.1.193:8000/v1 \
+PG_SYNAPSE_LLM_BASE_URL=http://localhost:8000/v1 \
 PG_SYNAPSE_LLM_MODEL=Intel/Qwen3-Coder-Next-int4-AutoRound \
   examples/reactive-triggers/run.sh
 ```

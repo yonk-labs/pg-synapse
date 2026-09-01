@@ -28,7 +28,7 @@
 //!         provider: "openai".into(),
 //!         model: "granite-3.1-2b-instruct".into(),
 //!         api_key_secret: None,
-//!         base_url: Some("http://192.168.1.193:8000/v1".into()),
+//!         base_url: Some("http://localhost:8000/v1".into()),
 //!         params: serde_json::json!({}),
 //!     })
 //!     .with_agent(AgentRow {

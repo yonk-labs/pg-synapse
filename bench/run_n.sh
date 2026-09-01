@@ -14,7 +14,7 @@ OUT="$BENCH/run_n_${SCEN_NAME}.log"
 
 PROV="openai"
 MODEL_ID="Intel/Qwen3-Coder-Next-int4-AutoRound"
-BASE_URL="http://192.168.1.193:8000/v1"
+BASE_URL="http://localhost:8000/v1"
 
 PG_PORT="28817"; PG_USER="$(whoami)"
 _PGRX_DATA="/home/yonk/.pgrx/data-17"

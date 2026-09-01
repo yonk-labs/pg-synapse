@@ -53,7 +53,7 @@ two containers: `rds` (stock `postgres:17`, the RDS stand-in) + `sidecar`.
       PG through the sidecar. Renders clean (headless screenshot verified).
 - [x] Harness proxy route `/api/sidecar/probe` (server-side -> sidecar, no
       browser CORS). Verified: returns remote server identity
-      (`192.168.80.2:5432`, PostgreSQL 17.10) + live SQL rows.
+      (`<container-ip>:5432`, PostgreSQL 17.10) + live SQL rows.
 - [x] Fable-authored revised diagram (#viz2) + hero flip on the main page
       (Extension <-> Sidecar / RDS). Fixed a CSS specificity bug where
       `#p-arch svg { display: block }` beat `#viz2 { display: none }` so both
@@ -65,30 +65,30 @@ two containers: `rds` (stock `postgres:17`, the RDS stand-in) + `sidecar`.
 
 ## LLM endpoints (as of this session)
 
-- `192.168.1.193:8000` (the demo default vLLM): **DOWN** (host pings, but :8000
+- `llm-host-a:8000` (the demo default vLLM): **DOWN** (host pings, but :8000
   refuses; no listener).
-- `192.168.1.193:11434`: Ollama, **UP**, OpenAI-compatible at /v1, ~20 models.
+- `llm-host-a:11434`: Ollama, **UP**, OpenAI-compatible at /v1, ~20 models.
   The 30B (`qwen3-coder-30b-opt`) was too slow to finish a run promptly.
-- `192.168.1.133:8000`: vLLM, **UP + fast** (0.1s), `cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit`,
+- `llm-host-b:8000`: vLLM, **UP + fast** (0.1s), `cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit`,
   supports tool calls. This is the one that works.
 
 ## Environment issue: RESOLVED (Docker subnet collision)
 
 - Symptom: containers reached the internet but NOT the LAN LLM
-  (`192.168.1.133/.193:8000`), so the in-container extension could not run
+  (`llm-host-b/.193:8000`), so the in-container extension could not run
   agents. Host processes (harness, sidecar) reached the LLM fine.
 - **Root cause (not a code bug): Docker subnet sprawl.** 25 Docker networks
   exhausted the `172.16.0.0/12` pool, so Docker's second default pool
-  `192.168.0.0/16` got carved into /20s that OVERLAPPED the real LAN
-  (`192.168.1.0/24`). An on-link bridge route to an overlapping subnet wins over
+  `<lan-range>/16` got carved into /20s that OVERLAPPED the real LAN
+  (`<lan-range>/24`). An on-link bridge route to an overlapping subnet wins over
   the default route, so LAN-bound traffic (`192.168.1.x`) blackholed into a
   bridge. Internet still worked, which masked it.
 - **Fix:** `docker network prune -f` (freed the 192.168 allocations) + set
   `default-address-pools` to `172.16.0.0/12 size 24` in the (rootless) docker
   daemon config, then restart docker. New nets now allocate from 172.x; a fresh
-  container reaches `192.168.1.133:8000` directly. Verified.
+  container reaches `llm-host-b:8000` directly. Verified.
 - Temporary workaround used before the root cause was found: a host-side TCP
-  forwarder (`0.0.0.0:8500 -> 192.168.1.133:8000`) reachable from the container
+  forwarder (`0.0.0.0:8500 -> llm-host-b:8000`) reachable from the container
   at `10.0.2.2:8500`. Removed after the real fix.
 
 ## Both paths verified working (post-fix)
@@ -96,11 +96,11 @@ two containers: `rds` (stock `postgres:17`, the RDS stand-in) + `sidecar`.
 - LOCAL (extension, `:8091` Talk to DB): `db_architect` created `public.customers`
   for real; `executions=1`, `messages=5` (full reasoning trace), table exists.
 - SIDECAR (`:8091/sidecar`, via `/api/sidecar/execute` proxy): created `widgets`
-  in rds. Both use `192.168.1.133:8000` directly (no forwarder).
+  in rds. Both use `llm-host-b:8000` directly (no forwarder).
 
 ## Runs proven through the sidecar
 
-- Registered profile `vllm -> 192.168.1.133:8000/v1` + agent `asst` via the admin
+- Registered profile `vllm -> llm-host-b:8000/v1` + agent `asst` via the admin
   API; seeded `public.orders` in rds; `POST /v1/execute` ran a real tool-calling
   loop (LLM on .133 + `sql_query` on remote rds) and returned the correct answer
   ("count is 2 and total is 420.5") in ~2.5s. tokens ~700/60.
@@ -119,7 +119,7 @@ two containers: `rds` (stock `postgres:17`, the RDS stand-in) + `sidecar`.
 - **Fix built:** added `POST /api/sidecar/execute` to the harness (host process)
   that forwards a run to the sidecar's `/v1/execute`, plus a "Run an agent" panel
   on `/sidecar`. Proven end to end: browser -> harness(:8091) -> sidecar(:8088)
-  -> LLM(192.168.1.133) + remote rds -> "2 rows, total 420.5" in ~1.7s.
+  -> LLM(llm-host-b) + remote rds -> "2 rows, total 420.5" in ~1.7s.
 
 ## Bug: sidecar sql_query returns NULL for `numeric` columns
 

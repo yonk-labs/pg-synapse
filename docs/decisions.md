@@ -104,10 +104,10 @@ The operator specified additional constraints after M0 was scaffolded. These are
 
 ## D9 — Test LLM endpoint
 
-- Operator-provided test LLM is reachable at `http://192.168.1.193:8000` (assumed OpenAI-compatible API per standard vLLM / llama-cpp-server / LM Studio conventions on port 8000).
+- Operator-provided test LLM is reachable at `http://localhost:8000` (assumed OpenAI-compatible API per standard vLLM / llama-cpp-server / LM Studio conventions on port 8000).
 - The `pg-synapse-provider-openai` plugin MUST expose a configurable `base_url` field in `LlmProfileRow.params` so it can target any OpenAI-compatible endpoint (real OpenAI, vLLM, llama-cpp-server, LM Studio, Ollama with `/v1` shim, etc.).
 - Live integration tests for the operator scenario use this endpoint when `PG_SYNAPSE_TEST_LLM_BASE_URL` env var is set.
-- Default test profile: `provider="openai"`, `model="<discovered-at-runtime>"`, `base_url="http://192.168.1.193:8000/v1"`, no API key required (assumed unauthenticated on internal LAN).
+- Default test profile: `provider="openai"`, `model="<discovered-at-runtime>"`, `base_url="http://localhost:8000/v1"`, no API key required (assumed unauthenticated on internal LAN).
 
 ## D10 — Local model selection for offline testing
 
@@ -118,7 +118,7 @@ The operator specified additional constraints after M0 was scaffolded. These are
 
 ### D10 addendum — vLLM endpoint reality check (live test 2026-05-13)
 
-- The operator's vLLM endpoint at `http://192.168.1.193:8000/v1` was probed via `GET /v1/models`.
+- The operator's vLLM endpoint at `http://localhost:8000/v1` was probed via `GET /v1/models`.
 - It is currently serving model id `Intel/Qwen3-Coder-Next-int4-AutoRound` (Intel's 4-bit AutoRound quantization of Qwen3-Coder-Next).
 - For now, all sample agent profiles target this model id by default. Operators wanting Granite 4 can change the vLLM launch args; the plugin doesn't care about the underlying model.
 - The `PG_SYNAPSE_TEST_LLM_MODEL` env var (default in tests/live.rs) controls which model id the test suite uses.
