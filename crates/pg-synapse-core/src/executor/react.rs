@@ -42,6 +42,11 @@ impl Executor for ReActExecutor {
                 };
             }
             harness.check_cost_cap()?;
+            // See LoopHarness::check_deadline: finalize on the budget rather
+            // than letting the runtime cancel the future and lose the run.
+            if harness.check_deadline().is_err() {
+                return Ok(harness.finalize(String::new(), OutcomeStatus::TimedOut));
+            }
 
             match harness.one_llm_turn().await {
                 Ok(TurnResult::AssistantText(text)) => {
@@ -60,6 +65,10 @@ impl Executor for ReActExecutor {
                             Err(other) => return Err(other),
                         }
                     }
+                }
+                // Budget expiring inside the model call, see conversation.rs.
+                Err(ExecutorError::Timeout(_)) => {
+                    return Ok(harness.finalize(String::new(), OutcomeStatus::TimedOut));
                 }
                 Err(e) => return Err(e),
             }

@@ -48,6 +48,12 @@ impl Executor for ConversationExecutor {
                 };
             }
             harness.check_cost_cap().map_err(soft_to_outcome_err)?;
+            // Wall-clock budget, checked here so a run that runs out of time
+            // finalizes with its transcript instead of being cancelled from
+            // outside and losing it. See LoopHarness::check_deadline.
+            if harness.check_deadline().is_err() {
+                return Ok(harness.finalize(String::new(), OutcomeStatus::TimedOut));
+            }
 
             match harness.one_llm_turn().await {
                 Ok(TurnResult::AssistantText(text)) => {
@@ -76,6 +82,12 @@ impl Executor for ConversationExecutor {
                             Err(other) => return Err(other),
                         }
                     }
+                }
+                // A budget that expires inside the model call comes back
+                // here, not from the loop-top check. Finalize so the run keeps
+                // what it produced.
+                Err(ExecutorError::Timeout(_)) => {
+                    return Ok(harness.finalize(String::new(), OutcomeStatus::TimedOut));
                 }
                 Err(e) => return Err(e),
             }

@@ -56,9 +56,17 @@ impl Executor for ReflectionExecutor {
         // Phase 1: generate the initial draft via the main provider.
         harness.bump_iteration();
         harness.check_cost_cap()?;
-        let mut current = match harness.one_llm_turn().await? {
-            TurnResult::AssistantText(t) => t,
-            TurnResult::ToolCalls(_) | TurnResult::Empty => String::new(),
+        // Each `one_llm_turn` below can come back as Timeout when the budget
+        // expires inside the model call rather than at a turn boundary, and
+        // every one of those finalizes with the best answer so far instead of
+        // propagating. See LoopHarness::one_llm_turn_with.
+        let mut current = match harness.one_llm_turn().await {
+            Ok(TurnResult::AssistantText(t)) => t,
+            Ok(TurnResult::ToolCalls(_) | TurnResult::Empty) => String::new(),
+            Err(ExecutorError::Timeout(_)) => {
+                return Ok(harness.finalize(String::new(), OutcomeStatus::TimedOut));
+            }
+            Err(e) => return Err(e),
         };
 
         // Resolve judge once. Falls back to main when not configured.
@@ -70,6 +78,11 @@ impl Executor for ReflectionExecutor {
             if harness.check_iteration_cap().is_err() {
                 return Ok(harness.finalize(current, OutcomeStatus::MaxIterations));
             }
+            // See LoopHarness::check_deadline. `current` is the best answer so
+            // far, so a timed-out reflection returns it rather than nothing.
+            if harness.check_deadline().is_err() {
+                return Ok(harness.finalize(current, OutcomeStatus::TimedOut));
+            }
 
             // Phase 2: critique using the judge provider.
             harness.push_user_message(format!(
@@ -78,9 +91,13 @@ impl Executor for ReflectionExecutor {
                  followed by a brief confirmation. Otherwise, list concrete \
                  problems and what to change."
             ));
-            let critique = match harness.one_llm_turn_with(judge.clone()).await? {
-                TurnResult::AssistantText(t) => t,
-                TurnResult::ToolCalls(_) | TurnResult::Empty => String::new(),
+            let critique = match harness.one_llm_turn_with(judge.clone()).await {
+                Ok(TurnResult::AssistantText(t)) => t,
+                Ok(TurnResult::ToolCalls(_) | TurnResult::Empty) => String::new(),
+                Err(ExecutorError::Timeout(_)) => {
+                    return Ok(harness.finalize(current, OutcomeStatus::TimedOut));
+                }
+                Err(e) => return Err(e),
             };
 
             if critique.contains(ACCEPT_TOKEN) {
@@ -92,15 +109,24 @@ impl Executor for ReflectionExecutor {
             if harness.check_iteration_cap().is_err() {
                 return Ok(harness.finalize(current, OutcomeStatus::MaxIterations));
             }
+            // See LoopHarness::check_deadline. `current` is the best answer so
+            // far, so a timed-out reflection returns it rather than nothing.
+            if harness.check_deadline().is_err() {
+                return Ok(harness.finalize(current, OutcomeStatus::TimedOut));
+            }
 
             // Phase 3: revise using the main provider.
             harness.push_user_message(
                 "Revise your previous answer to address the critique. \
                  Reply with only the revised answer; no preamble.",
             );
-            current = match harness.one_llm_turn().await? {
-                TurnResult::AssistantText(t) => t,
-                TurnResult::ToolCalls(_) | TurnResult::Empty => current,
+            current = match harness.one_llm_turn().await {
+                Ok(TurnResult::AssistantText(t)) => t,
+                Ok(TurnResult::ToolCalls(_) | TurnResult::Empty) => current,
+                Err(ExecutorError::Timeout(_)) => {
+                    return Ok(harness.finalize(current, OutcomeStatus::TimedOut));
+                }
+                Err(e) => return Err(e),
             };
         }
 
