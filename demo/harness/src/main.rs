@@ -81,6 +81,24 @@ async fn main() {
         std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "/tmp/pg_synapse_fs/uploads".to_owned());
     std::fs::create_dir_all(&upload_dir)
         .unwrap_or_else(|e| panic!("cannot create upload dir {upload_dir}: {e}"));
+    // Two containers share this directory at the same path, and they run as
+    // different users: this process is root, while the agent tools run inside
+    // the Postgres backend as `postgres`. Created 0755 by root, the database
+    // side could read an upload but not write one, so export_csv and
+    // write_file failed with EACCES.
+    //
+    // ponytail: 0777 on a demo sandbox shared between two containers, rather
+    // than aligning uids across images. If this is ever deployed for real, run
+    // both as the same user and drop this.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&upload_dir, std::fs::Permissions::from_mode(0o777))
+        {
+            eprintln!("could not relax permissions on {upload_dir}: {e}");
+        }
+    }
 
     let state = AppState {
         db_url,

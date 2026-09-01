@@ -56,6 +56,14 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
         "Get every table, column, primary key and foreign key in one call",
     ),
     (
+        "export_csv",
+        "Write a query's rows to a CSV file without the rows passing through you",
+    ),
+    (
+        "load_url",
+        "Fetch JSON from a URL straight into a table, without writing the rows yourself",
+    ),
+    (
         "load_csv",
         "Load an uploaded CSV into a table directly, without writing the rows yourself",
     ),

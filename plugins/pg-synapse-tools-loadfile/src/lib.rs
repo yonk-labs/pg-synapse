@@ -425,7 +425,272 @@ fn parse_records(text: &str) -> Result<Vec<serde_json::Map<String, Value>>, Tool
     Ok(out)
 }
 
-/// Registers `load_csv` and `load_json`.
+#[derive(JsonSchema, Deserialize)]
+struct ExportArgs {
+    /// SELECT whose rows become the file.
+    #[serde(alias = "sql", alias = "statement")]
+    query: String,
+    /// File to write, relative to the sandbox.
+    #[serde(alias = "file", alias = "filename")]
+    path: String,
+}
+
+/// `export_csv`: rows out to a file, the inverse of `load_csv`.
+///
+/// Getting data *out* had the same problem as getting it in, in reverse: the
+/// only route was through the model, a token per value. An agent asked for a
+/// report either summarized it (losing the data) or typed it out (paying for
+/// every cell).
+///
+/// The agent writes one SELECT; the rows never enter its context. Cost is flat
+/// in row count, which is the same property that took a 15-row import from 78
+/// seconds to 29.
+pub struct ExportCsvTool {
+    pub sandbox: Arc<FsSandbox>,
+    pub sql: Arc<dyn SqlExecutor>,
+}
+
+#[async_trait]
+impl Tool for ExportCsvTool {
+    fn name(&self) -> &str {
+        "export_csv"
+    }
+    fn schema(&self) -> &ToolSchema {
+        static S: std::sync::OnceLock<ToolSchema> = std::sync::OnceLock::new();
+        S.get_or_init(|| ToolSchema::from_root(schemars::schema_for!(ExportArgs)))
+    }
+    async fn run(&self, input: Value, ctx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+        let args: ExportArgs =
+            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
+                name: "export_csv".into(),
+                reason: e.to_string(),
+            })?;
+        // Resolved through the sandbox before anything is written, so a path
+        // argument cannot reach outside the uploads directory.
+        let path = self.sandbox.resolve(&args.path, "export_csv")?;
+
+        let rows = self
+            .sql
+            .query(
+                &args.query,
+                &[],
+                ctx.caller_role.as_deref(),
+                Some(&ctx.execution_id.to_string()),
+            )
+            .await?;
+        if rows.is_empty() {
+            return Err(ToolError::Execution {
+                name: "export_csv".into(),
+                reason: "the query returned no rows, so there is nothing to export".into(),
+            });
+        }
+
+        // Column order from the first row, then held fixed: a later row with
+        // its keys in a different order must not shift the columns under it.
+        let columns: Vec<String> = rows
+            .first()
+            .and_then(|r| r.as_object())
+            .map(|o| o.keys().cloned().collect())
+            .unwrap_or_default();
+
+        let mut writer = csv::Writer::from_writer(Vec::new());
+        writer
+            .write_record(&columns)
+            .map_err(|e| ToolError::Execution {
+                name: "export_csv".into(),
+                reason: format!("could not write the header: {e}"),
+            })?;
+        for row in &rows {
+            let record: Vec<String> = columns
+                .iter()
+                .map(|c| match row.get(c) {
+                    None | Some(Value::Null) => String::new(),
+                    Some(Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                })
+                .collect();
+            writer
+                .write_record(&record)
+                .map_err(|e| ToolError::Execution {
+                    name: "export_csv".into(),
+                    reason: format!("could not write a row: {e}"),
+                })?;
+        }
+        let bytes = writer.into_inner().map_err(|e| ToolError::Execution {
+            name: "export_csv".into(),
+            reason: format!("could not finish the file: {e}"),
+        })?;
+        let len = bytes.len();
+        std::fs::write(&path, bytes).map_err(|e| ToolError::Execution {
+            name: "export_csv".into(),
+            reason: format!("could not save {}: {e}", args.path),
+        })?;
+
+        Ok(ToolOutput::Json(json!({
+            "path": args.path,
+            "rows_exported": rows.len(),
+            "columns": columns,
+            "bytes": len,
+        })))
+    }
+}
+
+#[derive(JsonSchema, Deserialize)]
+struct LoadUrlArgs {
+    /// URL returning JSON: an array of objects, or an object containing one.
+    url: String,
+    /// Where to put the rows, as "table" or "schema.table".
+    #[serde(alias = "target", alias = "into")]
+    table: String,
+    /// Key holding the array, when the response wraps it (for example
+    /// "data" or "items"). Omit when the response is already an array.
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    replace: bool,
+}
+
+/// `load_url`: a JSON API straight into a table.
+///
+/// The same argument as `load_csv`, applied to the other common source. The
+/// "watch and judge" apps ingest from HTTP, and every one of them was having
+/// the model read a response and retype its contents as INSERT values. This
+/// pairs `http_get` with `load_json` and skips the model in the middle.
+///
+/// Egress goes through the same allowlist as any other outbound request, so
+/// this opens no new path out.
+pub struct LoadUrlTool {
+    pub http: reqwest::Client,
+    pub sql: Arc<dyn SqlExecutor>,
+}
+
+#[async_trait]
+impl Tool for LoadUrlTool {
+    fn name(&self) -> &str {
+        "load_url"
+    }
+    fn schema(&self) -> &ToolSchema {
+        static S: std::sync::OnceLock<ToolSchema> = std::sync::OnceLock::new();
+        S.get_or_init(|| ToolSchema::from_root(schemars::schema_for!(LoadUrlArgs)))
+    }
+    async fn run(&self, input: Value, ctx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+        let args: LoadUrlArgs =
+            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
+                name: "load_url".into(),
+                reason: e.to_string(),
+            })?;
+        let url = reqwest::Url::parse(args.url.trim()).map_err(|e| ToolError::InvalidInput {
+            name: "load_url".into(),
+            reason: format!("not a URL: {e}"),
+        })?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(ToolError::InvalidInput {
+                name: "load_url".into(),
+                reason: format!("scheme '{}' is not allowed", url.scheme()),
+            });
+        }
+
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ToolError::Execution {
+                name: "load_url".into(),
+                reason: format!("request failed: {e}"),
+            })?;
+        if !resp.status().is_success() {
+            return Err(ToolError::Execution {
+                name: "load_url".into(),
+                reason: format!("the endpoint returned HTTP {}", resp.status().as_u16()),
+            });
+        }
+        let body: Value = resp.json().await.map_err(|e| ToolError::Execution {
+            name: "load_url".into(),
+            reason: format!("the response was not JSON: {e}"),
+        })?;
+
+        let array = extract_array(&body, args.path.as_deref())?;
+        let records: Vec<serde_json::Map<String, Value>> = array
+            .iter()
+            .filter_map(|v| v.as_object().cloned())
+            .collect();
+        if records.is_empty() {
+            return Err(ToolError::Execution {
+                name: "load_url".into(),
+                reason: "found no JSON objects to load".into(),
+            });
+        }
+
+        let (col_names, rows) = shape_records(&records);
+        let n = stage_rows(
+            self.sql.as_ref(),
+            ctx,
+            "load_url",
+            &args.table,
+            &col_names,
+            &rows,
+            args.replace,
+        )
+        .await?;
+        Ok(describe(&args.table, &col_names, n))
+    }
+}
+
+/// Find the array of records in a response, following `path` when the API
+/// wraps its results (most of them do, under "data", "items" or "results").
+fn extract_array<'a>(body: &'a Value, path: Option<&str>) -> Result<&'a Vec<Value>, ToolError> {
+    let err = |reason: String| ToolError::Execution {
+        name: "load_url".into(),
+        reason,
+    };
+    let target = match path {
+        Some(key) => body
+            .get(key)
+            .ok_or_else(|| err(format!("the response has no key \"{key}\"")))?,
+        None => body,
+    };
+    target.as_array().ok_or_else(|| {
+        err(match path {
+            Some(k) => format!("\"{k}\" is not an array"),
+            None => "the response is not an array; pass `path` naming the key that holds it".into(),
+        })
+    })
+}
+
+/// Union of keys in first-seen order, and the rows aligned to it.
+fn shape_records(
+    records: &[serde_json::Map<String, Value>],
+) -> (Vec<String>, Vec<Vec<Option<String>>>) {
+    let mut keys: Vec<String> = Vec::new();
+    for rec in records {
+        for k in rec.keys() {
+            if !keys.iter().any(|c| c == k) {
+                keys.push(k.clone());
+            }
+        }
+    }
+    let names: Vec<String> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| to_column_name(k, i))
+        .collect();
+    let rows = records
+        .iter()
+        .map(|rec| {
+            keys.iter()
+                .map(|k| match rec.get(k) {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(s)) => Some(s.clone()),
+                    Some(other) => Some(other.to_string()),
+                })
+                .collect()
+        })
+        .collect();
+    (names, rows)
+}
+
+/// Registers the staging loaders and the exporter.
 pub struct LoadFileToolsPlugin {
     sandbox: Arc<FsSandbox>,
     sql: Arc<dyn SqlExecutor>,
@@ -456,6 +721,24 @@ impl Plugin for LoadFileToolsPlugin {
             "load_json",
             Arc::new(LoadJsonTool {
                 sandbox: self.sandbox.clone(),
+                sql: self.sql.clone(),
+            }),
+        );
+        registry.tools.add_arc(
+            "export_csv",
+            Arc::new(ExportCsvTool {
+                sandbox: self.sandbox.clone(),
+                sql: self.sql.clone(),
+            }),
+        );
+        registry.tools.add_arc(
+            "load_url",
+            Arc::new(LoadUrlTool {
+                http: reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .user_agent("pg_synapse/0.1 (+https://github.com/yonk-labs/pg-synapse)")
+                    .build()
+                    .unwrap_or_default(),
                 sql: self.sql.clone(),
             }),
         );
@@ -494,6 +777,39 @@ mod tests {
         // and stays inside Postgres' parameter limit.
         assert_eq!(rows_per_batch(200), 300);
         assert_eq!(rows_per_batch(100_000), 1);
+    }
+
+    #[test]
+    fn extract_array_finds_the_records_however_the_api_wraps_them() {
+        let bare = serde_json::json!([{"a": 1}]);
+        assert_eq!(extract_array(&bare, None).unwrap().len(), 1);
+
+        // Most APIs wrap: {"data": [...]} or {"items": [...]}.
+        let wrapped = serde_json::json!({"data": [{"a": 1}, {"a": 2}]});
+        assert_eq!(extract_array(&wrapped, Some("data")).unwrap().len(), 2);
+
+        // A wrapped response with no path says so, rather than silently
+        // loading nothing.
+        assert!(extract_array(&wrapped, None).is_err());
+        assert!(extract_array(&wrapped, Some("nope")).is_err());
+    }
+
+    /// A record missing a field must get a NULL, not shift the other values
+    /// one column to the left.
+    #[test]
+    fn ragged_records_align_to_the_union_of_keys() {
+        let recs: Vec<serde_json::Map<String, serde_json::Value>> = vec![
+            serde_json::json!({"id": 1, "name": "a"}),
+            serde_json::json!({"id": 2, "extra": true}),
+        ]
+        .into_iter()
+        .map(|v| v.as_object().unwrap().clone())
+        .collect();
+
+        let (cols, rows) = shape_records(&recs);
+        assert_eq!(cols, vec!["id", "name", "extra"]);
+        assert_eq!(rows[0], vec![Some("1".into()), Some("a".into()), None]);
+        assert_eq!(rows[1], vec![Some("2".into()), None, Some("true".into())]);
     }
 
     #[test]
