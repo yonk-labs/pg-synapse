@@ -42,13 +42,20 @@ a tool call and nothing works.
 
 ## What an app actually is
 
-Three things with the same name, which is the whole trick:
+Three things, usually sharing a name, which is most of the trick:
 
 | | |
 | --- | --- |
 | A **schema** | `gym_tracker`, holding the app's tables |
 | An **agent** | a row in `synapse.agents`, with a system prompt about that schema and the tools it needs |
 | An **app record** | a row in `synapse.apps` tying them together, plus a title and description |
+
+"Usually" because the builder is a model: it is told to use one identifier for
+the schema and the agent, and it does, but the app record's own name is picked
+separately and sometimes comes out as `gym_tracker_app`. Nothing depends on the
+three strings matching. `synapse.apps.schema_name` and `synapse.app_agents` are
+what actually tie an app together, so look there rather than at the name if you
+are ever wondering what belongs to what.
 
 Nothing about an app lives outside the database. There is no deploy, no
 service, no config file. `pg_dump` takes the app with it.
