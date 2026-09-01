@@ -20,6 +20,9 @@
 #   tools-remotedb  remote_query / remote_exec against a named external
 #                   Postgres connection (synapse.connections), the sidecar's
 #                   own sqlx-backed connection method reused as a tool
+#   tools-loadfile  load_csv / load_json: read an uploaded file and insert its
+#                   rows directly, so a model never spends output tokens
+#                   writing row values. Requires tools-fs for the sandbox.
 #   tools-newssearch  search_news via Google News RSS, no API key required
 #   tools-readarticle  read_article: fetch a URL and extract its main text
 #                   via a Readability-style DOM heuristic, so an agent can
@@ -58,7 +61,7 @@ COPY . .
 # reported by pg_config (usr/lib/postgresql/17/lib, usr/share/postgresql/17).
 RUN cd crates/pg-synapse-pgrx \
  && cargo pgrx package --no-default-features \
-      --features "pg17 tools-http tools-calc tools-clock tools-delegate tools-fs tools-remotedb tools-newssearch tools-readarticle tools-lede"
+      --features "pg17 tools-http tools-calc tools-clock tools-delegate tools-fs tools-remotedb tools-newssearch tools-readarticle tools-lede tools-loadfile"
 
 FROM postgres:17
 

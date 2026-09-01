@@ -13,7 +13,7 @@ authors.workspace      = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate", "tools-remotedb", "tools-newssearch", "tools-readarticle"]
+default   = ["pg17", "embed-ort", "provider-llama-cpp", "provider-anthropic", "tools-fs", "tools-http", "tools-lede", "tools-calc", "tools-clock", "tools-delegate", "tools-remotedb", "tools-newssearch", "tools-readarticle", "tools-loadfile"]
 pg15      = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16      = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17      = ["pgrx/pg17", "pgrx-tests/pg17"]
@@ -41,6 +41,10 @@ tools-delegate = ["dep:pg-synapse-tools-delegate"]
 # Bundle the remote-database tools plugin (remote_query, remote_exec):
 # named external Postgres connections via synapse.connections.
 tools-remotedb = ["dep:pg-synapse-tools-remotedb"]
+# Bundle the staging loaders (load_csv, load_json): read an uploaded file and
+# insert its rows directly, so the model does not spend output tokens writing
+# them. Requires tools-fs for the sandbox.
+tools-loadfile = ["dep:pg-synapse-tools-loadfile", "tools-fs"]
 # Bundle the news search tool plugin (search_news): Google News RSS, no API key.
 tools-newssearch = ["dep:pg-synapse-tools-newssearch"]
 # Bundle the article extraction tool plugin (read_article): fetch + Readability-style extraction.
@@ -61,6 +65,7 @@ pg-synapse-tools-calc      = { path = "../../plugins/pg-synapse-tools-calc", ver
 pg-synapse-tools-clock     = { path = "../../plugins/pg-synapse-tools-clock", version = "0.1.1", optional = true }
 pg-synapse-tools-delegate  = { path = "../../plugins/pg-synapse-tools-delegate", version = "0.1.1", optional = true }
 pg-synapse-tools-remotedb  = { path = "../../plugins/pg-synapse-tools-remotedb", version = "0.1.1", optional = true }
+pg-synapse-tools-loadfile  = { path = "../../plugins/pg-synapse-tools-loadfile", version = "0.1.1", optional = true }
 pg-synapse-tools-newssearch = { path = "../../plugins/pg-synapse-tools-newssearch", version = "0.1.1", optional = true }
 pg-synapse-tools-readarticle = { path = "../../plugins/pg-synapse-tools-readarticle", version = "0.1.1", optional = true }
 tokio        = { workspace = true }

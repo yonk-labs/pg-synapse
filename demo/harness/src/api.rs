@@ -51,6 +51,14 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
         "remote_exec",
         "Writing SQL against a named external Postgres connection",
     ),
+    (
+        "load_csv",
+        "Load an uploaded CSV into a table directly, without writing the rows yourself",
+    ),
+    (
+        "load_json",
+        "Load an uploaded JSON or JSONL file into a table directly, without writing the rows yourself",
+    ),
     ("search_news", "Keyword news search via Google News RSS"),
     (
         "read_article",

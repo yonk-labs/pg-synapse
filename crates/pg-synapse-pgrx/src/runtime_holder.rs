@@ -174,6 +174,27 @@ async fn build_kernel_from_db() -> Result<Kernel, String> {
         }
     };
 
+    // Staging loaders (load_csv, load_json): read an uploaded file in-process
+    // and insert its rows directly, so the model never spends output tokens
+    // writing row values. Shares the fs sandbox root, since the files these
+    // read are the ones read_file can see and nothing else.
+    #[cfg(all(feature = "tools-loadfile", feature = "tools-fs"))]
+    let builder = {
+        let fs_root = "/tmp/pg_synapse_fs";
+        match pg_synapse_tools_fs::FsSandbox::new(fs_root) {
+            Ok(sandbox) => {
+                builder.with_plugin(pg_synapse_tools_loadfile::LoadFileToolsPlugin::new(
+                    Arc::new(sandbox),
+                    spi_exec.clone(),
+                ))
+            }
+            Err(e) => {
+                tracing::warn!("load_csv/load_json disabled, sandbox init failed: {e}");
+                builder
+            }
+        }
+    };
+
     // Remote-database tools (remote_query, remote_exec): run SQL against a
     // named external Postgres connection (synapse.connections), the same
     // sqlx-backed connection method pg-synapse-sidecar uses for its own

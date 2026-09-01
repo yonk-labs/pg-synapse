@@ -13,6 +13,7 @@ members = [
     "crates/pg-synapse-sidecar", "plugins/pg-synapse-tools-fs", "plugins/pg-synapse-tools-lede", "plugins/pg-synapse-tools-calc", "plugins/pg-synapse-tools-clock", "plugins/pg-synapse-tools-delegate",
     "plugins/pg-synapse-tools-lexicon",
     "plugins/pg-synapse-tools-remotedb",
+    "plugins/pg-synapse-tools-loadfile",
     "clients/pg-synapse-cli",
     "plugins/pg-synapse-tools-newssearch",
     "plugins/pg-synapse-tools-readarticle",
