@@ -148,7 +148,124 @@ impl Tool for SearchNewsTool {
     }
 }
 
-/// Registers `search_news`.
+/// Arguments for [`FetchFeedTool`].
+#[derive(JsonSchema, Deserialize)]
+struct FetchFeedArgs {
+    /// URL of an RSS or Atom feed.
+    #[serde(alias = "feed", alias = "feed_url")]
+    url: String,
+    /// Maximum items to return.
+    #[serde(default = "default_limit")]
+    limit: u32,
+}
+
+/// `fetch_feed`: read any RSS or Atom feed and return its items.
+///
+/// `search_news` finds articles but returns news.google.com links, and those
+/// cannot be read: they resolve only through JavaScript, so `read_article`
+/// fails on every one. Verified rather than assumed: following the redirect
+/// returns a 200 with a script shell, and the CBMi token carries no URL to
+/// decode. Resolving them would mean reverse-engineering Google's internal
+/// batchexecute endpoint, which is undocumented, fragile, and not something to
+/// depend on.
+///
+/// A publisher's own feed has none of that problem. Its links are real URLs
+/// that `read_article` already handles, so pointing an agent at
+/// planet.postgresql.org or a vendor's changelog gets readable articles
+/// instead of unreadable ones. The way past the obstacle is not to go through
+/// it.
+pub struct FetchFeedTool {
+    pub http: reqwest::Client,
+}
+
+#[async_trait]
+impl Tool for FetchFeedTool {
+    fn name(&self) -> &str {
+        "fetch_feed"
+    }
+    fn schema(&self) -> &ToolSchema {
+        static S: std::sync::OnceLock<ToolSchema> = std::sync::OnceLock::new();
+        S.get_or_init(|| ToolSchema::from_root(schemars::schema_for!(FetchFeedArgs)))
+    }
+    async fn run(&self, input: Value, _ctx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+        let args: FetchFeedArgs =
+            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
+                name: "fetch_feed".into(),
+                reason: e.to_string(),
+            })?;
+        let limit = args.limit.clamp(1, 100) as usize;
+
+        let url = reqwest::Url::parse(args.url.trim()).map_err(|e| ToolError::InvalidInput {
+            name: "fetch_feed".into(),
+            reason: format!("not a URL: {e}"),
+        })?;
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(ToolError::InvalidInput {
+                name: "fetch_feed".into(),
+                reason: format!("scheme '{}' is not allowed", url.scheme()),
+            });
+        }
+
+        let resp = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ToolError::Execution {
+                name: "fetch_feed".into(),
+                reason: format!("request failed: {e}"),
+            })?;
+        if !resp.status().is_success() {
+            return Err(ToolError::Execution {
+                name: "fetch_feed".into(),
+                reason: format!("feed returned HTTP {}", resp.status().as_u16()),
+            });
+        }
+        let body = resp.bytes().await.map_err(|e| ToolError::Execution {
+            name: "fetch_feed".into(),
+            reason: format!("could not read response: {e}"),
+        })?;
+
+        // RSS first, then Atom. Trying both rather than asking the caller to
+        // know which they have: the feed can answer that question itself.
+        match parse_feed(&body, limit) {
+            Ok(items) => Ok(ToolOutput::Json(Value::Array(items))),
+            Err(_) => {
+                let items = parse_atom(&body, limit)?;
+                Ok(ToolOutput::Json(Value::Array(items)))
+            }
+        }
+    }
+}
+
+/// Minimal Atom reader, for the feeds that are not RSS.
+fn parse_atom(body: &[u8], limit: usize) -> Result<Vec<Value>, ToolError> {
+    let feed = atom_syndication::Feed::read_from(body).map_err(|e| ToolError::Execution {
+        name: "fetch_feed".into(),
+        reason: format!("not a readable RSS or Atom feed: {e}"),
+    })?;
+    Ok(feed
+        .entries()
+        .iter()
+        .take(limit)
+        .map(|e| {
+            serde_json::json!({
+                "title": e.title().value,
+                // The alternate link is the human-readable article; others are
+                // enclosures and self-references.
+                "url": e.links().iter()
+                    .find(|l| l.rel() == "alternate")
+                    .or_else(|| e.links().first())
+                    .map(|l| l.href().to_owned())
+                    .unwrap_or_default(),
+                "source": feed.title().value.clone(),
+                "published_at": e.published().or(Some(e.updated())).map(|d| d.to_rfc3339()),
+            })
+        })
+        .collect())
+}
+
+/// Registers `search_news` and `fetch_feed`.
 pub struct NewsSearchToolsPlugin;
 
 impl NewsSearchToolsPlugin {
@@ -172,9 +289,16 @@ impl Plugin for NewsSearchToolsPlugin {
         env!("CARGO_PKG_VERSION")
     }
     fn register(self, registry: &mut Registry) {
+        let tool = SearchNewsTool::new();
+        // fetch_feed shares the client: same timeouts, same user agent, one
+        // connection pool.
+        let http = tool.http.clone();
         registry
             .tools
-            .add_arc("search_news", std::sync::Arc::new(SearchNewsTool::new()));
+            .add_arc("search_news", std::sync::Arc::new(tool));
+        registry
+            .tools
+            .add_arc("fetch_feed", std::sync::Arc::new(FetchFeedTool { http }));
     }
 }
 
@@ -185,6 +309,34 @@ mod tests {
     /// A real response captured from the live feed (query "postgresql"),
     /// trimmed to two items, used to test parsing without network access.
     const SAMPLE_FEED: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><generator>NFE/5.0</generator><title>"postgresql" - Google News</title><link>https://news.google.com/search?q=postgresql&amp;hl=en-US&amp;gl=US&amp;ceid=US:en</link><language>en-US</language><lastBuildDate>Thu, 27 Aug 2026 12:14:32 GMT</lastBuildDate><description>Google News</description><item><title>Postgres pioneer credits Oracle with helping his database take over the world - The Register</title><link>https://news.google.com/rss/articles/CBMizwFAAAA?oc=5</link><guid isPermaLink="false">CBMizwFAAAA</guid><pubDate>Wed, 19 Aug 2026 12:37:00 GMT</pubDate><description>&lt;a href="https://news.google.com/rss/articles/CBMizwFAAAA?oc=5" target="_blank"&gt;Postgres pioneer credits Oracle with helping his database take over the world&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;The Register&lt;/font&gt;</description><source url="https://www.theregister.com">The Register</source></item><item><title>Migrate multilingual full-text search from SQL Server to PostgreSQL - AWS</title><link>https://news.google.com/rss/articles/CBMiqgFBBBB?oc=5</link><guid isPermaLink="false">CBMiqgFBBBB</guid><pubDate>Wed, 19 Aug 2026 10:00:00 GMT</pubDate><description>&lt;a href="https://news.google.com/rss/articles/CBMiqgFBBBB?oc=5" target="_blank"&gt;Migrate multilingual full-text search from SQL Server to PostgreSQL&lt;/a&gt;&amp;nbsp;&amp;nbsp;&lt;font color="#6f6f6f"&gt;Amazon Web Services (AWS)&lt;/font&gt;</description><source url="https://aws.amazon.com">Amazon Web Services (AWS)</source></item></channel></rss>"##;
+
+    /// The reason fetch_feed exists: an Atom feed's alternate link is a real
+    /// article URL, unlike a Google News token.
+    #[test]
+    fn atom_entries_yield_real_article_urls() {
+        const ATOM: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Planet PostgreSQL</title>
+  <updated>2026-09-01T00:00:00Z</updated>
+  <id>urn:uuid:planet</id>
+  <entry>
+    <title>Waiting for PostgreSQL 19</title>
+    <id>urn:uuid:1</id>
+    <updated>2026-08-30T10:00:00Z</updated>
+    <link rel="alternate" href="https://example.org/posts/pg19"/>
+  </entry>
+</feed>"#;
+        let items = parse_atom(ATOM.as_bytes(), 10).expect("valid atom");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["url"], "https://example.org/posts/pg19");
+        assert_eq!(items[0]["title"], "Waiting for PostgreSQL 19");
+        assert_eq!(items[0]["source"], "Planet PostgreSQL");
+    }
+
+    #[test]
+    fn atom_rejects_something_that_is_not_a_feed() {
+        assert!(parse_atom(b"<html><body>nope</body></html>", 5).is_err());
+    }
 
     #[test]
     fn parse_feed_extracts_title_url_source_and_date() {

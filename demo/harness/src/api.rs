@@ -65,6 +65,10 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
     ),
     ("search_news", "Keyword news search via Google News RSS"),
     (
+        "fetch_feed",
+        "Read any RSS or Atom feed and get real article URLs that read_article can fetch",
+    ),
+    (
         "read_article",
         "Fetch a URL and extract its main article text",
     ),
