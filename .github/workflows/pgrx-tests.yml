@@ -68,11 +68,22 @@ jobs:
         #     `--pg-version` flag, so the old form never parsed
         #   - the crate's `default` features pin `pg17`, so the pg15 and pg16
         #     legs must opt out or they activate two pg features at once
-        # embed-ort is left off deliberately: it needs libonnxruntime on the
-        # runner and costs no coverage, the same 52 tests run without it.
+        #
+        # The feature list is derived from the crate's own `default` rather
+        # than written out here. A hard-coded list rots the moment a branch
+        # adds or drops a plugin: spelling out pg-one's list broke the
+        # kernel-only branch, where four of those features do not exist yet,
+        # with "none of the selected packages contains these features".
+        #
+        # embed-ort is dropped deliberately: it needs libonnxruntime on the
+        # runner and costs no coverage, the same tests run without it.
         run: |
+          FEATS=$(sed -n 's/^default *= *\[\(.*\)\]/\1/p' crates/pg-synapse-pgrx/Cargo.toml \
+                  | tr -d '"' | tr -d ' ' | tr ',' '\n' \
+                  | grep -vE '^(pg1[5-8]|embed-ort)$' | tr '\n' ' ')
+          echo "features: pg${{ matrix.pg }} pg_test $FEATS"
           cargo pgrx test \
             --package pg_synapse_pgrx \
             --no-default-features \
-            --features "pg${{ matrix.pg }} pg_test provider-llama-cpp provider-anthropic tools-fs tools-http tools-lede tools-calc tools-clock tools-delegate tools-remotedb tools-newssearch tools-readarticle tools-loadfile" \
+            --features "pg${{ matrix.pg }} pg_test $FEATS" \
             pg${{ matrix.pg }}
