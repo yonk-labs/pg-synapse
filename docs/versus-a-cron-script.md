@@ -46,12 +46,24 @@ every session touching those rows waits behind it. That is bounded by
 a ceiling that only lowers an agent's own budget.
 
 Two seconds is what a hot table can lend, not a prediction that your model will
-answer in time. Six single-turn runs of a no-tool agent against a 36B model on
-our reference endpoint took **1316, 1758, 1873, 2129, 4085 and 11162 ms**: the
-median sits on the cap and the tail is well past it. A model that makes the
-budget half the time has no business in a write path. Inline mode wants a small
-fast model, and if you do not have one, use queue mode and accept that you are
-back to reacting.
+answer in time, and **model choice decides whether inline mode is usable at
+all.**
+
+Measured on the same machine, same extension, same agent shape:
+
+| Model | Single-turn agent run | Inline verdict |
+| --- | --- | --- |
+| 36B, 4-bit | 1316, 1758, 1873, 2129, 4085, 11162 ms | Median on the cap, tail far past it. Unusable. |
+| Gemma 4 E2B, 4-bit | 111, 132, 133, 133, 137, 185, 368, 635 ms | Median ~135ms, worst case 3x inside the cap. |
+
+Those second numbers are end-to-end `INSERT` times with the agent gating the
+write, not raw model latency: Postgres to kernel to model to audit row to
+commit, in about a seventh of a second.
+
+So the rule is not "inline mode is too slow", it is **inline mode wants a small
+model**. A 2B model that answers in 130ms leaves an order of magnitude of
+headroom; a 36B model does not fit at all. If you only have the large one, use
+queue mode and accept that you are back to reacting after the commit.
 
 Network tools are refused inline outright. An outbound HTTP call inside a write
 transaction holds locks for the duration of somebody else's outage.

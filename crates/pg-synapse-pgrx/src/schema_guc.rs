@@ -64,19 +64,19 @@ pub static DEFAULT_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(60_000);
 /// two seconds is roughly what a hot OLTP table can absorb without queueing,
 /// so it is what the write path can afford to lend.
 ///
-/// Whether a given model fits inside it is a separate question, and measuring
-/// honestly says most do not. Six single-turn runs of a no-tool agent against
-/// the reference endpoint, a 36B model, took 1316, 1758, 1873, 2129, 4085 and
-/// 11162 milliseconds: a median right at the cap and a long tail well past it.
-/// An earlier reading of 826ms turned out to be a prefix-cache hit and is not
-/// representative.
+/// Whether a given model fits inside it is a separate question, and the answer
+/// is decided by model size rather than by tuning. Measured on one machine,
+/// same extension, same agent shape: a 36B 4-bit model took 1316, 1758, 1873,
+/// 2129, 4085 and 11162ms for a single-turn run, a median right at the cap
+/// with a long tail past it. A Gemma 4 E2B 4-bit model, gating real INSERTs
+/// through an inline trigger, took 111, 132, 133, 133, 137, 185, 368 and
+/// 635ms end to end, commit included. (An early 826ms reading of the 36B was a
+/// prefix-cache hit and is not representative.)
 ///
-/// That is the cap working, not failing. Inline mode holds every other
-/// session behind its locks, so a model that answers in two seconds only half
-/// the time has no business in a write path, and the honest outcomes are to
-/// use queue mode or to point the agent at a small fast model. Raising this
-/// until a slow model fits is available and is the wrong instinct: it does not
-/// make the agent quicker, it makes the lock queue longer.
+/// So the cap refusing a large model is the cap working. Inline mode holds
+/// every other session behind its locks, and the fix is a smaller model, not a
+/// bigger number: raising this until a slow model fits does not make the agent
+/// quicker, it makes the lock queue longer.
 ///
 /// Only ever lowers the agent's own budget, never raises it.
 pub static INLINE_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(2_000);
