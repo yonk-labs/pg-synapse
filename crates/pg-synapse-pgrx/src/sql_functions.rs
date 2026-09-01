@@ -505,6 +505,33 @@ pub(crate) mod synapse {
         rebuild_kernel();
     }
 
+    /// Choose which tier of model an agent runs on: 'small' or 'large'.
+    ///
+    /// The tiers are configuration, not model names:
+    /// `pg_synapse.default_llm_profile_small` and `_main` say what small and
+    /// large actually are, so swapping the model behind a tier is one setting
+    /// rather than an edit to every agent that uses it.
+    ///
+    /// Has no effect on an agent whose `llm_profile_main` names a profile
+    /// outright, because an explicit choice wins over a tier. Clear that
+    /// column to let the tier decide.
+    #[pg_extern(security_definer)]
+    pub fn agent_set_model_tier(name: &str, tier: &str) {
+        if !matches!(tier, "small" | "large") {
+            pgrx::error!("invalid model tier '{tier}'; use 'small' or 'large'");
+        }
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(tier.to_string()),
+            DatumWithOid::from(name.to_string()),
+        ];
+        Spi::run_with_args(
+            "UPDATE synapse.agents SET model_tier = $1, updated_at = now() WHERE name = $2",
+            &args,
+        )
+        .unwrap_or_else(|e| pgrx::error!("agent_set_model_tier: {e}"));
+        rebuild_kernel();
+    }
+
     /// Set or clear the per-agent trace level. NULL inherits the global GUC.
     #[pg_extern(security_definer)]
     pub fn agent_set_trace_level(name: &str, level: Option<&str>) {

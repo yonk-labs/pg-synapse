@@ -705,6 +705,61 @@ mod tests {
         assert_eq!(arr[0]["x"], 1);
     }
 
+    // ---- Model tiers: settings decide what small and large are ----
+
+    /// The resolution order an agent's model goes through.
+    ///
+    /// Explicit beats tier, tier beats nothing. Checked through
+    /// `config_agents`, which is where the resolution lives, rather than by
+    /// running an agent, which would need an LLM.
+    #[pg_test]
+    fn model_tier_resolves_through_settings() {
+        Spi::run("SET pg_synapse.default_llm_profile_main = 'big-one'").unwrap();
+        Spi::run("SET pg_synapse.default_llm_profile_small = 'little-one'").unwrap();
+        Spi::run(
+            "SELECT synapse.agent_create('tier_probe', 'p', 'conversation', NULL, \
+             ARRAY[]::text[], 4, 60000)",
+        )
+        .unwrap();
+
+        let main_for = |agent: &str| -> Option<String> {
+            let v = jsonb_of(&format!(
+                "SELECT (SELECT x FROM jsonb_array_elements(synapse.config_agents()) x \
+                 WHERE x->>'name' = '{agent}')"
+            ));
+            v.get("llm_profile_main")
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_owned())
+        };
+
+        // Default tier is large, so it takes the large default.
+        assert_eq!(main_for("tier_probe").as_deref(), Some("big-one"));
+
+        // Switching tier switches which setting applies.
+        Spi::run("SELECT synapse.agent_set_model_tier('tier_probe', 'small')").unwrap();
+        assert_eq!(main_for("tier_probe").as_deref(), Some("little-one"));
+
+        // A profile named outright wins over the tier, which is still small.
+        Spi::run("UPDATE synapse.agents SET llm_profile_main = 'pinned' WHERE name = 'tier_probe'")
+            .unwrap();
+        assert_eq!(
+            main_for("tier_probe").as_deref(),
+            Some("pinned"),
+            "an explicitly named profile must beat the tier default"
+        );
+    }
+
+    /// An unknown tier is refused rather than silently stored.
+    #[pg_test(error = "invalid model tier 'enormous'; use 'small' or 'large'")]
+    fn model_tier_rejects_an_unknown_value() {
+        Spi::run(
+            "SELECT synapse.agent_create('tier_bad', 'p', 'conversation', NULL, \
+             ARRAY[]::text[], 4, 60000)",
+        )
+        .unwrap();
+        Spi::run("SELECT synapse.agent_set_model_tier('tier_bad', 'enormous')").unwrap();
+    }
+
     // ---- D5 / O1: inline trigger mode is bounded by construction ----
 
     /// The inline ceiling is a stated number, not "much shorter".

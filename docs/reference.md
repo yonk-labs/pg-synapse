@@ -69,6 +69,7 @@ the extension owner or a superuser (internal plumbing, listed for completeness).
 | `execution_status` | `(execution_id uuid) -> jsonb` | DEFINER | user | Poll an execution by id; returns `{status, output, tokens_in, tokens_out, cost_usd, duration_ms}` or `{status:"not_found"}` |
 | `ensure_kernel` | `() -> void` | DEFINER | user | Build this backend's kernel cache if it has not been built. Safe to grant by shape: no argument to steer it, no value returned. Called by the INVOKER entry points, which cannot do the config reads themselves. |
 | `agent_trace_level` | `(p_agent text) -> text` | DEFINER | user | One agent's trace level. `synapse.agents` is not readable by `synapse_user`. |
+| `agent_llm_profile` | `(p_agent text) -> text` | DEFINER | user | Which LLM profile an agent actually runs on: the profile it names, else its tier's configured default. One function because the kernel config read and the audit write must resolve identically. |
 
 `execute()` success envelope: `{execution_id, output, status, tokens_in,
 tokens_out, cost_usd, duration_ms, tool_calls[]}`; error envelope:
@@ -88,6 +89,7 @@ tokens_out, cost_usd, duration_ms, tool_calls[]}`; error envelope:
 | `embedding_profile_drop` | `(name text)` | DEFINER | admin | Delete an embedding profile |
 | `secret_set` | `(name text, value text)` | DEFINER | admin | Upsert a secret, encrypted when `pg_synapse.master_key` is set |
 | `secret_drop` | `(name text)` | DEFINER | admin | Delete a secret |
+| `agent_set_model_tier` | `(name text, tier text)` | DEFINER | admin | Choose `'small'` or `'large'`. Has no effect while the agent names a profile outright, since explicit beats tier. |
 | `rebuild_kernel` | `()` | DEFINER | admin | Mark the kernel cache stale; the next `execute()` rebuilds |
 | `provider_capabilities` | `(profile_name text) -> jsonb` | DEFINER | owner | What a profile's provider supports, before assigning it to an agent |
 | `purge_traces` | `(older_than_days int, agent_filter text) -> bigint` | DEFINER | owner | Delete executions older than N days, optionally for one agent |
@@ -150,7 +152,7 @@ the grant would just move audit forgery one function along. See
 
 | Table | Columns |
 | --- | --- |
-| `agents` | name (PK), system_prompt, soul, executor_name (def `conversation`), llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools (text[]), max_iterations (def 10), timeout_ms (def 60000), cost_cap_usd, trace_level, created_at, updated_at |
+| `agents` | name (PK), system_prompt, soul, executor_name (def `conversation`), llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools (text[]), max_iterations (def 10), timeout_ms (def 60000), cost_cap_usd, trace_level, model_tier (`small`/`large`, def `large`), created_at, updated_at |
 | `llm_profiles` | name (PK), provider, model, api_key_secret, base_url, params (jsonb), created_at, updated_at |
 | `embedding_profiles` | name (PK), provider, model, dimension, api_key_secret, base_url, params (jsonb), created_at, updated_at |
 | `secrets` | name (PK), value, is_encrypted, created_at, updated_at |
@@ -212,6 +214,25 @@ All sixteen, with the context each is actually registered with.
 | `pg_synapse.inline_timeout_ms` | int | `2000` (1 to i32::MAX) | **Suset** |
 | `pg_synapse.max_concurrent_runs` | int | `4` (1 to 1024) | **Suset** |
 | `pg_synapse.master_key` | string | unset | **Suset + SUPERUSER_ONLY** |
+
+### Model tiers
+
+`default_llm_profile_main` and `default_llm_profile_small` are what the two
+tiers *are*. An agent picks a tier rather than a model, so changing which model
+is "small" is one setting rather than an edit to every agent using it.
+
+An agent's model resolves in this order, in `synapse.agent_llm_profile`:
+
+1. `agents.llm_profile_main`, if set. An explicitly pinned model wins.
+2. The configured default for the agent's `model_tier`.
+3. Nothing, which is a configuration error and is reported as one.
+
+Measured on one agent with nothing changed but its tier: `small` answered in
+115ms on a 2B model, `large` in 1264ms on a 36B, and `synapse.executions.model`
+attributed each run correctly.
+
+Both GUCs were registered from the start and read by nothing until this
+existed, so setting either used to have no effect at all.
 
 Most are `Userset`: settable per session, in `postgresql.conf`, or with
 `ALTER SYSTEM`. Three are not, and the difference is deliberate.

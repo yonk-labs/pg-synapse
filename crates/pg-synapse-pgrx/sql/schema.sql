@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS synapse.agents (
   timeout_ms        BIGINT NOT NULL DEFAULT 60000,
   cost_cap_usd      NUMERIC(12,6),
   trace_level       TEXT CHECK (trace_level IN ('off','error','info','debug','full')),
+  -- Which tier of model this agent wants, when it does not name a profile
+  -- outright. The tiers themselves are configuration
+  -- (pg_synapse.default_llm_profile_main / _small), so an agent says "small"
+  -- and the operator decides what small is, rather than every agent row
+  -- carrying a model name that has to be edited when the model changes.
+  model_tier        TEXT NOT NULL DEFAULT 'large' CHECK (model_tier IN ('small','large')),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -454,12 +460,57 @@ $$;
 -- Each returns jsonb so the Rust side does one decode instead of a column
 -- list that has to be kept in step with the table.
 -- ---------------------------------------------------------------------------
+-- Which LLM profile an agent actually runs on.
+--
+-- One function because there are two readers and they must not drift: the
+-- kernel config read below, and the audit write, which records the model that
+-- answered. The first version of tiers resolved only in config_agents, so an
+-- agent running on a tier default worked fine and logged an empty `model`,
+-- which is exactly the column that exists to answer "what produced this".
+--
+-- Order: a profile the agent names outright wins, because someone who pinned a
+-- specific model meant it. Otherwise the agent's tier picks one of the two
+-- configured defaults. Nothing falls back to "some profile that happens to
+-- exist": an agent with no profile and no configured default is a
+-- misconfiguration and the kernel says so.
+--
+-- `pg_synapse.default_llm_profile_main` and `_small` were registered as GUCs
+-- and then read by nothing at all, so setting either did nothing. This is what
+-- makes them mean something.
+CREATE OR REPLACE FUNCTION synapse.agent_llm_profile(p_agent text)
+RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(
+           a.llm_profile_main,
+           CASE WHEN a.model_tier = 'small'
+                THEN NULLIF(current_setting('pg_synapse.default_llm_profile_small', true), '')
+                ELSE NULLIF(current_setting('pg_synapse.default_llm_profile_main', true), '')
+           END)
+  FROM synapse.agents a WHERE a.name = p_agent
+$$;
+
+-- The model an agent actually runs on is resolved here rather than in the
+-- kernel, which has no idea what a GUC is.
+--
+-- Order: a profile the agent names outright wins, because someone who pinned a
+-- specific model meant it. Otherwise the agent's tier picks one of the two
+-- configured defaults. Nothing falls back to "some profile that happens to
+-- exist": an agent with no profile and no configured default is a
+-- misconfiguration and the kernel says so.
+--
+-- `pg_synapse.default_llm_profile_main` and `_small` were registered as GUCs
+-- and then read by nothing at all, so setting either did nothing. This is what
+-- makes them mean something.
 CREATE OR REPLACE FUNCTION synapse.config_agents()
 RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
   SELECT COALESCE(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM (
-    SELECT name, system_prompt, soul, executor_name, llm_profile_main,
-           llm_profile_small, llm_profile_judge, embedding_profile, tools,
-           max_iterations, timeout_ms, cost_cap_usd, trace_level
+    SELECT name, system_prompt, soul, executor_name,
+           synapse.agent_llm_profile(name) AS llm_profile_main,
+           COALESCE(
+             llm_profile_small,
+             NULLIF(current_setting('pg_synapse.default_llm_profile_small', true), '')
+           ) AS llm_profile_small,
+           llm_profile_judge, embedding_profile, tools,
+           max_iterations, timeout_ms, cost_cap_usd, trace_level, model_tier
     FROM synapse.agents) a
 $$;
 
@@ -545,9 +596,8 @@ BEGIN
   SELECT v_exec, v_agent,
          e.input, e.output, e.status, e.tokens_in, e.tokens_out,
          e.cost_usd, e.duration_ms, e.caller_role,
-         (SELECT lp.model FROM synapse.agents a
-            JOIN synapse.llm_profiles lp ON lp.name = a.llm_profile_main
-           WHERE a.name = v_agent),
+         (SELECT lp.model FROM synapse.llm_profiles lp
+           WHERE lp.name = synapse.agent_llm_profile(v_agent)),
          now()
   FROM jsonb_to_record(p->'execution') AS e(
     input text, output text, status text, tokens_in int, tokens_out int,
@@ -590,9 +640,8 @@ BEGIN
      finished_at)
   VALUES (v_exec, v_agent, COALESCE(p->>'input', ''), p->>'output',
           p->>'status', p->>'caller_role',
-          (SELECT lp.model FROM synapse.agents a
-             JOIN synapse.llm_profiles lp ON lp.name = a.llm_profile_main
-            WHERE a.name = v_agent),
+          (SELECT lp.model FROM synapse.llm_profiles lp
+            WHERE lp.name = synapse.agent_llm_profile(v_agent)),
           CASE WHEN p->>'status' = 'queued' THEN NULL ELSE now() END)
   ON CONFLICT (execution_id) DO UPDATE
     SET status      = EXCLUDED.status,
