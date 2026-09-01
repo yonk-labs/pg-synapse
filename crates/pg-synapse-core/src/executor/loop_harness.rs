@@ -565,9 +565,6 @@ impl<'a> LoopHarness<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::types::ToolCall;
-
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
         ToolCall {
             id: "c1".into(),
