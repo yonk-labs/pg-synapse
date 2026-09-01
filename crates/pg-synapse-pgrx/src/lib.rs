@@ -796,6 +796,21 @@ mod tests {
         }
     }
 
+    /// O8: the encryption key is not readable by a caller who can run an agent.
+    ///
+    /// `GucContext::Suset` governs who may SET a GUC and says nothing about who
+    /// may read one, so with default flags this returned the key to a
+    /// synapse_user through an ordinary `sql_query` tool call, in one line.
+    /// Per-caller isolation does not help, because a GUC read is not a table
+    /// read and no grant governs it. The `SUPERUSER_ONLY` flag is what closes
+    /// it, and this pins the flag so removing it fails here.
+    #[pg_test(error = "permission denied to examine \"pg_synapse.master_key\"")]
+    fn master_key_is_not_readable_by_synapse_user() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run("SELECT current_setting('pg_synapse.master_key')").unwrap();
+        Spi::run("RESET ROLE").unwrap();
+    }
+
     // ---- F2: per-caller isolation, the privilege matrix ----
     //
     // Four claims, one test each. Together they are what F2 promised: a

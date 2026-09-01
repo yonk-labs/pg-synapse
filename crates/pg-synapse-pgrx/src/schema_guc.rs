@@ -118,6 +118,9 @@ pub static SIDECAR_URL: GucSetting<Option<CString>> = GucSetting::<Option<CStrin
 
 /// pgcrypto master key for secret encryption. None means secrets are stored
 /// in cleartext (the v0.1 default).
+///
+/// Registered `SUPERUSER_ONLY` (see `register_gucs`), which is load bearing.
+/// See `docs/threat-model.md` for what that does and does not buy.
 pub static MASTER_KEY: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
 /// If a Compressor is registered, conversation history above this many tokens
@@ -257,13 +260,24 @@ pub fn register_gucs() {
         GucFlags::default(),
     );
 
+    // SUPERUSER_ONLY, not the default flags, and O8 is why. `Suset` governs
+    // who may SET a GUC and says nothing about who may read one, so with
+    // default flags any caller could ask for the encryption key by name:
+    // `SELECT current_setting('pg_synapse.master_key')` returned it through an
+    // ordinary sql_query tool call, as synapse_user, in one line. Per-caller
+    // isolation does not help, because a GUC read is not a table read and no
+    // grant governs it.
+    //
+    // This closes that path. It does not make the key safe from an agent whose
+    // caller is a superuser, which cannot be fixed while the key lives in the
+    // backend the agent runs in. See docs/threat-model.md.
     GucRegistry::define_string_guc(
         c"pg_synapse.master_key",
         c"Pgcrypto master key for secret encryption.",
-        c"Empty means secrets are stored in cleartext (the v0.1 default).",
+        c"Empty means secrets are stored in cleartext (the v0.1 default). Readable only by superusers.",
         &MASTER_KEY,
         GucContext::Suset,
-        GucFlags::default(),
+        GucFlags::SUPERUSER_ONLY,
     );
 
     GucRegistry::define_int_guc(
