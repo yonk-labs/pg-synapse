@@ -111,6 +111,11 @@
   .run-row { display:flex; gap:12px; align-items:baseline; padding:7px 10px;
     border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
   .run-ok { color:#4ade80; } .run-bad { color:#f87171; }
+  .lim-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-bottom:16px; }
+  .lim-grid label { display:block; }
+  .lim-k { display:block; font-size:12.5px; font-weight:600; margin-bottom:6px; }
+  .lim-grid input { width:100%; margin-bottom:6px; }
+  .lim-h { display:block; color:var(--muted); font-size:11.5px; line-height:1.5; }
   .btn.danger { background:#3a1d1d; border-color:#6b2a2a; color:#ff9c9c; }
   .btn.danger:hover { background:#4a2323; }
   .f-upload { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
@@ -358,6 +363,7 @@
       <button data-pane="questions">Questions</button>
       <button data-pane="schedule">Schedule</button>
       <button data-pane="revise">Revise</button>
+      <button data-pane="limits">Limits</button>
       <button data-pane="danger">Delete</button>
       <button data-pane="embed">Embed / API</button>
     </div>
@@ -409,6 +415,33 @@
       </details>
       <h3 class="s-h">Recent runs</h3>
       <div id="sched-runs"></div>
+    </div>
+
+    <div class="pane" id="pane-limits">
+      <div class="q-intro">
+        The three guardrails. Every run stops at whichever it hits first, and
+        the stop is recorded honestly: a run that ran out of turns says
+        max_iterations, not "completed".
+      </div>
+      <div class="lim-grid">
+        <label>
+          <span class="lim-k">Turns</span>
+          <input type="number" id="lim-turns" min="1" max="100" step="1">
+          <span class="lim-h">How many times it may think and call a tool. Reading a file row by row costs one per row; a bulk insert costs one.</span>
+        </label>
+        <label>
+          <span class="lim-k">Timeout (seconds)</span>
+          <input type="number" id="lim-secs" min="1" max="1800" step="1">
+          <span class="lim-h">Wall clock for the whole run. A model call is seconds, so a job with ten of them needs more than ten.</span>
+        </label>
+        <label>
+          <span class="lim-k">Cost cap (USD)</span>
+          <input type="number" id="lim-cost" min="0" step="0.01" placeholder="none">
+          <span class="lim-h">Spend ceiling per run. Blank or zero means no cap.</span>
+        </label>
+      </div>
+      <div><button class="btn primary" id="lim-save">Save limits</button></div>
+      <div id="lim-status"></div>
     </div>
 
     <div class="pane" id="pane-danger">
@@ -907,6 +940,7 @@ function openDetail(name) {
   loadAgentTables(a.name);
   loadQuestions(a.name);
   loadSchedules(a.name);
+  loadLimits(a);
   $("rev-input").value = ""; $("rev-proposal").innerHTML = ""; $("rev-status").textContent = "";
   renderEmbed(a.name, document.querySelector(".embed-tabs button.active")?.dataset.embed || "sql");
 }
@@ -1112,6 +1146,39 @@ $("sc-save").onclick = async () => {
   const r = await api("/api/schedule", "POST", body);
   st.textContent = r.ok ? "scheduled" : (r.error || "failed");
   if (r.ok) { $("sc-input").value = ""; $("sc-first").value = ""; loadSchedules(CURRENT_AGENT); }
+};
+
+// ---- limits ----
+// Turns, wall clock and spend: the three guardrails a DBA is being asked to
+// trust. Shown as seconds rather than milliseconds because nobody thinks in
+// milliseconds about a job that calls a language model.
+function loadLimits(agent) {
+  $("lim-turns").value = agent.max_iterations ?? "";
+  $("lim-secs").value = agent.timeout_ms ? Math.round(agent.timeout_ms / 1000) : "";
+  $("lim-cost").value = (agent.cost_cap_usd && agent.cost_cap_usd > 0) ? agent.cost_cap_usd : "";
+  $("lim-status").textContent = "";
+}
+
+$("lim-save").onclick = async () => {
+  const st = $("lim-status");
+  const turns = parseInt($("lim-turns").value, 10);
+  const secs = parseInt($("lim-secs").value, 10);
+  const cost = parseFloat($("lim-cost").value);
+  const body = {};
+  if (Number.isFinite(turns)) body.max_iterations = turns;
+  if (Number.isFinite(secs)) body.timeout_ms = secs * 1000;
+  body.cost_cap_usd = Number.isFinite(cost) ? cost : 0;
+  st.className = "busy"; st.textContent = "saving...";
+  const r = await api("/api/agent/" + encodeURIComponent(CURRENT_AGENT) + "/limits", "POST", body);
+  st.className = "";
+  if (!r.ok) { st.textContent = r.error || "could not save"; return; }
+  st.textContent = "saved: " + r.max_iterations + " turns, " +
+    Math.round(r.timeout_ms / 1000) + "s, " +
+    (r.cost_cap_usd ? ("$" + r.cost_cap_usd + " cap") : "no cost cap");
+  // Keep the in-page copy honest, so reopening the app shows what was saved
+  // rather than what was loaded at boot.
+  const a = (BOOT.agents || []).find((x) => x.name === CURRENT_AGENT);
+  if (a) { a.max_iterations = r.max_iterations; a.timeout_ms = r.timeout_ms; a.cost_cap_usd = r.cost_cap_usd; }
 };
 
 // ---- files ----

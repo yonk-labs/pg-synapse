@@ -199,6 +199,94 @@ pub async fn all_runs(State(state): State<AppState>) -> Result<Json<Value>, Harn
 }
 
 #[derive(serde::Deserialize)]
+pub struct LimitsReq {
+    /// Turns: how many times the agent may think and call a tool before the
+    /// run is stopped.
+    pub max_iterations: Option<i32>,
+    /// Wall clock budget for the whole run, in milliseconds.
+    pub timeout_ms: Option<i64>,
+    /// Spend ceiling in USD. Zero or absent clears it.
+    pub cost_cap_usd: Option<f64>,
+}
+
+/// Set an agent's limits without touching anything else about it.
+///
+/// Deliberately not the existing agent_set, which takes a whole agent
+/// definition: a settings form that also resends the system prompt would
+/// silently revert a prompt edited elsewhere the moment the page's copy went
+/// stale. Editing the limits should change the limits.
+///
+/// The three numbers are the guardrails a DBA is being asked to trust, so they
+/// are validated here rather than accepted and clamped somewhere invisible.
+pub async fn agent_limits(
+    State(state): State<AppState>,
+    Path(agent): Path<String>,
+    Json(req): Json<LimitsReq>,
+) -> Result<Json<Value>, HarnessError> {
+    if let Some(n) = req.max_iterations {
+        if !(1..=100).contains(&n) {
+            return Err(HarnessError::BadRequest(
+                "turns must be between 1 and 100. Below one an agent cannot act at all;                  above a hundred it is not a budget"
+                    .to_owned(),
+            ));
+        }
+    }
+    if let Some(ms) = req.timeout_ms {
+        if !(1_000..=1_800_000).contains(&ms) {
+            return Err(HarnessError::BadRequest(
+                "timeout must be between 1 second and 30 minutes".to_owned(),
+            ));
+        }
+    }
+    if let Some(c) = req.cost_cap_usd {
+        if c < 0.0 {
+            return Err(HarnessError::BadRequest(
+                "cost cap cannot be negative".to_owned(),
+            ));
+        }
+    }
+
+    let client = db::connect(&state.db_url).await?;
+    // COALESCE so an omitted field keeps its current value rather than being
+    // nulled by a partial form.
+    let n = client
+        .execute(
+            "UPDATE synapse.agents SET                max_iterations = COALESCE($2, max_iterations),                timeout_ms     = COALESCE($3, timeout_ms),                cost_cap_usd   = CASE WHEN $4::float8 IS NULL THEN cost_cap_usd                                      WHEN $4::float8 <= 0 THEN NULL                                      ELSE ($4::float8)::numeric(12,6) END,                updated_at = now()              WHERE name = $1",
+            &[
+                &agent,
+                &req.max_iterations,
+                &req.timeout_ms,
+                &req.cost_cap_usd,
+            ],
+        )
+        .await?;
+    if n == 0 {
+        return Err(HarnessError::NotFound(format!(
+            "no agent named \"{agent}\""
+        )));
+    }
+    // The kernel caches agent rows, so a limit nobody rebuilt for is a limit
+    // that does not apply until the next restart.
+    client
+        .execute("SELECT synapse.rebuild_kernel()", &[])
+        .await?;
+
+    let row = client
+        .query_one(
+            "SELECT max_iterations, timeout_ms, cost_cap_usd::float8              FROM synapse.agents WHERE name = $1",
+            &[&agent],
+        )
+        .await?;
+    Ok(Json(json!({
+        "ok": true,
+        "agent": agent,
+        "max_iterations": row.get::<_, i32>(0),
+        "timeout_ms": row.get::<_, i64>(1),
+        "cost_cap_usd": row.get::<_, Option<f64>>(2),
+    })))
+}
+
+#[derive(serde::Deserialize)]
 pub struct DropReq {
     /// Destroy the app's schema and its rows as well as its definition.
     /// Defaults to false: removing an app you built by mistake must not be the

@@ -151,6 +151,7 @@ async fn main() {
         .route("/mcp", post(mcp::rpc))
         .route("/api/apps", get(schedules::app_list))
         .route("/api/app/{app}/drop", post(schedules::app_drop))
+        .route("/api/agent/{agent}/limits", post(schedules::agent_limits))
         .route("/api/runs", get(schedules::all_runs))
         .route("/api/build-metrics", get(schedules::build_metrics))
         .route("/api/app/{app}/schedules", get(schedules::schedule_list))
