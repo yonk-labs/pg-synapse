@@ -27,6 +27,38 @@ pub(crate) fn status_label(s: &OutcomeStatus) -> &'static str {
 
 use crate::audit_capability::AuditGrant;
 
+/// Whether a tool name reaches the network, directly or through another agent.
+///
+/// D5 refuses these in inline trigger mode. A name list rather than a trait
+/// method on `Tool`, because the alternative is a new required method on every
+/// plugin in the workspace to answer a question only this host asks. The
+/// ceiling is that a plugin added later has to be added here too; the upgrade
+/// path, if that ever bites, is a `Tool::reaches_network()` default-false
+/// method the plugins that need it override.
+///
+/// `call_agent` is in the list for transitive reach: it runs another agent
+/// through the kernel rather than through this function, so the trigger-depth
+/// check never fires again and the inner agent's own tools decide what happens
+/// next. Refusing it is broader than strictly necessary (an inner agent with
+/// no network tools would be harmless) and deliberately so: inline mode exists
+/// for a single bounded decision, and delegating to another agent inside
+/// somebody's open write transaction is not that shape.
+pub(crate) fn is_egress_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "http_get"
+            | "http_head"
+            | "http_post"
+            | "search_news"
+            | "fetch_feed"
+            | "read_article"
+            | "load_url"
+            | "remote_query"
+            | "remote_exec"
+            | "call_agent"
+    )
+}
+
 pub(crate) fn role_str(r: &pg_synapse_core::types::Role) -> &'static str {
     use pg_synapse_core::types::Role;
     match r {
@@ -284,6 +316,18 @@ pub(crate) mod synapse {
         // becoming a way to forge rows. See `audit_capability`.
         let grant = AuditGrant::mint();
 
+        // D5 / O1: inline trigger mode is not a separate entry point, it is
+        // this one reached from inside a trigger. Queue mode triggers call
+        // `synapse.enqueue`, so an `execute` at trigger depth is by definition
+        // running inside the writer's open transaction. Detecting it here
+        // rather than generating a different call means a trigger attached
+        // before this existed is covered too, as is a hand-written one.
+        let inline = Spi::get_one::<i32>("SELECT pg_trigger_depth()")
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+            > 0;
+
         // SECURITY INVOKER from here on, so `kernel_handle()` in process would
         // do its config reads with the caller's rights and fail on
         // synapse.agents. Crossing into the definer `ensure_kernel` is what
@@ -303,10 +347,43 @@ pub(crate) mod synapse {
             }
         };
 
+        // D5: network tools are refused inline. An outbound HTTP call inside a
+        // write transaction holds the writer's locks for the duration of
+        // somebody else's outage, which is not defensible at any timeout. This
+        // refuses the run rather than the tool call, so the failure arrives
+        // before any lock is taken rather than part way through.
+        if inline {
+            if let Some(bad) = kernel
+                .agents()
+                .find(|a| a.name == agent_name)
+                .and_then(|a| a.tools.iter().find(|t| super::is_egress_tool(t)))
+            {
+                return JsonB(json!({
+                    "error": format!(
+                        "agent '{agent_name}' has the network tool '{bad}' and cannot run in \
+                         inline trigger mode, which holds the writing transaction open for the \
+                         whole run; attach it in queue mode instead"
+                    ),
+                    "status": "errored",
+                }));
+            }
+        }
+
         let outcome = tokio().block_on(async {
-            kernel
-                .execute_with_caller(agent_name, input, caller_role.clone())
-                .await
+            if inline {
+                // Only ever lowers: an agent configured tighter than the
+                // ceiling keeps its own budget.
+                let cap = std::time::Duration::from_millis(
+                    crate::schema_guc::INLINE_TIMEOUT_MS.get().max(1) as u64,
+                );
+                kernel
+                    .execute_with_budget(agent_name, input, caller_role.clone(), cap)
+                    .await
+            } else {
+                kernel
+                    .execute_with_caller(agent_name, input, caller_role.clone())
+                    .await
+            }
         });
 
         match outcome {
@@ -1163,7 +1240,16 @@ BEGIN
     _decision := NULL;
   END;
   IF _status IS DISTINCT FROM 'completed' THEN
-    _reason := COALESCE(_res->>'error', _out, 'agent did not complete');
+    -- NULLIF because a run that did not complete has output '', not NULL, so
+    -- a plain COALESCE stopped there and raised "rejected: " with no reason.
+    -- The person reading this is a DBA whose write just rolled back.
+    _reason := COALESCE(
+      _res->>'error',
+      NULLIF(_out, ''),
+      CASE WHEN _status = 'timed_out'
+           THEN 'agent exceeded the inline budget, see pg_synapse.inline_timeout_ms'
+           ELSE 'agent did not complete, status ' || COALESCE(_status, 'unknown') END
+    );
     RAISE EXCEPTION 'synapse inline trigger rejected: %', _reason;
   END IF;
   IF _decision = 'reject'

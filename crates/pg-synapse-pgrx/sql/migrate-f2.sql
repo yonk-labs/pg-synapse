@@ -33,6 +33,22 @@ ALTER FUNCTION synapse.execute(text, text) SECURITY INVOKER;
 ALTER FUNCTION synapse.execute_async(text, text) SECURITY INVOKER;
 ALTER FUNCTION synapse.tool_call(text, jsonb) SECURITY INVOKER;
 
+-- 3b. Pre-existing drift, found while verifying the above rather than caused
+-- by it. attach_agent_trigger and detach_agent_trigger were made SECURITY
+-- INVOKER in the source some time ago, deliberately: attaching a trigger is
+-- DDL against the caller's own table, so it should need the caller's own
+-- privileges, and a table owner may instrument their table while nobody may
+-- instrument a table they do not own. A database installed before that change
+-- still has them as DEFINER, which is the opposite.
+--
+-- The general lesson, worth more than these two lines: hot-swapping the .so
+-- updates the Rust and nothing else. Every CREATE FUNCTION on a live database
+-- is frozen at CREATE EXTENSION time, so security mode, argument types and
+-- new functions all drift silently. Diff pg_proc.prosecdef against
+-- `cargo pgrx schema` after any hot swap.
+ALTER FUNCTION synapse.attach_agent_trigger(text, text, text, text, text, text) SECURITY INVOKER;
+ALTER FUNCTION synapse.detach_agent_trigger(text) SECURITY INVOKER;
+
 -- 4. Ownership. A SECURITY DEFINER function owned by the installing
 -- superuser runs as one, which is what the ownership loop in grants.sql
 -- exists to prevent. That loop runs only at CREATE EXTENSION, so anything

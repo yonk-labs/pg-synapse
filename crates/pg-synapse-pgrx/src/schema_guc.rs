@@ -50,6 +50,27 @@ pub static DEFAULT_EMBEDDING_PROFILE: GucSetting<Option<CString>> =
 /// `default_timeout_seconds * 1000`.
 pub static DEFAULT_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(60_000);
 
+/// Ceiling on a wall-clock budget for an agent running in inline trigger mode,
+/// in milliseconds.
+///
+/// Closes O1. Inline mode runs the agent inside the writer's open transaction,
+/// so the agent's timeout is also how long every other session waits behind
+/// its row locks. That ceiling is the operator's to set, not the agent
+/// author's, and the spec (D5) required it to be enforced rather than advised
+/// and stated as a number rather than "much shorter".
+///
+/// **2000ms, chosen from measurement rather than taste.** On the reference
+/// stack a one-turn agent (the approve-or-reject decision inline mode exists
+/// for) completed in 826ms, while two-turn runs averaged 2564ms across five
+/// samples and reached 4604ms. So 2s leaves a single model call comfortable
+/// headroom and does not fit a second one, which keeps inline agents to the
+/// shape they are for and gives an operator one defensible sentence: the worst
+/// this does to your write path is two seconds of held locks.
+///
+/// A slower endpoint needs this raised, and raising it is the operator's
+/// informed choice. Only ever lowers the agent's own budget, never raises it.
+pub static INLINE_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(2_000);
+
 /// Design-spec per-execution timeout fallback, in whole seconds.
 pub static DEFAULT_TIMEOUT_SECONDS: GucSetting<i32> = GucSetting::<i32>::new(60);
 
@@ -152,6 +173,17 @@ pub fn register_gucs() {
         100,
         i32::MAX,
         GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        c"pg_synapse.inline_timeout_ms",
+        c"Ceiling on an inline trigger agent's wall-clock budget (milliseconds).",
+        c"Default: 2000. Inline mode holds the writer's transaction open for the whole run, so this bounds how long other sessions wait behind its locks. Lowers an agent's own timeout, never raises it.",
+        &INLINE_TIMEOUT_MS,
+        1,
+        i32::MAX,
+        GucContext::Suset,
         GucFlags::default(),
     );
 

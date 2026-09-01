@@ -130,7 +130,7 @@ impl Runtime {
         agent_name: &str,
         input: &str,
     ) -> Result<ExecutorOutcome, RuntimeError> {
-        self.execute_inner(agent_name, input, None).await
+        self.execute_inner(agent_name, input, None, None).await
     }
 
     /// Same as [`Self::execute`] but threads a Postgres `caller_role` through
@@ -141,7 +141,31 @@ impl Runtime {
         input: &str,
         caller_role: Option<String>,
     ) -> Result<ExecutorOutcome, RuntimeError> {
-        self.execute_inner(agent_name, input, caller_role).await
+        self.execute_inner(agent_name, input, caller_role, None)
+            .await
+    }
+
+    /// Run an agent under a wall-clock budget lower than its own.
+    ///
+    /// For a host that runs an agent somewhere the agent's configured budget
+    /// is not the binding constraint. The pgrx host's inline trigger mode is
+    /// the case this exists for: the agent runs inside the writer's open
+    /// transaction, so its timeout is also how long other sessions wait behind
+    /// its locks, and that ceiling belongs to the operator rather than to
+    /// whoever configured the agent.
+    ///
+    /// Only ever lowers. Passing a budget above the agent's own leaves the
+    /// agent's in place, so this cannot be used to grant an agent more time
+    /// than it was configured for.
+    pub async fn execute_with_budget(
+        &self,
+        agent_name: &str,
+        input: &str,
+        caller_role: Option<String>,
+        max_timeout: std::time::Duration,
+    ) -> Result<ExecutorOutcome, RuntimeError> {
+        self.execute_inner(agent_name, input, caller_role, Some(max_timeout))
+            .await
     }
 
     async fn execute_inner(
@@ -149,6 +173,7 @@ impl Runtime {
         agent_name: &str,
         input: &str,
         caller_role: Option<String>,
+        max_timeout: Option<std::time::Duration>,
     ) -> Result<ExecutorOutcome, RuntimeError> {
         let agent = self
             .agents
@@ -209,7 +234,13 @@ impl Runtime {
             memory: self.registry.memory.clone(),
             compressor: self.registry.compressor.clone(),
             max_iterations: agent.max_iterations,
-            timeout: std::time::Duration::from_millis(agent.timeout_ms),
+            // The lower of the agent's own budget and any ceiling the host
+            // imposed. `min` rather than "override" on purpose: a host ceiling
+            // may only take time away.
+            timeout: match max_timeout {
+                Some(cap) => std::time::Duration::from_millis(agent.timeout_ms).min(cap),
+                None => std::time::Duration::from_millis(agent.timeout_ms),
+            },
             cost_cap_usd: agent.cost_cap_usd,
             caller_role,
             trace_level: agent

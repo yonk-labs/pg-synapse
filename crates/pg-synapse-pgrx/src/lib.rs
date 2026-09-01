@@ -705,6 +705,97 @@ mod tests {
         assert_eq!(arr[0]["x"], 1);
     }
 
+    // ---- D5 / O1: inline trigger mode is bounded by construction ----
+
+    /// The inline ceiling is a stated number, not "much shorter".
+    ///
+    /// O1 was blocking for the DBA persona precisely because D5 described this
+    /// bound in prose. A registered GUC with a default is what turns it into
+    /// something an operator can read, audit and change.
+    #[pg_test]
+    fn inline_timeout_has_a_stated_default() {
+        let v: Option<String> =
+            Spi::get_one("SELECT current_setting('pg_synapse.inline_timeout_ms')").unwrap();
+        assert_eq!(
+            v.as_deref(),
+            Some("2000"),
+            "the inline ceiling must be a stated number"
+        );
+    }
+
+    /// It is a ceiling, not a default: it may only take time away.
+    ///
+    /// An agent configured tighter than the ceiling keeps its own budget, and
+    /// an agent configured looser is cut down to it. Tested on the arithmetic
+    /// rather than by running an agent, which would need an LLM.
+    #[pg_test]
+    fn the_inline_ceiling_only_ever_lowers() {
+        use std::time::Duration;
+        let cap = Duration::from_millis(2_000);
+        let generous = Duration::from_millis(90_000);
+        let tight = Duration::from_millis(500);
+        assert_eq!(
+            generous.min(cap),
+            cap,
+            "a loose agent is cut to the ceiling"
+        );
+        assert_eq!(tight.min(cap), tight, "a tight agent keeps its own budget");
+    }
+
+    /// Every tool that reaches the network is refused inline, and every tool
+    /// that does not is allowed.
+    ///
+    /// The second half is the one that matters over time: `is_egress_tool` is
+    /// a hand-maintained name list, so this pins it against the tools that
+    /// actually exist. A plugin added later without a decision here shows up
+    /// as a failure rather than as a silent hole in D5.
+    #[pg_test]
+    fn every_network_tool_is_refused_inline() {
+        use crate::sql_functions::is_egress_tool;
+
+        for t in [
+            "http_get",
+            "http_head",
+            "http_post",
+            "search_news",
+            "fetch_feed",
+            "read_article",
+            "load_url",
+            "remote_query",
+            "remote_exec",
+            // Transitive: runs another agent, whose tools this check never sees.
+            "call_agent",
+        ] {
+            assert!(
+                is_egress_tool(t),
+                "{t} reaches the network and must be refused inline"
+            );
+        }
+
+        // The complete set of registered tools that do not, as of this commit.
+        for t in [
+            "sql_query",
+            "sql_exec",
+            "describe_schema",
+            "load_csv",
+            "load_json",
+            "export_csv",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_files",
+            "grep",
+            "calculator",
+            "get_current_time",
+            "lede_compress",
+        ] {
+            assert!(
+                !is_egress_tool(t),
+                "{t} is local and must stay usable inline"
+            );
+        }
+    }
+
     // ---- F2: per-caller isolation, the privilege matrix ----
     //
     // Four claims, one test each. Together they are what F2 promised: a
@@ -1080,6 +1171,7 @@ mod tests {
             "pg_synapse.default_embedding_profile",
             "pg_synapse.default_timeout_ms",
             "pg_synapse.default_timeout_seconds",
+            "pg_synapse.inline_timeout_ms",
             "pg_synapse.default_max_iterations",
             "pg_synapse.default_cost_cap_usd",
             "pg_synapse.trace_enabled",
