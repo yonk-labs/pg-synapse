@@ -111,7 +111,14 @@ pub(crate) fn log_execution(
         .messages
         .first()
         .map(|m| m.execution_id.to_string())
-        .unwrap_or_default();
+        // A run that ended before producing any message (a timeout that fired
+        // during the first model call, most often) has no message to take an
+        // id from. Falling back to a fresh uuid keeps the row insertable:
+        // previously the empty string failed the ::uuid cast, the error was
+        // discarded by the caller's `let _ =`, and the run vanished from the
+        // audit trail entirely. A run that ended badly is exactly the one that
+        // must not disappear.
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if exec_id.is_empty() {
         return Ok(());
     }
@@ -271,7 +278,13 @@ pub(crate) mod synapse {
                     .map(|m| m.execution_id.to_string())
                     .unwrap_or_default();
                 let tl = resolve_trace_level(agent_name);
-                let _ = log_execution(&o, agent_name, input, caller_role.as_deref(), tl);
+                // Not `let _ =`: a failure to record a run used to be silent,
+                // which is how a timed-out run went missing without anyone
+                // noticing. It still must not fail the caller's query, so it
+                // is reported as a warning rather than raised.
+                if let Err(e) = log_execution(&o, agent_name, input, caller_role.as_deref(), tl) {
+                    pgrx::warning!("could not record execution for agent {agent_name}: {e}");
+                }
                 JsonB(json!({
                     "execution_id": exec_id,
                     "output": o.output,
@@ -769,7 +782,13 @@ pub(crate) mod synapse {
                     &del,
                 );
                 let tl = resolve_trace_level(agent_name);
-                let _ = log_execution(&o, agent_name, input, caller_role.as_deref(), tl);
+                // Not `let _ =`: a failure to record a run used to be silent,
+                // which is how a timed-out run went missing without anyone
+                // noticing. It still must not fail the caller's query, so it
+                // is reported as a warning rather than raised.
+                if let Err(e) = log_execution(&o, agent_name, input, caller_role.as_deref(), tl) {
+                    pgrx::warning!("could not record execution for agent {agent_name}: {e}");
+                }
                 let real_id = o
                     .messages
                     .first()
