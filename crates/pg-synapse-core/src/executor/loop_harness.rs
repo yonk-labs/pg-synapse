@@ -65,6 +65,40 @@ pub(crate) struct LoopHarness<'a> {
     prepend_system: Option<String>,
 }
 
+/// Whether this call repeats one already issued, and what to tell the model.
+///
+/// Observed in the wild: an agent made eight consecutive identical
+/// `search_news` calls hoping for different results, exhausted its iteration
+/// budget, and wrote nothing. Iteration count was the only bound, and a budget
+/// is a poor guard against a loop because it gets spent either way.
+///
+/// `prior` includes the call being dispatched. Two identical calls is a
+/// plausible retry; three is a loop, so the third is refused rather than run.
+///
+/// Compares serialized arguments rather than a hash, because an agent that
+/// varied one character is not looping and should not be stopped.
+///
+/// Free function rather than a method so the rule can be tested without
+/// standing up an execution context: the rule is the interesting part.
+pub(crate) fn repeated_call_refusal(prior: &[ToolCall], tc: &ToolCall) -> Option<String> {
+    const LIMIT: usize = 2;
+    let seen = prior
+        .iter()
+        .filter(|p| p.name == tc.name && p.args == tc.args)
+        .count();
+    if seen > LIMIT {
+        Some(format!(
+            "Refused: you have already called `{}` {} times with exactly these arguments and got \
+             the same result each time. Calling it again will not change the answer. Use what you \
+             already have, or do something different.",
+            tc.name,
+            seen - 1
+        ))
+    } else {
+        None
+    }
+}
+
 impl<'a> LoopHarness<'a> {
     /// Construct a fresh harness against the given execution context.
     pub(crate) fn new(ctx: &'a ExecutionContext) -> Self {
@@ -191,6 +225,25 @@ impl<'a> LoopHarness<'a> {
         &mut self,
         tc: &ToolCall,
     ) -> Result<Message, ExecutorError> {
+        // Refuse a call the model has already made identically. Observed in
+        // the wild: an agent made eight consecutive identical `search_news`
+        // calls hoping for different results, exhausted its iteration budget,
+        // and wrote nothing. Iteration count was the only bound, and a budget
+        // is a poor guard against a loop because it is spent either way.
+        //
+        // The third identical call is answered with a refusal instead of being
+        // executed. Two is a plausible retry; three is a loop. The refusal goes
+        // back as an ordinary tool result so the model can read it and change
+        // course, which is cheaper and kinder than aborting the run.
+        if let Some(refusal) = repeated_call_refusal(&self.issued_tool_calls, tc) {
+            self.record_event(
+                EventKind::RepeatedToolCall,
+                serde_json::json!({ "tool": tc.name, "call_id": tc.id }),
+            );
+            let refusal_output = ToolOutput::Text(refusal);
+            return Ok(self.push_tool_result(tc, &refusal_output));
+        }
+
         let tool: Arc<dyn Tool> = match self.ctx.tools.get(&tc.name) {
             Some(t) => t,
             None => {
@@ -512,6 +565,58 @@ impl<'a> LoopHarness<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::types::ToolCall;
+
+    fn call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "c1".into(),
+            name: name.into(),
+            args,
+        }
+    }
+
+    /// The failure this guard exists for: an agent made eight consecutive
+    /// identical search_news calls and burned its whole budget.
+    #[test]
+    fn third_identical_call_is_refused() {
+        let tc = call("search_news", serde_json::json!({"q": "postgres"}));
+        let mut prior = vec![tc.clone()];
+        assert!(
+            repeated_call_refusal(&prior, &tc).is_none(),
+            "first is fine"
+        );
+
+        prior.push(tc.clone());
+        assert!(
+            repeated_call_refusal(&prior, &tc).is_none(),
+            "a retry is plausible"
+        );
+
+        prior.push(tc.clone());
+        let refusal = repeated_call_refusal(&prior, &tc).expect("third is a loop");
+        assert!(refusal.contains("search_news"));
+        assert!(refusal.contains("already called"));
+    }
+
+    /// Different arguments are different work, however many times the same
+    /// tool is used.
+    #[test]
+    fn different_arguments_are_never_refused() {
+        let mut prior: Vec<ToolCall> = Vec::new();
+        for i in 0..6 {
+            let tc = call(
+                "sql_exec",
+                serde_json::json!({"query": format!("INSERT {i}")}),
+            );
+            prior.push(tc.clone());
+            assert!(
+                repeated_call_refusal(&prior, &tc).is_none(),
+                "call {i} does the same kind of work on different data"
+            );
+        }
+    }
+
     use super::*;
     use crate::testing::{MockLlmProvider, MockTool};
     use crate::tool::ToolRegistry;

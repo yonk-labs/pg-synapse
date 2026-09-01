@@ -103,6 +103,10 @@ pub enum EventKind {
     /// A turn had no tool call and no text content; the loop nudged the
     /// model to act or answer instead of finalizing the run.
     EmptyTurn,
+    /// The model issued a tool call identical to one it already made, and the
+    /// harness refused to run it again. Traced rather than silent, because a
+    /// loop the operator cannot see is a loop nobody fixes.
+    RepeatedToolCall,
     /// A provider call was retried.
     RetryAttempt,
     /// The per-run cost cap was evaluated.
@@ -122,6 +126,7 @@ impl EventKind {
             Self::ToolEnd => "tool_end",
             Self::ToolError => "tool_error",
             Self::EmptyTurn => "empty_turn",
+            Self::RepeatedToolCall => "repeated_tool_call",
             Self::RetryAttempt => "retry_attempt",
             Self::CostCapCheck => "cost_cap_check",
             Self::IterationCapCheck => "iteration_cap_check",
