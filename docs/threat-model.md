@@ -4,8 +4,8 @@ What pg_synapse defends against, what it does not, and which of those is a
 decision rather than an oversight. Closes O8, which asked for this to be stated
 rather than implied.
 
-Scope: the pgrx extension. The sidecar host has a different shape and is not
-covered here.
+Scope: the pgrx extension, with a section on the sidecar at the end. The two
+have genuinely different postures and the difference is the point.
 
 ---
 
@@ -178,6 +178,44 @@ no.
 
 ---
 
+## The sidecar is a different posture, and a weaker one
+
+`pg-synapse-sidecar` runs the same kernel outside Postgres, over HTTP. None of
+the guarantees above transfer, because all of them are expressed in Postgres
+privileges and the sidecar has exactly one database connection with one role.
+
+**There is no caller identity at all.** The pgrx host's central property, that
+an agent reaches what its caller may reach, has no analogue here: every request
+runs as whatever role the connection string names.
+
+**And the run surface is unauthenticated.** The admin token gates the five
+`/v1/admin/*` routes and nothing else. These seven are open:
+
+```
+POST /v1/execute        POST /v1/execute_async   GET /v1/status/{id}
+POST /v1/embed          POST /v1/tool_call       GET /v1/health
+GET  /v1/version
+```
+
+`POST /v1/tool_call` reaches `sql_query` and `sql_exec`. So anyone who can
+reach the port can read and write the database with the sidecar's full
+privileges, without a token.
+
+The server binds `0.0.0.0`, not loopback, so "who can reach the port" is
+everyone on the network unless something outside this process is stopping
+them.
+
+**If you run the sidecar, put it behind something.** A reverse proxy that
+authenticates, a loopback bind plus an SSH tunnel, or a network policy. Do not
+put it on a network you do not control and do not treat the admin token as
+protecting anything but the five admin routes.
+
+Verified by reading `crates/pg-synapse-sidecar/src/api.rs` and confirmed by the
+process's own startup line (`pg-synapse-sidecar listening on 0.0.0.0:8088`).
+Not confirmed by an end to end unauthenticated call: the sidecar in this
+environment cannot resolve its database, so it never came up. The route table
+is unambiguous, but that distinction is recorded rather than glossed.
+
 ## The short version for a security review
 
 | | |
@@ -188,6 +226,7 @@ no.
 | Audit trail | Unforgeable, and silent on inline rejections |
 | Prompt injection | Contained by privileges, not prevented |
 | Tools leaving the database | Each carries its own control; Postgres does not see them |
+| The sidecar | No caller identity, run surface unauthenticated, binds 0.0.0.0. Put it behind something |
 
 The single most load-bearing operational decision is the role agents are
 invoked as. Almost every guarantee above is stated relative to it.
