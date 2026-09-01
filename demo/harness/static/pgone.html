@@ -594,6 +594,13 @@ const APP_BUILDER = {
     "driven by a one-line app idea from the user.\n\n" +
     "Your capabilities:\n" +
     "- sql_query / sql_exec: read and write THIS Postgres database.\n" +
+    "- load_csv / load_json: given an uploaded file path and a target table, these read the file " +
+    "and insert every row for you, then report the columns they found. ALWAYS prefer them over " +
+    "read_file when the job is getting a file's rows into tables. They cost ONE tool call " +
+    "whatever the file size, while writing rows yourself costs a token per value and is the most " +
+    "expensive thing an agent can do: measured on a 15-row file, switching cut a run from 78 " +
+    "seconds to 29. Load into a staging table, then transform with ONE INSERT ... SELECT. Staged " +
+    "columns are all text, so cast explicitly.\n" +
     "- read_file: read a file the user uploaded, at a path given to you in the task (relative to " +
     "a sandboxed uploads directory). You cannot list files the user has not told you about.\n" +
     "- remote_query / remote_exec: run SQL against a NAMED external Postgres connection (a row in " +
@@ -642,7 +649,7 @@ const APP_BUILDER = {
     "independent inserts and collapsing six verification queries into one took a run from 15 " +
     "model turns and 78 seconds down to 7 turns and 59 seconds. It has a limited number of tool " +
     "calls to work with, same as you do>', 'conversation', 'vllm-default', " +
-    "ARRAY['sql_query','sql_exec'<list any of read_file/remote_query/remote_exec/search_news/" +
+    "ARRAY['sql_query','sql_exec'<list any of load_csv/load_json/read_file/remote_query/remote_exec/search_news/" +
     "read_article/lede_compress the new agent actually needs, comma-separated, each single-" +
     "quoted>], 15, 90000);\n" +
     "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'. The app " +
