@@ -74,27 +74,42 @@ pub(crate) fn master_key() -> Option<String> {
 }
 
 pub(crate) fn log_failed_execution(agent: &str, input: &str, error: &str, caller: Option<&str>) {
-    use pgrx::datum::DatumWithOid;
-    let args: Vec<DatumWithOid<'_>> = vec![
-        DatumWithOid::from(uuid::Uuid::new_v4().to_string()),
-        DatumWithOid::from(agent.to_string()),
-        DatumWithOid::from(input.to_string()),
-        DatumWithOid::from(error.to_string()),
-        match caller {
-            Some(c) => DatumWithOid::from(c.to_string()),
-            None => DatumWithOid::null::<String>(),
-        },
-    ];
-    let _ = Spi::run_with_args(
-        "INSERT INTO synapse.executions \
-           (execution_id, agent_name, input, output, status, caller_role, model, finished_at) \
-         VALUES ($1::uuid, $2, $3, $4, 'errored', $5, \
-           (SELECT p.model FROM synapse.agents a \
-              JOIN synapse.llm_profiles p ON p.name = a.llm_profile_main \
-             WHERE a.name = $2), \
-           now())",
-        &args,
+    let _ = record_status(
+        &uuid::Uuid::new_v4().to_string(),
+        agent,
+        Some(input),
+        Some(error),
+        "errored",
+        caller,
     );
+}
+
+/// Write one `synapse.executions` row at `status`, through the definer
+/// boundary. Upserts, so the same call both plants the async path's `queued`
+/// placeholder and later turns it into the terminal row.
+pub(crate) fn record_status(
+    execution_id: &str,
+    agent: &str,
+    input: Option<&str>,
+    output: Option<&str>,
+    status: &str,
+    caller: Option<&str>,
+) -> Result<(), String> {
+    use pgrx::JsonB;
+    use pgrx::datum::DatumWithOid;
+    let doc = serde_json::json!({
+        "execution_id": execution_id,
+        "agent_name": agent,
+        "input": input,
+        "output": output,
+        "status": status,
+        "caller_role": caller,
+    });
+    Spi::run_with_args(
+        "SELECT synapse.record_status($1)",
+        &[DatumWithOid::from(JsonB(doc))],
+    )
+    .map_err(|e| e.to_string())
 }
 
 pub(crate) fn log_execution(
@@ -103,124 +118,109 @@ pub(crate) fn log_execution(
     input: &str,
     caller: Option<&str>,
     trace_level: pg_synapse_core::types::TraceLevel,
+    // The async path writes a placeholder row under its own id before running,
+    // then the kernel mints a different id for the messages. Passing it here
+    // lets the replacement happen inside one statement instead of a DELETE
+    // that could leave the run with no row at all if the write after it failed.
+    supersedes: Option<&str>,
 ) -> Result<(), String> {
     use pgrx::JsonB;
     use pgrx::datum::DatumWithOid;
+    use serde_json::json;
 
     let exec_id = o
         .messages
         .first()
         .map(|m| m.execution_id.to_string())
-        // A run that ended before producing any message (a timeout that fired
-        // during the first model call, most often) has no message to take an
-        // id from. Falling back to a fresh uuid keeps the row insertable:
-        // previously the empty string failed the ::uuid cast, the error was
-        // discarded by the caller's `let _ =`, and the run vanished from the
-        // audit trail entirely. A run that ended badly is exactly the one that
-        // must not disappear.
+        // A run that ended before producing any message (a provider that
+        // failed on the very first call) has no message to take an id from.
+        // Falling back to a fresh uuid keeps the row insertable: previously
+        // the empty string failed the ::uuid cast, the error was discarded by
+        // the caller's `let _ =`, and the run vanished from the audit trail
+        // entirely. A run that ended badly is exactly the one that must not
+        // disappear.
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     if exec_id.is_empty() {
         return Ok(());
     }
-    let status = status_label(&o.status).to_string();
-
-    let args: Vec<DatumWithOid<'_>> = vec![
-        DatumWithOid::from(exec_id.clone()),
-        DatumWithOid::from(agent.to_string()),
-        DatumWithOid::from(input.to_string()),
-        DatumWithOid::from(o.output.clone()),
-        DatumWithOid::from(status),
-        DatumWithOid::from(o.tokens_in as i32),
-        DatumWithOid::from(o.tokens_out as i32),
-        // `synapse.executions.cost_usd` is `NUMERIC(12,6)`. Bind it as
-        // `AnyNumeric` (built from the f64 via Postgres' `float8_numeric`) so
-        // the stored value keeps the column's full 6-decimal precision rather
-        // than the lossy float text round-trip the previous `f64` bind used.
-        // If the conversion ever fails (non-finite f64), fall back to NULL
-        // instead of poisoning the whole audit row.
-        match o.cost_usd.and_then(|c| pgrx::AnyNumeric::try_from(c).ok()) {
-            Some(n) => DatumWithOid::from(n),
-            None => DatumWithOid::null::<pgrx::AnyNumeric>(),
-        },
-        DatumWithOid::from(o.duration_ms as i64),
-        match caller {
-            Some(c) => DatumWithOid::from(c.to_string()),
-            None => DatumWithOid::null::<String>(),
-        },
-    ];
-
-    Spi::run_with_args(
-        // `model` is resolved inline from the agent's profile rather than
-        // passed in: ExecutorOutcome does not carry it, and a subquery costs
-        // nothing extra here while a kernel change would touch every executor.
-        "INSERT INTO synapse.executions (execution_id, agent_name, input, output, status, tokens_in, tokens_out, cost_usd, duration_ms, caller_role, model, finished_at) \
-         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, \
-           (SELECT p.model FROM synapse.agents a \
-              JOIN synapse.llm_profiles p ON p.name = a.llm_profile_main \
-             WHERE a.name = $2), \
-           now())",
-        &args,
-    )
-    .map_err(|e| e.to_string())?;
 
     let run_succeeded = o.status == pg_synapse_core::types::OutcomeStatus::Completed;
-    if !trace_level.should_persist_messages(run_succeeded) {
-        return Ok(());
-    }
-
-    for m in &o.messages {
-        let msg_args: Vec<DatumWithOid<'_>> = vec![
-            DatumWithOid::from(m.execution_id.to_string()),
-            DatumWithOid::from(m.seq as i32),
-            DatumWithOid::from(role_str(&m.role).to_string()),
-            match &m.content {
-                Some(c) => DatumWithOid::from(c.clone()),
-                None => DatumWithOid::null::<String>(),
-            },
-            match &m.tool_call_id {
-                Some(c) => DatumWithOid::from(c.clone()),
-                None => DatumWithOid::null::<String>(),
-            },
-            match &m.tool_name {
-                Some(c) => DatumWithOid::from(c.clone()),
-                None => DatumWithOid::null::<String>(),
-            },
-            match &m.tool_input {
-                Some(v) => DatumWithOid::from(JsonB(v.clone())),
-                None => DatumWithOid::null::<JsonB>(),
-            },
-            match &m.tool_output {
-                Some(v) => DatumWithOid::from(JsonB(v.clone())),
-                None => DatumWithOid::null::<JsonB>(),
-            },
-        ];
-        Spi::run_with_args(
-            "INSERT INTO synapse.messages (execution_id, seq, role, content, tool_call_id, tool_name, tool_input, tool_output) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8)",
-            &msg_args,
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    let messages = if trace_level.should_persist_messages(run_succeeded) {
+        o.messages
+            .iter()
+            .map(|m| {
+                json!({
+                    "seq": m.seq,
+                    "role": role_str(&m.role),
+                    "content": m.content,
+                    "tool_call_id": m.tool_call_id,
+                    "tool_name": m.tool_name,
+                    "tool_input": m.tool_input,
+                    "tool_output": m.tool_output,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     // D6: fill the already-decided `synapse.traces` writer (do not redesign
     // the schema). D8: persist + pollable only, no live push. Events are
     // persisted only at trace_level >= debug; `seq` is the event's ordinal
     // within the run.
-    if trace_level.should_persist_events() {
-        for (seq, ev) in o.events.iter().enumerate() {
-            let ev_args: Vec<DatumWithOid<'_>> = vec![
-                DatumWithOid::from(exec_id.clone()),
-                DatumWithOid::from(seq as i32),
-                DatumWithOid::from(ev.kind.as_str().to_string()),
-                DatumWithOid::from(JsonB(ev.payload.clone())),
-            ];
-            Spi::run_with_args(
-                "INSERT INTO synapse.traces (execution_id, seq, event, payload) VALUES ($1::uuid, $2, $3, $4)",
-                &ev_args,
+    let events: Vec<serde_json::Value> = if trace_level.should_persist_events() {
+        o.events
+            .iter()
+            .enumerate()
+            .map(
+                |(seq, ev)| json!({ "seq": seq, "event": ev.kind.as_str(), "payload": ev.payload }),
             )
-            .map_err(|e| e.to_string())?;
-        }
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    // `cost_usd` lands in a NUMERIC(12,6). Serializing the f64 into the jsonb
+    // document and casting on the SQL side keeps the column's full precision
+    // without the lossy float-to-text round trip a text bind would cost. A
+    // non-finite f64 has no json number to serialize to, so it becomes null
+    // rather than poisoning the whole audit row.
+    let cost = o
+        .cost_usd
+        .and_then(serde_json::Number::from_f64)
+        .map(serde_json::Value::Number)
+        .unwrap_or(serde_json::Value::Null);
+
+    let mut doc = json!({
+        "execution": {
+            "execution_id": exec_id,
+            "agent_name": agent,
+            "input": input,
+            "output": o.output,
+            "status": status_label(&o.status),
+            "tokens_in": o.tokens_in,
+            "tokens_out": o.tokens_out,
+            "cost_usd": cost,
+            "duration_ms": o.duration_ms,
+            "caller_role": caller,
+        },
+        "messages": messages,
+        "events": events,
+    });
+    if let Some(id) = supersedes {
+        doc["supersedes"] = serde_json::Value::String(id.to_owned());
     }
-    Ok(())
+
+    // One privileged call for the whole run. It used to be one INSERT per
+    // message and per event, so a 23 message run cost 24 SPI round trips; and
+    // routing them through a single SECURITY DEFINER function is what lets the
+    // entry points drop to the caller's own rights without taking the audit
+    // trail down with them (F2).
+    Spi::run_with_args(
+        "SELECT synapse.record_run($1)",
+        &[DatumWithOid::from(JsonB(doc))],
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// The `synapse` Postgres schema: every `#[pg_extern]` in this module lands
@@ -282,7 +282,9 @@ pub(crate) mod synapse {
                 // which is how a timed-out run went missing without anyone
                 // noticing. It still must not fail the caller's query, so it
                 // is reported as a warning rather than raised.
-                if let Err(e) = log_execution(&o, agent_name, input, caller_role.as_deref(), tl) {
+                if let Err(e) =
+                    log_execution(&o, agent_name, input, caller_role.as_deref(), tl, None)
+                {
                     pgrx::warning!("could not record execution for agent {agent_name}: {e}");
                 }
                 JsonB(json!({
@@ -734,31 +736,25 @@ pub(crate) mod synapse {
         // Pre-insert a 'queued' row keyed by a fresh id so a poller can see
         // the execution exists even if the run below fails hard.
         let queued_id = uuid::Uuid::new_v4();
-        let queued_args: Vec<DatumWithOid<'_>> = vec![
-            DatumWithOid::from(queued_id.to_string()),
-            DatumWithOid::from(agent_name.to_string()),
-            DatumWithOid::from(input.to_string()),
-            DatumWithOid::from("queued".to_string()),
-            match caller_role.as_deref() {
-                Some(c) => DatumWithOid::from(c.to_string()),
-                None => DatumWithOid::null::<String>(),
-            },
-        ];
-        let _ = Spi::run_with_args(
-            "INSERT INTO synapse.executions (execution_id, agent_name, input, status, caller_role) VALUES ($1::uuid, $2, $3, $4, $5)",
-            &queued_args,
+        let _ = super::record_status(
+            &queued_id.to_string(),
+            agent_name,
+            Some(input),
+            None,
+            "queued",
+            caller_role.as_deref(),
         );
 
         let kernel = match kernel_handle() {
             Ok(k) => k,
             Err(e) => {
-                let args: Vec<DatumWithOid<'_>> = vec![
-                    DatumWithOid::from(format!("kernel error: {e}")),
-                    DatumWithOid::from(queued_id.to_string()),
-                ];
-                let _ = Spi::run_with_args(
-                    "UPDATE synapse.executions SET status='errored', output=$1, finished_at=now() WHERE execution_id=$2::uuid",
-                    &args,
+                let _ = super::record_status(
+                    &queued_id.to_string(),
+                    agent_name,
+                    Some(input),
+                    Some(&format!("kernel error: {e}")),
+                    "errored",
+                    caller_role.as_deref(),
                 );
                 return pgrx::Uuid::from_bytes(*queued_id.as_bytes());
             }
@@ -772,21 +768,24 @@ pub(crate) mod synapse {
 
         match outcome {
             Ok(o) => {
-                // The kernel minted its own execution_id for the messages.
-                // Drop the placeholder 'queued' row and log the real outcome
-                // (executions + messages) through the shared logger so the
-                // sync and async paths produce identical audit rows.
-                let del: Vec<DatumWithOid<'_>> = vec![DatumWithOid::from(queued_id.to_string())];
-                let _ = Spi::run_with_args(
-                    "DELETE FROM synapse.executions WHERE execution_id = $1::uuid",
-                    &del,
-                );
+                // The kernel minted its own execution_id for the messages,
+                // so the placeholder written above is superseded rather than
+                // updated. It is dropped inside the same statement that writes
+                // the real row, through the shared logger, so the sync and
+                // async paths produce identical audit rows.
                 let tl = resolve_trace_level(agent_name);
                 // Not `let _ =`: a failure to record a run used to be silent,
                 // which is how a timed-out run went missing without anyone
                 // noticing. It still must not fail the caller's query, so it
                 // is reported as a warning rather than raised.
-                if let Err(e) = log_execution(&o, agent_name, input, caller_role.as_deref(), tl) {
+                if let Err(e) = log_execution(
+                    &o,
+                    agent_name,
+                    input,
+                    caller_role.as_deref(),
+                    tl,
+                    Some(&queued_id.to_string()),
+                ) {
                     pgrx::warning!("could not record execution for agent {agent_name}: {e}");
                 }
                 let real_id = o
@@ -797,13 +796,13 @@ pub(crate) mod synapse {
                 pgrx::Uuid::from_bytes(*real_id.as_bytes())
             }
             Err(e) => {
-                let args: Vec<DatumWithOid<'_>> = vec![
-                    DatumWithOid::from(e.to_string()),
-                    DatumWithOid::from(queued_id.to_string()),
-                ];
-                let _ = Spi::run_with_args(
-                    "UPDATE synapse.executions SET status='errored', output=$1, finished_at=now() WHERE execution_id=$2::uuid",
-                    &args,
+                let _ = super::record_status(
+                    &queued_id.to_string(),
+                    agent_name,
+                    Some(input),
+                    Some(&e.to_string()),
+                    "errored",
+                    caller_role.as_deref(),
                 );
                 pgrx::Uuid::from_bytes(*queued_id.as_bytes())
             }

@@ -498,22 +498,117 @@ $config_secrets$;
 
 -- The audit write, for the same reason in the other direction: a low
 -- privilege caller must still be recordable, or the first thing invoker
--- rights would break is the audit trail.
-CREATE OR REPLACE FUNCTION synapse.record_execution(
-  p_execution_id uuid, p_agent text, p_input text, p_output text,
-  p_status text, p_tokens_in int, p_tokens_out int, p_cost numeric,
-  p_duration_ms bigint, p_caller_role text)
-RETURNS void LANGUAGE sql SECURITY DEFINER AS $$
+-- rights would break is the audit trail. Granting the tables to user roles is
+-- not the alternative, because an audit trail a caller can write to is one
+-- they can forge.
+--
+-- One call for the whole run, not one per row. The host used to issue an
+-- INSERT per message and per trace event, so a 23 message run cost 24 SPI
+-- round trips; this takes the run as a single jsonb document and unnests it.
+-- Being one call is also what makes it a boundary worth having: an entry point
+-- running as the caller needs exactly one privileged thing here, not a
+-- sequence of them.
+--
+-- `model` is resolved here rather than passed in: it is a property of the
+-- agent's profile as it stands at write time, and the kernel does not carry
+-- it. The messages and events arrays may be absent or empty, which is what a
+-- trace level below the persistence threshold looks like.
+CREATE OR REPLACE FUNCTION synapse.record_run(p jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $record_run$
+DECLARE
+  v_agent text := p->'execution'->>'agent_name';
+  v_exec  uuid := (p->'execution'->>'execution_id')::uuid;
+BEGIN
+  -- The async path pre-inserts a placeholder row under its own id so a poller
+  -- can see the run exists, then the kernel mints a different id for the
+  -- messages. Dropping the placeholder here rather than in a separate
+  -- statement keeps the replacement atomic: no window in which the run has
+  -- two rows, and none in which it has none.
+  IF p ? 'supersedes' THEN
+    DELETE FROM synapse.executions
+     WHERE execution_id = (p->>'supersedes')::uuid;
+  END IF;
+
   INSERT INTO synapse.executions
     (execution_id, agent_name, input, output, status, tokens_in, tokens_out,
      cost_usd, duration_ms, caller_role, model, finished_at)
-  VALUES (p_execution_id, p_agent, p_input, p_output, p_status, p_tokens_in,
-          p_tokens_out, p_cost, p_duration_ms, p_caller_role,
-          (SELECT p.model FROM synapse.agents a
-             JOIN synapse.llm_profiles p ON p.name = a.llm_profile_main
-            WHERE a.name = p_agent),
-          now())
-$$;
+  SELECT v_exec, v_agent,
+         e.input, e.output, e.status, e.tokens_in, e.tokens_out,
+         e.cost_usd, e.duration_ms, e.caller_role,
+         (SELECT lp.model FROM synapse.agents a
+            JOIN synapse.llm_profiles lp ON lp.name = a.llm_profile_main
+           WHERE a.name = v_agent),
+         now()
+  FROM jsonb_to_record(p->'execution') AS e(
+    input text, output text, status text, tokens_in int, tokens_out int,
+    cost_usd numeric, duration_ms bigint, caller_role text);
+
+  INSERT INTO synapse.messages
+    (execution_id, seq, role, content, tool_call_id, tool_name,
+     tool_input, tool_output)
+  SELECT v_exec, m.seq, m.role, m.content, m.tool_call_id, m.tool_name,
+         m.tool_input, m.tool_output
+  FROM jsonb_to_recordset(COALESCE(p->'messages', '[]'::jsonb)) AS m(
+    seq int, role text, content text, tool_call_id text, tool_name text,
+    tool_input jsonb, tool_output jsonb);
+
+  INSERT INTO synapse.traces (execution_id, seq, event, payload)
+  SELECT v_exec, t.seq, t.event, t.payload
+  FROM jsonb_to_recordset(COALESCE(p->'events', '[]'::jsonb)) AS t(
+    seq int, event text, payload jsonb);
+END
+$record_run$;
+
+-- The same boundary for a run with no transcript to record: the 'queued'
+-- placeholder the async path writes up front, and the terminal 'errored' row
+-- for a run that failed before the kernel produced an outcome (a cost cap
+-- trip, a kernel build failure, a provider outage). Both are one executions
+-- row at a given status, so they are one function.
+--
+-- Upsert, because the errored write may be updating a placeholder this same
+-- function inserted a moment earlier, or inserting fresh when the failure came
+-- from the synchronous path that never wrote one. The caller should not have
+-- to know which.
+CREATE OR REPLACE FUNCTION synapse.record_status(p jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $record_status$
+DECLARE
+  v_agent text := p->>'agent_name';
+  v_exec  uuid := (p->>'execution_id')::uuid;
+BEGIN
+  INSERT INTO synapse.executions
+    (execution_id, agent_name, input, output, status, caller_role, model,
+     finished_at)
+  VALUES (v_exec, v_agent, COALESCE(p->>'input', ''), p->>'output',
+          p->>'status', p->>'caller_role',
+          (SELECT lp.model FROM synapse.agents a
+             JOIN synapse.llm_profiles lp ON lp.name = a.llm_profile_main
+            WHERE a.name = v_agent),
+          CASE WHEN p->>'status' = 'queued' THEN NULL ELSE now() END)
+  ON CONFLICT (execution_id) DO UPDATE
+    SET status      = EXCLUDED.status,
+        output      = EXCLUDED.output,
+        finished_at = EXCLUDED.finished_at;
+END
+$record_status$;
+
+-- Deliberately NOT granted to synapse_user, and that is the open problem in
+-- F2 rather than an oversight.
+--
+-- The flip these were built for makes the entry points SECURITY INVOKER, and
+-- an entry point running as the caller can only reach a function the caller
+-- may execute. So the flip appears to require granting these two. But a role
+-- that may call synapse.record_run may call it directly, with any payload it
+-- likes, and an audit trail a caller can write to is one they can forge. That
+-- is the same objection that ruled out granting the tables, arriving one level
+-- further in.
+--
+-- The refactor above is worth having either way: each entry point now crosses
+-- the privilege boundary exactly once instead of once per message, which is
+-- what makes the boundary small enough to reason about at all. Deciding who
+-- may cross it is the next question, and the plausible answers (a nonce the
+-- entry point mints and the function checks, a bgworker owning the writes, or
+-- keeping the audit path definer while only the agent's own SQL runs as the
+-- caller) are not interchangeable. Not resolved here.
 
 
 -- Remove an app: its record, its agents, its schedules and its saved

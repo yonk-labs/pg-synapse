@@ -485,6 +485,7 @@ mod tests {
             "hi",
             Some("tester"),
             pg_synapse_core::types::TraceLevel::Full,
+            None,
         )
         .expect("log_execution must succeed");
 
@@ -506,6 +507,85 @@ mod tests {
             (cost - 0.123456).abs() < 1e-9,
             "NUMERIC cost must be preserved to 6 decimals, got {cost}"
         );
+    }
+
+    /// F2: the audit trail is one privileged call, and the async path's
+    /// placeholder row is replaced by the real one inside it.
+    ///
+    /// The async entry point writes a `queued` row under an id it mints, then
+    /// the kernel mints a different id for the messages, so the placeholder has
+    /// to go. It used to go in a separate DELETE, which left a window where a
+    /// failure of the write after it would leave the run with no row at all.
+    /// Passing it as `supersedes` puts both in one statement.
+    #[pg_test]
+    fn log_execution_supersedes_the_queued_placeholder() {
+        use pg_synapse_core::types::{ExecutorOutcome, Message, OutcomeStatus};
+        use uuid::Uuid;
+
+        let placeholder = Uuid::new_v4();
+        crate::sql_functions::record_status(
+            &placeholder.to_string(),
+            "numeric_agent",
+            Some("hi"),
+            None,
+            "queued",
+            Some("tester"),
+        )
+        .expect("placeholder must be recordable");
+
+        let real = Uuid::new_v4();
+        let msg: Message = serde_json::from_value(json!({
+            "execution_id": real,
+            "seq": 0,
+            "role": "assistant",
+            "content": "done",
+            "tool_call_id": null,
+            "tool_name": null,
+            "tool_input": null,
+            "tool_output": null,
+            "timestamp": "1970-01-01T00:00:00Z",
+        }))
+        .expect("Message must deserialize");
+        let outcome = ExecutorOutcome {
+            output: "done".into(),
+            messages: vec![msg],
+            tool_calls: vec![],
+            tokens_in: 1,
+            tokens_out: 2,
+            cost_usd: None,
+            duration_ms: 10,
+            status: OutcomeStatus::Completed,
+            events: vec![],
+        };
+        crate::sql_functions::log_execution(
+            &outcome,
+            "numeric_agent",
+            "hi",
+            Some("tester"),
+            pg_synapse_core::types::TraceLevel::Full,
+            Some(&placeholder.to_string()),
+        )
+        .expect("log_execution must succeed");
+
+        let gone: Option<i64> = Spi::get_one(&format!(
+            "SELECT count(*) FROM synapse.executions WHERE execution_id = '{placeholder}'::uuid"
+        ))
+        .unwrap();
+        assert_eq!(gone, Some(0), "the placeholder row must be superseded");
+
+        let kept: Option<i64> = Spi::get_one(&format!(
+            "SELECT count(*) FROM synapse.executions WHERE execution_id = '{real}'::uuid"
+        ))
+        .unwrap();
+        assert_eq!(kept, Some(1), "the real row must be written");
+
+        // The whole run in one call: the transcript lands with it, not through
+        // a separate INSERT per message.
+        let msgs: Option<i64> = Spi::get_one(&format!(
+            "SELECT count(*) FROM synapse.messages WHERE execution_id = '{real}'::uuid"
+        ))
+        .unwrap();
+        assert_eq!(msgs, Some(1), "messages must be written by the same call");
     }
 
     // ---- N2.2: remaining SQL functions ----
