@@ -27,6 +27,46 @@ pub(crate) fn status_label(s: &OutcomeStatus) -> &'static str {
 
 use crate::audit_capability::AuditGrant;
 
+/// Warn when the encryption key is configured but reachable by any role.
+///
+/// `pg_synapse.master_key` is registered `SUPERUSER_ONLY`, which is what stops
+/// a caller reading it. That flag only exists once this library has loaded,
+/// and a custom GUC belonging to a library that has not loaded is an unflagged
+/// **placeholder**: Postgres accepts it from the configuration and hands its
+/// value to anyone who asks. So a key set in `postgresql.conf` or by
+/// `ALTER SYSTEM`, without preloading, is readable by a fresh session that
+/// never touches `synapse.*`. Measured, not theorised: `synapse_user` read a
+/// key set by `ALTER SYSTEM` on an otherwise correctly configured database.
+///
+/// `shared_preload_libraries = 'pg_synapse_pgrx'` closes it, because the GUC is
+/// then defined with its flag at postmaster start, before any session exists.
+///
+/// Checked over SPI rather than by reading
+/// `process_shared_preload_libraries_in_progress`, which would need a second
+/// `unsafe` site in a crate that documents exactly one.
+///
+/// A warning rather than an error: refusing to run would take a database down
+/// over a configuration the operator may have deliberately accepted, and the
+/// key is already exposed by the time we could complain.
+pub(crate) fn warn_if_master_key_is_exposed() {
+    if master_key().is_none() {
+        return;
+    }
+    let preloaded: bool =
+        Spi::get_one::<String>("SELECT current_setting('shared_preload_libraries', true)")
+            .ok()
+            .flatten()
+            .is_some_and(|v| v.split(',').any(|l| l.trim() == "pg_synapse_pgrx"));
+    if !preloaded {
+        pgrx::warning!(
+            "pg_synapse.master_key is set but pg_synapse_pgrx is not in \
+             shared_preload_libraries; until it is, the key is an unflagged GUC \
+             placeholder that any role can read with current_setting() before \
+             this library loads. See docs/threat-model.md"
+        );
+    }
+}
+
 /// Whether a tool name reaches the network, directly or through another agent.
 ///
 /// D5 refuses these in inline trigger mode. A name list rather than a trait
@@ -728,6 +768,7 @@ pub(crate) mod synapse {
 
     #[pg_extern(security_definer)]
     pub fn ensure_kernel() {
+        super::warn_if_master_key_is_exposed();
         if let Err(e) = kernel_handle() {
             pgrx::error!("ensure_kernel: {e}");
         }

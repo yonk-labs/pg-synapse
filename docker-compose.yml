@@ -12,6 +12,14 @@ services:
     build:
       context: .
       dockerfile: demo/db/Dockerfile
+    # Preloading is not an optimisation, it is what makes
+    # pg_synapse.master_key safe. A custom GUC belonging to a library that has
+    # not loaded yet is an unflagged placeholder, readable by any role, so
+    # without this a fresh session reads the encryption key straight out of
+    # the configuration before ever touching synapse.*. Preloading defines the
+    # GUC with its SUPERUSER_ONLY flag at postmaster start, before any session
+    # exists. See docs/threat-model.md.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_synapse_pgrx"]
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: synapse_demo

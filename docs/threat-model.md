@@ -96,6 +96,43 @@ a GUC read is not a table read, and no grant governs it, so F2 was irrelevant
 here. A privilege boundary only covers the objects the privilege system knows
 about.
 
+### That flag only holds if the library is preloaded
+
+**`shared_preload_libraries = 'pg_synapse_pgrx'` is a security setting here,
+not a performance one.** Set it.
+
+A custom GUC belonging to a library that has not loaded yet is not protected,
+it is a **placeholder**: Postgres accepts `pg_synapse.master_key` from the
+configuration, attaches no flags to it, and hands the value to anyone who asks.
+The `SUPERUSER_ONLY` flag comes into existence only when this library loads,
+which by default is the first time something in a session touches `synapse.*`.
+
+Measured on a correctly installed database with the key set the way an operator
+would set it:
+
+```
+ALTER SYSTEM SET pg_synapse.master_key = 'REAL-DEPLOYED-KEY';
+SELECT pg_reload_conf();
+
+-- a fresh session, as synapse_user, that never touches synapse.*
+SET ROLE synapse_user;
+SELECT current_setting('pg_synapse.master_key');
+--  REAL-DEPLOYED-KEY
+```
+
+With the library preloaded the same session gets `permission denied to
+examine`, because the GUC is defined with its flag at postmaster start, before
+any session exists.
+
+The demo stack sets this. If you install the extension yourself and configure a
+master key, you must set it too: the extension emits a warning when it notices
+the combination, but by then a session that never called an agent has already
+been able to read the key.
+
+The general shape is worth remembering beyond this setting: **a flag on a GUC
+is only as real as the library that declares it**, so any protection expressed
+that way has a window before load unless the library is preloaded.
+
 What remains: an agent whose **caller is a superuser** still reads it, by the
 rule in the previous section.
 
@@ -147,7 +184,7 @@ no.
 | --- | --- |
 | Agent SQL privileges | The invoking role's, enforced by Postgres |
 | Superuser callers | Get superuser agents. Do not invoke as one |
-| Encryption key | Superuser-readable in-process. Protects backups, not runtime |
+| Encryption key | Superuser-readable in-process. Protects backups, not runtime. **Requires `shared_preload_libraries`, or any role can read it** |
 | Audit trail | Unforgeable, and silent on inline rejections |
 | Prompt injection | Contained by privileges, not prevented |
 | Tools leaving the database | Each carries its own control; Postgres does not see them |

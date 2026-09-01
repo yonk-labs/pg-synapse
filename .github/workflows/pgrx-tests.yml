@@ -44,6 +44,16 @@ jobs:
         # fails with a schema/path mismatch (see CLAUDE.md).
         run: cargo install --locked cargo-pgrx --version 0.18.0
 
+      - name: Make the extension dirs writable
+        # `cargo pgrx test` installs the extension into the Postgres it was
+        # pointed at, and an apt-installed Postgres owns those directories as
+        # root. Without this the install step fails, every test then reports
+        # "Could not obtain test mutex", and the real error is one line above
+        # 45 identical ones.
+        run: |
+          PGC=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          sudo chmod a+w "$($PGC --pkglibdir)" "$($PGC --sharedir)/extension"
+
       - name: pgrx init
         # The version-specific pg_config, not `which pg_config`: with several
         # majors installable side by side, whichever lands on PATH is not
