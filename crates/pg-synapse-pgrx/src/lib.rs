@@ -804,8 +804,27 @@ mod tests {
     /// Per-caller isolation does not help, because a GUC read is not a table
     /// read and no grant governs it. The `SUPERUSER_ONLY` flag is what closes
     /// it, and this pins the flag so removing it fails here.
+    ///
+    /// Two functions rather than one, because `pg_test`'s `error =` matches the
+    /// whole message and Postgres reworded this refusal in 16. The behaviour is
+    /// identical on every major; the wording is version trivia and being
+    /// refused at all is the property being pinned.
+    #[cfg(not(feature = "pg15"))]
     #[pg_test(error = "permission denied to examine \"pg_synapse.master_key\"")]
     fn master_key_is_not_readable_by_synapse_user() {
+        read_master_key_as_synapse_user();
+    }
+
+    /// The pg15 wording of the same refusal. See above.
+    #[cfg(feature = "pg15")]
+    #[pg_test(
+        error = "must be superuser or have privileges of pg_read_all_settings to examine \"pg_synapse.master_key\""
+    )]
+    fn master_key_is_not_readable_by_synapse_user_pg15() {
+        read_master_key_as_synapse_user();
+    }
+
+    fn read_master_key_as_synapse_user() {
         Spi::run("SET ROLE synapse_user").unwrap();
         Spi::run("SELECT current_setting('pg_synapse.master_key')").unwrap();
         Spi::run("RESET ROLE").unwrap();
