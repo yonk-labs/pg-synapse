@@ -212,8 +212,111 @@ impl Tool for SqlExecTool {
     }
 }
 
-/// Plugin that registers both `sql_query` and `sql_exec` against a provided
-/// [`SqlExecutor`].
+/// Arguments for [`DescribeSchemaTool`].
+#[derive(JsonSchema, Deserialize)]
+struct DescribeSchemaArgs {
+    /// Schema to describe. Omit to describe every non-system schema.
+    #[serde(default, alias = "name", alias = "schema_name")]
+    schema: Option<String>,
+}
+
+/// `describe_schema`: the whole shape of a schema in one call.
+///
+/// Agents were spending two or three turns rediscovering what they work with:
+/// one query to information_schema.tables, another to .columns, sometimes a
+/// third for keys. Each is a full model round trip costing seconds, paid on
+/// every run, to learn something that did not change between runs.
+///
+/// One call returns tables, columns with types and nullability, primary keys
+/// and foreign keys. An agent that can see the foreign key graph writes a
+/// correct join the first time instead of guessing and retrying.
+pub struct DescribeSchemaTool {
+    /// Read through the executor, so the caller's own privileges apply exactly
+    /// as they do for any other read.
+    pub executor: Arc<dyn SqlExecutor>,
+}
+
+#[async_trait]
+impl Tool for DescribeSchemaTool {
+    fn name(&self) -> &str {
+        "describe_schema"
+    }
+    fn schema(&self) -> &ToolSchema {
+        static S: std::sync::OnceLock<ToolSchema> = std::sync::OnceLock::new();
+        S.get_or_init(|| ToolSchema::from_root(schemars::schema_for!(DescribeSchemaArgs)))
+    }
+    async fn run(&self, input: Value, ctx: &ToolCtx) -> Result<ToolOutput, ToolError> {
+        let args: DescribeSchemaArgs =
+            serde_json::from_value(input).map_err(|e| ToolError::InvalidInput {
+                name: "describe_schema".into(),
+                reason: e.to_string(),
+            })?;
+
+        // One statement, not one per table: a schema with two hundred tables
+        // costs the same round trip as one with two. The schema filter is a
+        // bind parameter, never interpolated.
+        let sql = "SELECT jsonb_build_object( \
+              'tables', COALESCE((SELECT jsonb_agg(s.t) FROM ( \
+                  SELECT jsonb_build_object( \
+                    'schema', c.table_schema, 'table', c.table_name, \
+                    'columns', jsonb_agg(jsonb_build_object( \
+                      'name', c.column_name, 'type', c.data_type, \
+                      'nullable', c.is_nullable = 'YES') ORDER BY c.ordinal_position)) AS t \
+                  FROM information_schema.columns c \
+                  WHERE c.table_schema NOT IN ('pg_catalog','information_schema') \
+                    AND ($1::text IS NULL OR c.table_schema = $1::text) \
+                  GROUP BY c.table_schema, c.table_name) s), '[]'::jsonb), \
+              'primary_keys', COALESCE((SELECT jsonb_agg(jsonb_build_object( \
+                  'schema', tc.table_schema, 'table', tc.table_name, 'column', kcu.column_name)) \
+                FROM information_schema.table_constraints tc \
+                JOIN information_schema.key_column_usage kcu \
+                  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+                WHERE tc.constraint_type = 'PRIMARY KEY' \
+                  AND tc.table_schema NOT IN ('pg_catalog','information_schema') \
+                  AND ($1::text IS NULL OR tc.table_schema = $1::text)), '[]'::jsonb), \
+              'foreign_keys', COALESCE((SELECT jsonb_agg(jsonb_build_object( \
+                  'schema', tc.table_schema, 'from_table', tc.table_name, \
+                  'from_column', kcu.column_name, 'to_table', ccu.table_name, \
+                  'to_column', ccu.column_name)) \
+                FROM information_schema.table_constraints tc \
+                JOIN information_schema.key_column_usage kcu \
+                  ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema \
+                JOIN information_schema.constraint_column_usage ccu \
+                  ON tc.constraint_name = ccu.constraint_name \
+                WHERE tc.constraint_type = 'FOREIGN KEY' \
+                  AND tc.table_schema NOT IN ('pg_catalog','information_schema') \
+                  AND ($1::text IS NULL OR tc.table_schema = $1::text)), '[]'::jsonb) \
+            ) AS shape";
+
+        let param = match args
+            .schema
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(s) => Value::String(s.to_owned()),
+            None => Value::Null,
+        };
+        let rows = self
+            .executor
+            .query(
+                sql,
+                &[param],
+                ctx.caller_role.as_deref(),
+                Some(&ctx.execution_id.to_string()),
+            )
+            .await?;
+        Ok(ToolOutput::Json(
+            rows.first()
+                .and_then(|r| r.get("shape"))
+                .cloned()
+                .unwrap_or(Value::Null),
+        ))
+    }
+}
+
+/// Plugin that registers `sql_query`, `sql_exec` and `describe_schema` against
+/// a provided [`SqlExecutor`].
 pub struct SqlToolsPlugin {
     executor: Arc<dyn SqlExecutor>,
 }
@@ -242,6 +345,12 @@ impl Plugin for SqlToolsPlugin {
         registry.tools.add_arc(
             "sql_exec",
             Arc::new(SqlExecTool {
+                executor: self.executor.clone(),
+            }),
+        );
+        registry.tools.add_arc(
+            "describe_schema",
+            Arc::new(DescribeSchemaTool {
                 executor: self.executor.clone(),
             }),
         );
@@ -409,13 +518,15 @@ mod tests {
     use testing::MemorySqlExecutor;
 
     #[test]
-    fn plugin_register_inserts_both_tools() {
+    fn plugin_registers_its_three_tools() {
         let mut reg = Registry::new();
         let exec: Arc<dyn SqlExecutor> = Arc::new(MemorySqlExecutor::new());
         SqlToolsPlugin::new(exec).register(&mut reg);
         let mut names = reg.tools.names();
         names.sort();
-        assert_eq!(names, vec!["sql_exec", "sql_query"]);
+        // describe_schema joined the pair: an agent that can see the whole
+        // shape in one call stops spending turns rediscovering it.
+        assert_eq!(names, vec!["describe_schema", "sql_exec", "sql_query"]);
     }
 
     #[test]

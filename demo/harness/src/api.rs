@@ -52,6 +52,10 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
         "Writing SQL against a named external Postgres connection",
     ),
     (
+        "describe_schema",
+        "Get every table, column, primary key and foreign key in one call",
+    ),
+    (
         "load_csv",
         "Load an uploaded CSV into a table directly, without writing the rows yourself",
     ),
