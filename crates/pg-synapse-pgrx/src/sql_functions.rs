@@ -25,6 +25,8 @@ pub(crate) fn status_label(s: &OutcomeStatus) -> &'static str {
     }
 }
 
+use crate::audit_capability::AuditGrant;
+
 pub(crate) fn role_str(r: &pg_synapse_core::types::Role) -> &'static str {
     use pg_synapse_core::types::Role;
     match r {
@@ -37,10 +39,12 @@ pub(crate) fn role_str(r: &pg_synapse_core::types::Role) -> &'static str {
 
 fn resolve_trace_level(agent_name: &str) -> pg_synapse_core::types::TraceLevel {
     use pgrx::datum::DatumWithOid;
+    // Through the definer function, not the table: `synapse.agents` is not
+    // readable by `synapse_user`, and this runs on every run.
     let level_str: Option<String> = pgrx::Spi::connect(|client| {
         client
             .select(
-                "SELECT trace_level FROM synapse.agents WHERE name = $1",
+                "SELECT synapse.agent_trace_level($1)",
                 None,
                 &[DatumWithOid::from(agent_name.to_string())],
             )
@@ -73,7 +77,13 @@ pub(crate) fn master_key() -> Option<String> {
         .filter(|k: &String| !k.trim().is_empty())
 }
 
-pub(crate) fn log_failed_execution(agent: &str, input: &str, error: &str, caller: Option<&str>) {
+pub(crate) fn log_failed_execution(
+    agent: &str,
+    input: &str,
+    error: &str,
+    caller: Option<&str>,
+    grant: &AuditGrant,
+) {
     let _ = record_status(
         &uuid::Uuid::new_v4().to_string(),
         agent,
@@ -81,6 +91,7 @@ pub(crate) fn log_failed_execution(agent: &str, input: &str, error: &str, caller
         Some(error),
         "errored",
         caller,
+        grant,
     );
 }
 
@@ -94,6 +105,7 @@ pub(crate) fn record_status(
     output: Option<&str>,
     status: &str,
     caller: Option<&str>,
+    grant: &AuditGrant,
 ) -> Result<(), String> {
     use pgrx::JsonB;
     use pgrx::datum::DatumWithOid;
@@ -106,10 +118,22 @@ pub(crate) fn record_status(
         "caller_role": caller,
     });
     Spi::run_with_args(
-        "SELECT synapse.record_status($1)",
-        &[DatumWithOid::from(JsonB(doc))],
+        "SELECT synapse.audit_status($1, $2)",
+        &[
+            DatumWithOid::from(JsonB(doc)),
+            DatumWithOid::from(token_text(grant)),
+        ],
     )
     .map_err(|e| e.to_string())
+}
+
+/// The capability token as the text the SQL layer takes.
+///
+/// Hex rather than decimal only because it is shorter; the value is never
+/// parsed for meaning, only compared. This is the single place the token
+/// becomes a string, and it must not be used anywhere it could be logged.
+fn token_text(grant: &AuditGrant) -> String {
+    format!("{:032x}", grant.token())
 }
 
 pub(crate) fn log_execution(
@@ -123,6 +147,9 @@ pub(crate) fn log_execution(
     // lets the replacement happen inside one statement instead of a DELETE
     // that could leave the run with no row at all if the write after it failed.
     supersedes: Option<&str>,
+    // Proof this write belongs to a run an entry point actually started. See
+    // `audit_capability`.
+    grant: &AuditGrant,
 ) -> Result<(), String> {
     use pgrx::JsonB;
     use pgrx::datum::DatumWithOid;
@@ -217,8 +244,11 @@ pub(crate) fn log_execution(
     // entry points drop to the caller's own rights without taking the audit
     // trail down with them (F2).
     Spi::run_with_args(
-        "SELECT synapse.record_run($1)",
-        &[DatumWithOid::from(JsonB(doc))],
+        "SELECT synapse.audit_run($1, $2)",
+        &[
+            DatumWithOid::from(JsonB(doc)),
+            DatumWithOid::from(token_text(grant)),
+        ],
     )
     .map_err(|e| e.to_string())
 }
@@ -233,26 +263,35 @@ pub(crate) mod synapse {
     use serde_json::json;
 
     use super::{log_execution, log_failed_execution, resolve_trace_level, status_label};
+    use crate::audit_capability::AuditGrant;
     use crate::runtime_holder::{kernel_handle, rebuild_kernel, tokio};
 
     /// Run the named agent against `input`. Returns a JSON object with the
     /// agent's output, token / cost accounting, status, and a summary of the
     /// tool calls made. On error returns `{"error": "...", "status": "errored"}`
     /// instead of raising a Postgres error.
-    #[pg_extern(security_definer, parallel_safe)]
+    #[pg_extern(parallel_safe)]
     pub fn execute(agent_name: &str, input: &str) -> JsonB {
-        // NOT `current_user`: this function is SECURITY DEFINER, so inside it
-        // `current_user` is the extension owner, and recording that as the
-        // caller made `synapse.executions.caller_role` say "postgres" for
-        // every run regardless of who asked. `role` reflects an explicit
-        // SET ROLE and falls back to the login role when none is set, which
-        // is the identity a grant or an RLS policy would actually be written
-        // against.
+        // `role`, not `current_user`: see `tool_call`.
         let caller_role: Option<String> = Spi::get_one(
             "SELECT COALESCE(NULLIF(current_setting('role', true), 'none'), session_user::text)",
         )
         .ok()
         .flatten();
+
+        // Live for the rest of this run and retired when it drops, which is
+        // what lets the audit writers be granted to a caller role without
+        // becoming a way to forge rows. See `audit_capability`.
+        let grant = AuditGrant::mint();
+
+        // SECURITY INVOKER from here on, so `kernel_handle()` in process would
+        // do its config reads with the caller's rights and fail on
+        // synapse.agents. Crossing into the definer `ensure_kernel` is what
+        // earns the owner's rights for exactly those reads; afterwards the
+        // cache is populated and `kernel_handle()` touches no table.
+        if let Err(e) = Spi::run("SELECT synapse.ensure_kernel()") {
+            return JsonB(json!({ "error": e.to_string(), "status": "errored" }));
+        }
 
         let kernel = match kernel_handle() {
             Ok(k) => k,
@@ -282,9 +321,15 @@ pub(crate) mod synapse {
                 // which is how a timed-out run went missing without anyone
                 // noticing. It still must not fail the caller's query, so it
                 // is reported as a warning rather than raised.
-                if let Err(e) =
-                    log_execution(&o, agent_name, input, caller_role.as_deref(), tl, None)
-                {
+                if let Err(e) = log_execution(
+                    &o,
+                    agent_name,
+                    input,
+                    caller_role.as_deref(),
+                    tl,
+                    None,
+                    &grant,
+                ) {
                     pgrx::warning!("could not record execution for agent {agent_name}: {e}");
                 }
                 JsonB(json!({
@@ -303,7 +348,7 @@ pub(crate) mod synapse {
             }
             Err(e) => {
                 let msg = e.to_string();
-                log_failed_execution(agent_name, input, &msg, caller_role.as_deref());
+                log_failed_execution(agent_name, input, &msg, caller_role.as_deref(), &grant);
                 JsonB(json!({
                     "error": msg,
                     "status": "errored",
@@ -536,6 +581,81 @@ pub(crate) mod synapse {
         rebuild_kernel();
     }
 
+    /// Build the kernel cache if this backend has not built it yet.
+    ///
+    /// F2 slice 2a. Building the kernel reads agents, both profile tables and
+    /// whichever secrets those profiles name. Once the entry points run as
+    /// their caller, whoever triggers the build does so with their own rights,
+    /// so the obvious move is to grant them the `synapse.config_*` functions
+    /// that do those reads. That is a trap: `config_secrets(names text[])`
+    /// granted to `synapse_user` is `SELECT any_secret_you_like`, demonstrated
+    /// on a live database before this was written. A definer function is only
+    /// a boundary while the caller cannot invoke it directly; the GRANT
+    /// decides, not the attribute.
+    ///
+    /// This is the same reads behind a signature that is safe to hand out
+    /// instead: no argument to steer it, no value to read back, and the work
+    /// lands in a process-local cache. An attacker who calls it repeatedly
+    /// achieves a rebuild they could already trigger by connecting again.
+    ///
+    /// Callers reach it through SPI rather than calling `kernel_handle()` in
+    /// process, because crossing into a definer function is exactly what earns
+    /// the owner's rights for the reads inside.
+    /// Write a whole run's audit rows. Granted to caller roles, and useless
+    /// without a token an entry point on this backend minted.
+    ///
+    /// The grant is not the authorisation: `synapse.record_run` underneath
+    /// stays owner-only, and this refuses any call that cannot prove it
+    /// belongs to a run in flight. Without that, granting the writer to
+    /// `synapse_user` would just move the forgery one function along.
+    ///
+    /// Raises rather than returning false on a bad token. A caller who cannot
+    /// prove the capability is not a caller whose write should quietly appear
+    /// to have worked, and the audit trail is the wrong place to be lenient.
+    #[pg_extern(security_definer)]
+    pub fn audit_run(payload: JsonB, token: &str) {
+        check_audit_token(token);
+        Spi::run_with_args(
+            "SELECT synapse.record_run($1)",
+            &[DatumWithOid::from(payload)],
+        )
+        .unwrap_or_else(|e| pgrx::error!("audit_run: {e}"));
+    }
+
+    /// One executions row at a given status, under the same capability check
+    /// as [`audit_run`].
+    #[pg_extern(security_definer)]
+    pub fn audit_status(payload: JsonB, token: &str) {
+        check_audit_token(token);
+        Spi::run_with_args(
+            "SELECT synapse.record_status($1)",
+            &[DatumWithOid::from(payload)],
+        )
+        .unwrap_or_else(|e| pgrx::error!("audit_status: {e}"));
+    }
+
+    /// Reject a call that cannot present a live capability token.
+    ///
+    /// The error deliberately says nothing about the token it was given: not
+    /// whether it parsed, not how it differed, not how many are live. A
+    /// direct caller learns only that they were refused.
+    fn check_audit_token(token: &str) {
+        let parsed = u128::from_str_radix(token, 16).ok();
+        if !parsed.is_some_and(crate::audit_capability::is_live) {
+            pgrx::error!(
+                "audit writes are reachable only from a run in progress; \
+                 this function cannot be called directly"
+            );
+        }
+    }
+
+    #[pg_extern(security_definer)]
+    pub fn ensure_kernel() {
+        if let Err(e) = kernel_handle() {
+            pgrx::error!("ensure_kernel: {e}");
+        }
+    }
+
     // ---- v0.1.1 N2.2: remaining SQL surface ----
 
     /// Return the capabilities of the named LLM profile's provider as JSONB.
@@ -678,20 +798,25 @@ pub(crate) mod synapse {
     /// testing and operator introspection. The tool runs with a `ToolCtx`
     /// whose `caller_role` is the calling Postgres role. Returns the tool's
     /// output as JSONB, or `{"error": "...", "status": "errored"}`.
-    #[pg_extern(security_definer)]
+    #[pg_extern]
     pub fn tool_call(tool_name: &str, input: JsonB) -> JsonB {
-        // NOT `current_user`: this function is SECURITY DEFINER, so inside it
-        // `current_user` is the extension owner, and recording that as the
-        // caller made `synapse.executions.caller_role` say "postgres" for
-        // every run regardless of who asked. `role` reflects an explicit
-        // SET ROLE and falls back to the login role when none is set, which
-        // is the identity a grant or an RLS policy would actually be written
-        // against.
+        // `role`, not `current_user`: it reflects an explicit SET ROLE and
+        // falls back to the login role when none is set, which is the identity
+        // a grant or an RLS policy would be written against. This mattered
+        // more when the function was SECURITY DEFINER and `current_user` was
+        // the extension owner for everyone; now that it is INVOKER the two
+        // usually agree, and `role` is still the one that is right when they
+        // do not.
         let caller_role: Option<String> = Spi::get_one(
             "SELECT COALESCE(NULLIF(current_setting('role', true), 'none'), session_user::text)",
         )
         .ok()
         .flatten();
+
+        // See `execute`: the kernel's config reads need the owner's rights.
+        if let Err(e) = Spi::run("SELECT synapse.ensure_kernel()") {
+            return JsonB(json!({ "error": e.to_string(), "status": "errored" }));
+        }
 
         let kernel = match kernel_handle() {
             Ok(k) => k,
@@ -718,23 +843,24 @@ pub(crate) mod synapse {
     /// async contract (return a uuid; poll with `execution_status`) is
     /// preserved. Real background execution is deferred to v0.2. See
     /// `NOTES.md`.
-    #[pg_extern(security_definer)]
+    #[pg_extern]
     pub fn execute_async(agent_name: &str, input: &str) -> pgrx::Uuid {
-        // NOT `current_user`: this function is SECURITY DEFINER, so inside it
-        // `current_user` is the extension owner, and recording that as the
-        // caller made `synapse.executions.caller_role` say "postgres" for
-        // every run regardless of who asked. `role` reflects an explicit
-        // SET ROLE and falls back to the login role when none is set, which
-        // is the identity a grant or an RLS policy would actually be written
-        // against.
+        // `role`, not `current_user`: see `tool_call`.
         let caller_role: Option<String> = Spi::get_one(
             "SELECT COALESCE(NULLIF(current_setting('role', true), 'none'), session_user::text)",
         )
         .ok()
         .flatten();
 
+        // See `execute`: the kernel's config reads need the owner's rights.
+        if let Err(e) = Spi::run("SELECT synapse.ensure_kernel()") {
+            pgrx::error!("execute_async: {e}");
+        }
+
         // Pre-insert a 'queued' row keyed by a fresh id so a poller can see
         // the execution exists even if the run below fails hard.
+        let grant = AuditGrant::mint();
+
         let queued_id = uuid::Uuid::new_v4();
         let _ = super::record_status(
             &queued_id.to_string(),
@@ -743,6 +869,7 @@ pub(crate) mod synapse {
             None,
             "queued",
             caller_role.as_deref(),
+            &grant,
         );
 
         let kernel = match kernel_handle() {
@@ -755,6 +882,7 @@ pub(crate) mod synapse {
                     Some(&format!("kernel error: {e}")),
                     "errored",
                     caller_role.as_deref(),
+                    &grant,
                 );
                 return pgrx::Uuid::from_bytes(*queued_id.as_bytes());
             }
@@ -785,6 +913,7 @@ pub(crate) mod synapse {
                     caller_role.as_deref(),
                     tl,
                     Some(&queued_id.to_string()),
+                    &grant,
                 ) {
                     pgrx::warning!("could not record execution for agent {agent_name}: {e}");
                 }
@@ -803,6 +932,7 @@ pub(crate) mod synapse {
                     Some(&e.to_string()),
                     "errored",
                     caller_role.as_deref(),
+                    &grant,
                 );
                 pgrx::Uuid::from_bytes(*queued_id.as_bytes())
             }

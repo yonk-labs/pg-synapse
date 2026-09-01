@@ -496,6 +496,16 @@ BEGIN
 END
 $config_secrets$;
 
+-- One agent's trace level, for the same reason as the config reads above:
+-- `synapse.agents` is not readable by `synapse_user`, and the host resolves
+-- the level on every run to decide what to persist. Safe to grant on its own
+-- terms rather than by trust: the argument names an agent, the answer is one
+-- of five verbosity words, and neither is a secret.
+CREATE OR REPLACE FUNCTION synapse.agent_trace_level(p_agent text)
+RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT trace_level FROM synapse.agents WHERE name = p_agent
+$$;
+
 -- The audit write, for the same reason in the other direction: a low
 -- privilege caller must still be recordable, or the first thing invoker
 -- rights would break is the audit trail. Granting the tables to user roles is

@@ -66,6 +66,44 @@ GRANT EXECUTE ON FUNCTION synapse.drain_queue(integer) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.attach_agent_trigger(text, text, text, text, text, text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.detach_agent_trigger(text) TO synapse_admin;
 
+-- ---------------------------------------------------------------------------
+-- F2: what an entry point running as its caller still needs.
+--
+-- `execute`, `execute_async` and `tool_call` are SECURITY INVOKER, so the
+-- agent's SQL runs with the caller's own privileges and Postgres enforces
+-- what that role may reach. The three things those functions do that are not
+-- the agent's SQL still need the owner's rights, and each is granted on its
+-- own terms rather than by trust.
+--
+-- ensure_kernel: builds the process-local kernel cache, which reads agents,
+-- both profile tables and the secrets those profiles name. Safe to hand out
+-- because of its SHAPE, not its contents: no argument to steer it, no value
+-- returned. Granting the `synapse.config_*` functions it calls instead would
+-- NOT be safe: config_secrets(names text[]) in a caller's hands is
+-- `SELECT any_secret_you_like`, verified on a live database. They stay
+-- owner-only and are absent from this file deliberately.
+GRANT EXECUTE ON FUNCTION synapse.ensure_kernel() TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.ensure_kernel() TO synapse_admin;
+
+-- agent_trace_level: one agent's verbosity setting, resolved on every run to
+-- decide what to persist. synapse.agents is not readable by synapse_user and
+-- should not become so. Argument names an agent, answer is one of five words.
+GRANT EXECUTE ON FUNCTION synapse.agent_trace_level(text) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.agent_trace_level(text) TO synapse_admin;
+
+-- audit_run / audit_status: the audit trail. These are the ones where the
+-- grant alone would have been a hole, because the payload is the forgery: a
+-- role that may write the audit trail may lie in it. So the grant is not the
+-- authorisation. Each refuses any call that cannot present a capability token
+-- minted by an entry point on this backend and retired when the run ends, so a
+-- caller invoking them directly is refused by the function they were granted.
+-- The unguarded synapse.record_run / synapse.record_status underneath stay
+-- owner-only. See crates/pg-synapse-pgrx/src/audit_capability.rs.
+GRANT EXECUTE ON FUNCTION synapse.audit_run(jsonb, text) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.audit_run(jsonb, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.audit_status(jsonb, text) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.audit_status(jsonb, text) TO synapse_admin;
+
 -- synapse.secrets is never directly readable by synapse_user. schema.sql
 -- grants table DML only to synapse_admin; synapse_user got SELECT only on
 -- executions / messages / traces. Re-assert the prohibition defensively:
@@ -92,10 +130,15 @@ REVOKE ALL ON synapse.secrets FROM synapse_user;
 -- Looped over the catalog rather than listed, so a function added later is
 -- covered automatically instead of being quietly left running as superuser.
 --
--- This constrains what an agent can do. It does NOT make an agent run as the
--- role that invoked it: Postgres forbids SET ROLE inside a SECURITY DEFINER
--- function, so per-caller isolation needs these entry points to become
--- SECURITY INVOKER first. Tracked as F2 in spec/pg-one/SPEC.md.
+-- This constrains what an agent can do for the functions that are still
+-- SECURITY DEFINER. The three entry points are no longer among them: F2 is
+-- done, and an agent invoked through them runs as the role that invoked it.
+--
+-- Postgres forbids SET ROLE inside a SECURITY DEFINER function, verified in
+-- all three forms (SET ROLE, SET LOCAL ROLE, and a SET role = clause on the
+-- function), so there was no way to drop privilege part way through a call.
+-- The entry points had to become SECURITY INVOKER outright, which is why the
+-- three grants above exist.
 -- What the constrained owner still needs.
 --
 -- attach_agent_trigger creates trigger objects on the caller's tables, and the

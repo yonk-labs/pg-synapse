@@ -31,6 +31,7 @@ use pgrx::prelude::*;
 
 pgrx::pg_module_magic!(name, version);
 
+mod audit_capability;
 mod runtime_holder;
 mod schema_guc;
 mod spi_executor;
@@ -486,6 +487,7 @@ mod tests {
             Some("tester"),
             pg_synapse_core::types::TraceLevel::Full,
             None,
+            &crate::audit_capability::AuditGrant::mint(),
         )
         .expect("log_execution must succeed");
 
@@ -522,6 +524,9 @@ mod tests {
         use pg_synapse_core::types::{ExecutorOutcome, Message, OutcomeStatus};
         use uuid::Uuid;
 
+        // Standing in for the entry point that would hold this for the run.
+        let grant = crate::audit_capability::AuditGrant::mint();
+
         let placeholder = Uuid::new_v4();
         crate::sql_functions::record_status(
             &placeholder.to_string(),
@@ -530,6 +535,7 @@ mod tests {
             None,
             "queued",
             Some("tester"),
+            &grant,
         )
         .expect("placeholder must be recordable");
 
@@ -564,6 +570,7 @@ mod tests {
             Some("tester"),
             pg_synapse_core::types::TraceLevel::Full,
             Some(&placeholder.to_string()),
+            &grant,
         )
         .expect("log_execution must succeed");
 
@@ -696,6 +703,96 @@ mod tests {
         let arr = v.as_array().expect("sql_query returns a JSON array");
         assert_eq!(arr.len(), 1, "one row expected: {v}");
         assert_eq!(arr[0]["x"], 1);
+    }
+
+    // ---- F2: per-caller isolation, the privilege matrix ----
+    //
+    // Four claims, one test each. Together they are what F2 promised: a
+    // restricted caller can run an agent, cannot read secrets, cannot forge
+    // the audit trail, and cannot reach a table their own role lacks.
+
+    /// A restricted caller can reach everything a run needs.
+    ///
+    /// The entry points are SECURITY INVOKER now, so the privileged work they
+    /// still do has to be reachable as `synapse_user` or no run gets off the
+    /// ground. Actually running an agent needs an LLM the harness does not
+    /// have, so this exercises the plumbing a run depends on instead.
+    #[pg_test]
+    fn synapse_user_can_reach_what_a_run_needs() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run("SELECT synapse.ensure_kernel()").expect("kernel build must be reachable");
+        Spi::run("SELECT synapse.agent_trace_level('nobody')")
+            .expect("trace level must be reachable");
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    /// The trap slice 2a exists to avoid. `ensure_kernel` reads secrets on the
+    /// caller's behalf, but the function that returns them is not granted, so
+    /// a caller cannot ask for one directly.
+    #[pg_test(error = "permission denied for function config_secrets")]
+    fn synapse_user_cannot_read_secrets_through_the_config_reader() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run("SELECT synapse.config_secrets(ARRAY['anything'])").unwrap();
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    /// The audit writer IS granted to `synapse_user`, and that is still not
+    /// enough to write with. Without a token minted by a run in flight the
+    /// call is refused, so the grant does not become a way to forge the trail.
+    // The message is on one line because the pg_test attribute cannot unescape
+    // a continuation inside its `error =` literal.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    #[pg_test(
+        error = "audit writes are reachable only from a run in progress; this function cannot be called directly"
+    )]
+    fn synapse_user_cannot_forge_an_audit_row() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run(
+            "SELECT synapse.audit_status('{\"execution_id\":\"00000000-0000-0000-0000-000000000001\",\
+             \"agent_name\":\"forged\",\"status\":\"completed\"}'::jsonb, \
+             'ffffffffffffffffffffffffffffffff')",
+        )
+        .unwrap();
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    /// The point of the whole exercise: an agent's SQL reaches what the CALLER
+    /// may reach, not what the extension owner may.
+    ///
+    /// `synapse.secrets` is granted to nobody but admin and owner. While
+    /// `tool_call` was SECURITY DEFINER this same statement ran with the
+    /// owner's rights and returned a count. As INVOKER under `synapse_user` it
+    /// is Postgres that says no, which is the difference between an agent that
+    /// is trusted to behave and one that cannot misbehave.
+    #[pg_test]
+    fn an_agents_sql_cannot_reach_a_table_the_caller_lacks() {
+        // `tool_call` reports a tool failure in its return value rather than
+        // raising, so the denial arrives as JSON. That is the contract an
+        // agent sees too: the model is told it may not read that table and
+        // can act on it, instead of the whole statement aborting.
+        Spi::run("SET ROLE synapse_user").unwrap();
+        let denied = jsonb_of(
+            "SELECT synapse.tool_call('sql_query', \
+             '{\"query\":\"SELECT count(*) AS n FROM synapse.secrets\",\"params\":[]}'::jsonb)",
+        );
+        Spi::run("RESET ROLE").unwrap();
+
+        let msg = denied.to_string();
+        assert!(
+            msg.contains("permission denied for table secrets"),
+            "synapse_user must not reach synapse.secrets through an agent tool, got {msg}"
+        );
+
+        // The same statement as the owner still works, which is what shows the
+        // denial came from the caller's rights and not from a broken tool.
+        let allowed = jsonb_of(
+            "SELECT synapse.tool_call('sql_query', \
+             '{\"query\":\"SELECT count(*) AS n FROM synapse.secrets\",\"params\":[]}'::jsonb)",
+        );
+        assert!(
+            allowed.get("error").is_none(),
+            "the same read must succeed for a privileged caller, got {allowed}"
+        );
     }
 
     // ---- T1: reactive triggers (ADR D14 / operator approval 2026-05-17) ----
