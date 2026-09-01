@@ -113,6 +113,8 @@ pub enum EventKind {
     CostCapCheck,
     /// The per-run iteration cap was evaluated.
     IterationCapCheck,
+    /// The per-run wall-clock budget was evaluated between turns.
+    TimeoutCheck,
 }
 
 impl EventKind {
@@ -130,6 +132,7 @@ impl EventKind {
             Self::RetryAttempt => "retry_attempt",
             Self::CostCapCheck => "cost_cap_check",
             Self::IterationCapCheck => "iteration_cap_check",
+            Self::TimeoutCheck => "timeout_check",
         }
     }
 }

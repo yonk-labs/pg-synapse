@@ -12,7 +12,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use futures::future::FutureExt;
@@ -186,7 +186,36 @@ impl<'a> LoopHarness<'a> {
             req_payload["raw_messages"] = serde_json::to_value(&req.messages).unwrap_or_default();
         }
         self.record_event(EventKind::LlmRequest, req_payload);
-        let resp = provider.complete(req).await?;
+        // Bound the provider call by whatever is left of the run's budget.
+        //
+        // The loop-top `check_deadline` only sees turn boundaries, and a model
+        // call takes seconds, so a run whose budget expires mid-call would sail
+        // past it and be cancelled from outside instead: measured on the live
+        // stack, a 20s agent came back at 22s having lost everything. Timing
+        // out here cancels only this one call. The harness holds the messages
+        // and is still alive afterwards, so the executor can finalize with the
+        // transcript intact, which is the whole point.
+        let resp = match self.remaining_budget() {
+            Some(remaining) => {
+                match tokio::time::timeout(remaining, provider.complete(req)).await {
+                    Ok(r) => r?,
+                    Err(_elapsed) => {
+                        let spent = self.started_at.elapsed();
+                        self.record_event(
+                            EventKind::TimeoutCheck,
+                            serde_json::json!({
+                                "elapsed_ms": spent.as_millis() as u64,
+                                "budget_ms": self.ctx.timeout.as_millis() as u64,
+                                "tripped": true,
+                                "during": "llm_call",
+                            }),
+                        );
+                        return Err(ExecutorError::Timeout(spent.as_millis() as u64));
+                    }
+                }
+            }
+            None => provider.complete(req).await?,
+        };
         let mut resp_payload = serde_json::json!({
             "iteration": self.iteration,
             "tokens_in": resp.usage.tokens_in,
@@ -337,6 +366,60 @@ impl<'a> LoopHarness<'a> {
                 }),
             );
             return Err(ExecutorError::MaxIterationsReached(self.ctx.max_iterations));
+        }
+        Ok(())
+    }
+
+    /// Budget left before the run's wall-clock deadline, or `None` when the
+    /// agent has no budget (`ctx.timeout` of zero means no limit).
+    ///
+    /// `Some(ZERO)` is never returned: an already-expired budget is reported
+    /// as a tiny remainder so the caller still times out through the normal
+    /// path rather than being handed a `timeout(ZERO)` that elapses instantly
+    /// before the request is even sent.
+    fn remaining_budget(&self) -> Option<Duration> {
+        let budget = self.ctx.timeout;
+        if budget.is_zero() {
+            return None;
+        }
+        Some(
+            budget
+                .saturating_sub(self.started_at.elapsed())
+                .max(Duration::from_millis(1)),
+        )
+    }
+
+    /// Check the wall-clock budget. Returns [`ExecutorError::Timeout`] once
+    /// `ctx.timeout` has elapsed since the harness was constructed.
+    ///
+    /// The budget is also enforced by the runtime, which wraps the whole
+    /// execution in `tokio::time::timeout`. That wrapper cancels the executor
+    /// future, and a cancelled future takes its accumulated messages, events
+    /// and token counts down with it: the run was recorded with an empty
+    /// transcript, so the one run an operator most wants to read was the one
+    /// with nothing in it. Verified on a 120s app build that persisted a
+    /// `timed_out` row and zero `synapse.messages` rows, against 23 for a
+    /// completed run of the same agent.
+    ///
+    /// Checking here instead lets the executor return through `finalize` the
+    /// way the iteration cap already does, so a timed-out run keeps everything
+    /// it did before it ran out. A zero budget means no limit.
+    pub(crate) fn check_deadline(&mut self) -> Result<(), ExecutorError> {
+        let budget = self.ctx.timeout;
+        if budget.is_zero() {
+            return Ok(());
+        }
+        let elapsed = self.started_at.elapsed();
+        if elapsed >= budget {
+            self.record_event(
+                EventKind::TimeoutCheck,
+                serde_json::json!({
+                    "elapsed_ms": elapsed.as_millis() as u64,
+                    "budget_ms": budget.as_millis() as u64,
+                    "tripped": true,
+                }),
+            );
+            return Err(ExecutorError::Timeout(elapsed.as_millis() as u64));
         }
         Ok(())
     }

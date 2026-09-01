@@ -16,6 +16,7 @@ pub use builder::RuntimeBuilder;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -91,6 +92,23 @@ impl std::fmt::Debug for Runtime {
             .field("default_embedding_profile", &self.default_embedding_profile)
             .finish()
     }
+}
+
+/// How long past an agent's wall-clock budget the runtime's cancellation
+/// backstop waits before firing.
+///
+/// The executor enforces the same budget between turns and returns a complete
+/// outcome; this margin exists so that graceful path always gets there first
+/// on an ordinary overrun. Only a provider call hung past the margin reaches
+/// the backstop, which cancels the future and loses the transcript.
+///
+/// Proportional rather than flat, because the margin is also how much longer a
+/// genuinely hung provider call parks the caller (a Postgres backend thread,
+/// in the pgrx host). A flat five seconds is nothing against a two minute
+/// budget and fifty times the budget of a 100ms one. The floor keeps the
+/// ordering strict when a tiny budget divides to almost nothing.
+fn budget_grace(budget: Duration) -> Duration {
+    (budget / 10).clamp(Duration::from_millis(50), Duration::from_secs(5))
 }
 
 impl Runtime {
@@ -213,11 +231,22 @@ impl Runtime {
         if budget.is_zero() {
             return executor.execute(ctx).await.map_err(RuntimeError::from);
         }
-        match tokio::time::timeout(budget, executor.execute(ctx)).await {
+        // The executor checks the same budget itself between turns and
+        // finalizes normally when it trips, which keeps the run's messages,
+        // events and token counts. This wrapper is the backstop for the case
+        // that check cannot reach: a single provider call that hangs, with no
+        // turn boundary to come back to.
+        //
+        // It gets a grace margin so the two do not race. Cancelling the future
+        // discards everything it accumulated, so on a run that merely ran long
+        // the graceful path must be the one that fires; this one should only
+        // ever win when the executor is genuinely stuck inside one call.
+        let hard_stop = budget + budget_grace(budget);
+        match tokio::time::timeout(hard_stop, executor.execute(ctx)).await {
             Ok(result) => result.map_err(RuntimeError::from),
             Err(_elapsed) => Ok(ExecutorOutcome {
                 status: OutcomeStatus::TimedOut,
-                duration_ms: budget.as_millis() as u64,
+                duration_ms: hard_stop.as_millis() as u64,
                 ..Default::default()
             }),
         }
@@ -838,6 +867,93 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_secs(5),
             "execute should return near the 100ms budget, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_run_keeps_the_messages_it_produced() {
+        // The regression this guards: the runtime used to enforce the budget
+        // only by wrapping the executor in `tokio::time::timeout`, which
+        // cancels the future, and a cancelled future takes its accumulated
+        // messages with it. A 120s app build was recorded as `timed_out` with
+        // zero rows in `synapse.messages`, against 23 for a completed run of
+        // the same agent: the run an operator most wants to read was the one
+        // with nothing in it.
+        //
+        // Each turn answers quickly but the loop never terminates (an empty
+        // response is nudged, not finalized), so the run accumulates messages
+        // and then runs past its budget at a turn boundary, which is the
+        // ordinary overrun the executor must handle gracefully.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.set_response_delay(std::time::Duration::from_millis(20));
+        for _ in 0..200 {
+            mock.push_text("");
+        }
+
+        let mut a = agent("a1", "default");
+        a.timeout_ms = 300;
+        a.max_iterations = 1000;
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+
+        assert_eq!(outcome.status, crate::types::OutcomeStatus::TimedOut);
+        assert!(
+            !outcome.messages.is_empty(),
+            "a timed-out run must keep the transcript it produced, got 0 messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_run_keeps_its_transcript_when_the_budget_dies_mid_call() {
+        // The turn-boundary check alone was not enough. Measured on the live
+        // stack: a 20s agent whose budget expired inside a model call came
+        // back at 22s (the budget plus the backstop's grace) having lost
+        // everything, because a real model call takes seconds and the loop top
+        // is only reached between them.
+        //
+        // Here each call takes 200ms against a 500ms budget, so turns land at
+        // 200ms and 400ms and the third expires in flight at 500ms rather than
+        // at any turn boundary. The two completed turns must survive it.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.set_response_delay(std::time::Duration::from_millis(200));
+        for _ in 0..50 {
+            mock.push_text("");
+        }
+
+        let mut a = agent("a1", "default");
+        a.timeout_ms = 500;
+        a.max_iterations = 1000;
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        let started = std::time::Instant::now();
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+        let elapsed = started.elapsed();
+
+        assert_eq!(outcome.status, crate::types::OutcomeStatus::TimedOut);
+        assert!(
+            !outcome.messages.is_empty(),
+            "a run timed out mid-call must keep the turns it completed, got 0 messages"
+        );
+        // The graceful path, not the backstop: returning at the budget rather
+        // than at budget + grace is what proves which one fired.
+        assert!(
+            elapsed < std::time::Duration::from_millis(550),
+            "should return at the 500ms budget, not the backstop, took {elapsed:?}"
         );
     }
 
