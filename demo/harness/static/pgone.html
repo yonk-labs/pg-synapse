@@ -111,6 +111,15 @@
   .run-row { display:flex; gap:12px; align-items:baseline; padding:7px 10px;
     border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
   .run-ok { color:#4ade80; } .run-bad { color:#f87171; }
+  .btn.danger { background:#3a1d1d; border-color:#6b2a2a; color:#ff9c9c; }
+  .btn.danger:hover { background:#4a2323; }
+  .f-upload { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+  .f-row { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px; }
+  .f-name { font-family:var(--mono); font-size:13px; margin-bottom:4px; }
+  .f-meta { color:var(--muted); font-size:11.5px; font-family:var(--mono); margin-bottom:10px; }
+  .f-act { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .f-act select { font-size:12px; }
   .stat-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
   .stat { background:var(--panel); border:1px solid var(--border); border-radius:12px;
     padding:12px 16px; min-width:104px; }
@@ -250,6 +259,7 @@
     <button data-nav="dashboard">Your apps</button>
     <button data-nav="browse">Browse data</button>
     <button data-nav="connections">Connections</button>
+    <button data-nav="files">Files</button>
     <button data-nav="activity">Activity</button>
     <button data-nav="samples">Samples</button>
   </nav>
@@ -348,6 +358,7 @@
       <button data-pane="questions">Questions</button>
       <button data-pane="schedule">Schedule</button>
       <button data-pane="revise">Revise</button>
+      <button data-pane="danger">Delete</button>
       <button data-pane="embed">Embed / API</button>
     </div>
 
@@ -400,6 +411,18 @@
       <div id="sched-runs"></div>
     </div>
 
+    <div class="pane" id="pane-danger">
+      <div class="q-intro">
+        Removing an app deletes its definition: its agents, schedules and saved
+        questions. Its tables are kept unless you say otherwise, and its run
+        history is kept either way, because a record you can erase by deleting
+        what it records is not a record.
+      </div>
+      <label class="q-confirm"><input type="checkbox" id="dz-data" /> also delete this app's tables and everything in them</label>
+      <div><button class="btn danger" id="dz-drop">Delete this app</button></div>
+      <div id="dz-status"></div>
+    </div>
+
     <div class="pane" id="pane-revise">
       <div class="q-intro">
         Describe what is wrong or missing. The agent proposes the change and
@@ -425,6 +448,17 @@
       </div>
       <div class="embed-note" id="embed-note"></div>
     </div>
+  </section>
+
+  <section class="view" id="view-files">
+    <div class="head"><h2>Files</h2></div>
+    <p class="sub">Upload data, hand it to an app, and run it again whenever you want. Files live in a sandbox the agents can read; nothing else on the machine is reachable.</p>
+    <div class="f-upload">
+      <input type="file" id="f-input" style="display:none">
+      <button class="btn primary" id="f-pick">&#128206; Upload a file</button>
+      <span id="f-status" class="small"></span>
+    </div>
+    <div id="f-list"></div>
   </section>
 
   <section class="view" id="view-activity">
@@ -616,6 +650,7 @@ function showView(name) {
   if (name === "connections") loadConnections();
   if (name === "samples") loadSamples();
   if (name === "activity") loadActivity();
+  if (name === "files") loadFiles();
 }
 document.querySelectorAll("[data-nav]").forEach((el) =>
   el.addEventListener("click", (e) => { e.preventDefault(); showView(el.dataset.nav); }));
@@ -1077,6 +1112,122 @@ $("sc-save").onclick = async () => {
   const r = await api("/api/schedule", "POST", body);
   st.textContent = r.ok ? "scheduled" : (r.error || "failed");
   if (r.ok) { $("sc-input").value = ""; $("sc-first").value = ""; loadSchedules(CURRENT_AGENT); }
+};
+
+// ---- files ----
+// Upload, hand to an app, run again, delete. The point of listing them is that
+// an upload you cannot see is an upload you have lost.
+$("f-pick").onclick = () => $("f-input").click();
+$("f-input").onchange = async () => {
+  const file = $("f-input").files[0];
+  if (!file) return;
+  const st = $("f-status");
+  st.className = "small busy"; st.textContent = "uploading " + file.name + "...";
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const d = await res.json().catch(() => ({}));
+    st.className = "small";
+    st.textContent = d.ok ? ("uploaded " + d.filename) : (d.error || "upload failed");
+  } catch (e) {
+    st.className = "small"; st.textContent = String(e);
+  }
+  $("f-input").value = "";
+  loadFiles();
+};
+
+async function loadFiles() {
+  const out = $("f-list");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/files");
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not list files") + '</div>'; return; }
+  if (!r.files || !r.files.length) {
+    out.innerHTML = '<div class="hint">no files yet. Upload one above, or grab a sample from the Samples page.</div>';
+    return;
+  }
+  // Only agents belonging to an app can be handed a file: they are the ones
+  // with a schema of their own to put the rows in. Asking the apps endpoint is
+  // the accurate way to know that; filtering BOOT.agents by "not system" also
+  // catches demo scenario agents, which have no schema and would fail.
+  const appList = await api("/api/apps");
+  const apps = (appList.ok ? appList.apps || [] : [])
+    .flatMap((a) => a.agents || []);
+  out.innerHTML = r.files.map((f) =>
+    '<div class="f-row" data-f="' + esc(f.filename) + '">' +
+      '<div class="f-name">' + esc(f.filename) + '</div>' +
+      '<div class="f-meta">' + f.bytes + ' bytes &middot; ' + esc(f.path) + '</div>' +
+      '<div class="f-act">' +
+        '<select data-agent>' +
+          (apps.length ? apps.map((a) => '<option>' + esc(a) + '</option>').join("")
+                       : '<option value="">build an app first</option>') +
+        '</select>' +
+        '<button class="btn primary" data-proc' + (apps.length ? "" : " disabled") + '>Process</button>' +
+        '<button class="btn danger" data-del>Delete</button>' +
+      '</div>' +
+      '<div class="q-result"></div>' +
+    '</div>'
+  ).join("");
+
+  out.querySelectorAll(".f-row").forEach((row) => {
+    const name = row.dataset.f;
+    row.querySelector("[data-del]").onclick = async () => {
+      const d = await api("/api/file/" + encodeURIComponent(name) + "/delete", "POST", {});
+      if (!d.ok) { row.querySelector(".q-result").innerHTML = '<div class="hint">' + esc(d.error) + '</div>'; return; }
+      loadFiles();
+    };
+    row.querySelector("[data-proc]").onclick = async () => {
+      const agent = row.querySelector("[data-agent]").value;
+      const res = row.querySelector(".q-result");
+      if (!agent) { res.innerHTML = '<div class="hint">build an app first</div>'; return; }
+      if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
+      res.innerHTML = '<div class="hint">handing it to ' + esc(agent) + '...</div>';
+      const r2 = await api("/api/file/" + encodeURIComponent(name) + "/process", "POST", { agent });
+      if (!r2.ok) { res.innerHTML = '<div class="hint">' + esc(r2.error || "failed") + '</div>'; return; }
+      pollFileRun(r2.run_id, res, agent);
+    };
+  });
+}
+
+async function pollFileRun(runId, res, agent) {
+  const s = await api("/api/run/" + runId);
+  if (!s.ok) { res.innerHTML = '<div class="hint">' + esc(s.error || "lost the run") + '</div>'; return; }
+  const run = s.run;
+  if (run.phase === "starting" || run.phase === "running") {
+    res.innerHTML = '<div class="hint">' + esc(agent) + ' is working... (' +
+      Math.round((Date.now() - run.started_at_ms) / 1000) + 's)</div>';
+    setTimeout(() => pollFileRun(runId, res, agent), 1200);
+    return;
+  }
+  if (run.phase === "failed") { res.innerHTML = '<div class="hint">' + esc(run.error || "failed") + '</div>'; return; }
+  const env = run.envelope || {};
+  const ok = env.status === "completed";
+  res.innerHTML = '<div class="q-card"><div class="q-ask ' + (ok ? "" : "run-bad") + '">' +
+    esc(env.status || "done") + '</div><div class="act-io">' +
+    esc(env.output || env.error || "(no output)") + '</div></div>';
+  loadAgentTables(agent);
+}
+
+// ---- delete an app ----
+$("dz-drop").onclick = async () => {
+  const st = $("dz-status"), app = CURRENT_AGENT;
+  const dropData = $("dz-data").checked;
+  // A confirm rather than a modal, because the irreversible half is the data
+  // and the sentence should say which one you are about to do.
+  const msg = dropData
+    ? "Delete the app \"" + app + "\" AND permanently destroy its tables and all their rows?"
+    : "Delete the app \"" + app + "\"? Its tables and data are kept.";
+  if (!window.confirm(msg)) return;
+  st.className = "busy"; st.textContent = "deleting...";
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/drop", "POST", { drop_data: dropData });
+  st.className = "";
+  if (!r.ok) { st.textContent = r.error || "delete failed"; return; }
+  const d = r.removed || {};
+  st.textContent = "deleted" + (d.data_dropped ? " with its data" : "; its tables were kept");
+  $("dz-data").checked = false;
+  await loadBootstrap();
+  renderDashboard();
+  showView("dashboard");
 };
 
 // ---- activity ----
