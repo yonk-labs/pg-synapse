@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -29,7 +31,72 @@ const BUILTIN_TOOLS: &[(&str, &str)] = &[
     ("calculator", "Evaluate an arithmetic expression"),
     ("get_current_time", "Read the current time"),
     ("call_agent", "Delegate to another registered agent"),
+    (
+        "read_file",
+        "Read a file under the sandboxed uploads directory",
+    ),
+    (
+        "write_file",
+        "Write a file under the sandboxed uploads directory",
+    ),
+    (
+        "list_files",
+        "List files under the sandboxed uploads directory",
+    ),
+    (
+        "remote_query",
+        "Read-only SQL against a named external Postgres connection",
+    ),
+    (
+        "remote_exec",
+        "Writing SQL against a named external Postgres connection",
+    ),
+    (
+        "describe_schema",
+        "Get every table, column, primary key and foreign key in one call",
+    ),
+    (
+        "export_csv",
+        "Write a query's rows to a CSV file without the rows passing through you",
+    ),
+    (
+        "load_url",
+        "Fetch JSON from a URL straight into a table, without writing the rows yourself",
+    ),
+    (
+        "load_csv",
+        "Load an uploaded CSV into a table directly, without writing the rows yourself",
+    ),
+    (
+        "load_json",
+        "Load an uploaded JSON or JSONL file into a table directly, without writing the rows yourself",
+    ),
+    ("search_news", "Keyword news search via Google News RSS"),
+    (
+        "fetch_feed",
+        "Read any RSS or Atom feed and get real article URLs that read_article can fetch",
+    ),
+    (
+        "read_article",
+        "Fetch a URL and extract its main article text",
+    ),
+    (
+        "lede_compress",
+        "Compress text to a short extractive brief within a token budget",
+    ),
 ];
+
+/// Agents the harness itself ships: the builder and its helpers. They are
+/// machinery, not the user's apps, so the app list hides them by default.
+///
+/// This is a VIEW filter, not access control. Anything hidden here is still
+/// fully reachable over SQL and over the API with `?admin=1`. Presenting it as
+/// a security boundary would be a lie, and the point of the admin flag is to
+/// keep a demo legible, not to keep anyone out.
+pub const SYSTEM_AGENTS: &[&str] = &["app_builder", "db_architect", "data_analyst"];
+
+/// Schemas that belong to the machinery rather than to a user's app.
+pub const SYSTEM_SCHEMAS: &[&str] = &["synapse", "public"];
 
 const EXECUTORS: &[&str] = &["conversation", "react", "reflection"];
 
@@ -154,16 +221,62 @@ const PROBE_QUERIES: &[(&str, &str)] = &[
 
 // ---- bootstrap ----
 
-pub async fn bootstrap(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+/// Query flag shared by the endpoints that can reveal harness internals.
+#[derive(Deserialize, Default)]
+pub struct AdminQuery {
+    #[serde(default, deserialize_with = "truthy")]
+    pub admin: bool,
+}
+
+/// Accept the spellings a human actually types in a URL bar. serde's bool
+/// wants exactly `true` or `false`, but `?admin=1` is the natural form and
+/// hand-typing this URL is precisely the admin use case, so rejecting it with
+/// a deserialization error would be perverse.
+fn truthy<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(d)?;
+    Ok(matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    ))
+}
+
+pub async fn bootstrap(
+    State(state): State<AppState>,
+    Query(q): Query<AdminQuery>,
+) -> Result<Json<Value>, HarnessError> {
     let client = db::connect(&state.db_url).await?;
-    let agents = db::jsonb_rows(
+    let mut agents = db::jsonb_rows(
         &client,
+        // `resolved_profile` rather than just the tier: the tier says which
+        // setting applies and the setting may be unset, so showing only
+        // "small" would claim a choice that is not actually in effect.
         "SELECT to_jsonb(a)::text FROM (SELECT name, system_prompt, executor_name, \
-         llm_profile_main, tools, max_iterations, timeout_ms, cost_cap_usd::float8, trace_level \
+         llm_profile_main, tools, max_iterations, timeout_ms, cost_cap_usd::float8, trace_level, \
+         model_tier, synapse.agent_llm_profile(name) AS resolved_profile \
          FROM synapse.agents ORDER BY name) a",
         &[],
     )
     .await?;
+
+    // Tag every agent so the UI can badge the machinery, then drop the system
+    // ones unless admin asked for them. Tagging before filtering means the
+    // admin view can show what is what rather than an undifferentiated list.
+    for a in &mut agents {
+        let is_system = a
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|n| SYSTEM_AGENTS.contains(&n))
+            .unwrap_or(false);
+        if let Some(obj) = a.as_object_mut() {
+            obj.insert("system".to_owned(), Value::Bool(is_system));
+        }
+    }
+    if !q.admin {
+        agents.retain(|a| a.get("system") != Some(&Value::Bool(true)));
+    }
     let profiles = db::jsonb_rows(
         &client,
         "SELECT to_jsonb(p)::text FROM (SELECT name, provider, model, base_url, \
@@ -960,6 +1073,16 @@ fn quote_ident(s: &str) -> String {
     format!("\"{}\"", s.replace('"', "\"\""))
 }
 
+/// A safe, predictable identifier for anything a user names through the UI
+/// (a connection name here; scenario/agent names are LLM-chosen elsewhere
+/// and validated by the same shape convention in the app_builder prompt).
+fn is_safe_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        && s.len() <= 30
+}
+
 /// JSON value to the text we bind as a `$n` parameter: null stays SQL NULL,
 /// strings pass through raw, everything else uses its compact JSON form.
 fn as_sql_text(v: &Value) -> Option<String> {
@@ -1026,9 +1149,12 @@ async fn require_table(
 
 /// Convenience for the bottom-dock tree: schemas each with their table list,
 /// one row per schema. Keeps the client tree render a single call.
-pub async fn schema_tree(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+pub async fn schema_tree(
+    State(state): State<AppState>,
+    Query(q): Query<AdminQuery>,
+) -> Result<Json<Value>, HarnessError> {
     let client = db::connect(&state.db_url).await?;
-    let tree = db::jsonb_rows(
+    let mut tree = db::jsonb_rows(
         &client,
         "SELECT to_jsonb(x)::text FROM ( \
            SELECT table_schema AS schema, \
@@ -1040,6 +1166,14 @@ pub async fn schema_tree(State(state): State<AppState>) -> Result<Json<Value>, H
         &[],
     )
     .await?;
+    if !q.admin {
+        tree.retain(|t| {
+            t.get("schema")
+                .and_then(Value::as_str)
+                .map(|n| !SYSTEM_SCHEMAS.contains(&n))
+                .unwrap_or(true)
+        });
+    }
     Ok(Json(json!({"ok": true, "tree": tree})))
 }
 
@@ -1373,4 +1507,233 @@ pub async fn scenario_load(
         "ok": true,
         "scenario": serde_json::to_value(scenario).unwrap_or(Value::Null),
     })))
+}
+
+// ---- file uploads (pg-one) ----
+//
+// Uploaded files land in `state.upload_dir`, which is bind-mounted into the
+// `db` container at the exact path the tools-fs plugin sandboxes read_file
+// to (see docker-compose.yml). The path this returns is relative to that
+// sandbox root, ready to hand an agent directly.
+
+/// Strip any directory components and unsafe characters from a client-
+/// supplied filename, and prefix a short random id so concurrent uploads
+/// (or two people naming a file the same thing) never collide.
+fn sanitize_upload_filename(name: &str) -> String {
+    let base = std::path::Path::new(name)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("upload");
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{}-{cleaned}", &Uuid::new_v4().simple().to_string()[..8])
+}
+
+pub async fn upload_file(
+    State(state): State<AppState>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<Value>, HarnessError> {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| HarnessError::BadRequest(format!("bad upload: {e}")))?
+    {
+        let Some(filename) = field.file_name().map(str::to_owned) else {
+            continue;
+        };
+        let safe_name = sanitize_upload_filename(&filename);
+        let bytes = field
+            .bytes()
+            .await
+            .map_err(|e| HarnessError::BadRequest(format!("could not read upload: {e}")))?;
+        let path = std::path::Path::new(&state.upload_dir).join(&safe_name);
+        std::fs::write(&path, &bytes)
+            .map_err(|e| HarnessError::BadRequest(format!("could not save upload: {e}")))?;
+        return Ok(Json(json!({
+            "ok": true,
+            "filename": safe_name,
+            "path": format!("uploads/{safe_name}"),
+            "bytes": bytes.len(),
+        })));
+    }
+    Err(HarnessError::BadRequest("no file in the upload".to_owned()))
+}
+
+/// Copy the bundled sample dataset (written ahead of time, not agent-
+/// generated - see sample-data/product_reviews_sample.csv) into the shared
+/// uploads directory, so "use sample data" needs no real file from the user.
+pub async fn upload_sample(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let filename = "product_reviews_sample.csv";
+    let path = std::path::Path::new(&state.upload_dir).join(filename);
+    std::fs::write(&path, crate::SAMPLE_REVIEWS_CSV)
+        .map_err(|e| HarnessError::BadRequest(format!("could not write sample data: {e}")))?;
+    Ok(Json(json!({
+        "ok": true,
+        "filename": filename,
+        "path": format!("uploads/{filename}"),
+        "bytes": crate::SAMPLE_REVIEWS_CSV.len(),
+    })))
+}
+
+// ---- sample data ----
+//
+// Every sample is compiled into the binary, so a download works with no
+// filesystem dependency and no chance of serving a path the caller chose.
+// The name is matched against a fixed list rather than joined onto a
+// directory, which is why there is no traversal check to get wrong.
+
+/// The samples offered on the Samples page: (name, filename, description).
+pub const SAMPLES: &[(&str, &str, &str)] = &[
+    (
+        "reviews",
+        "product_reviews_sample.csv",
+        "Messy product reviews from three channels, with missing names and mixed sentiment. Good for a clean-and-classify app.",
+    ),
+    (
+        "tickets",
+        "support_tickets_sample.csv",
+        "Ten support tickets in free text, one of them a production outage. Good for triage, routing, and priority.",
+    ),
+    (
+        "expenses",
+        "expenses_sample.csv",
+        "Raw expense descriptions straight off a card feed. Good for categorising text no regex can categorise.",
+    ),
+];
+
+fn sample_body(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "reviews" => Some(("product_reviews_sample.csv", crate::SAMPLE_REVIEWS_CSV)),
+        "tickets" => Some(("support_tickets_sample.csv", crate::SAMPLE_TICKETS_CSV)),
+        "expenses" => Some(("expenses_sample.csv", crate::SAMPLE_EXPENSES_CSV)),
+        _ => None,
+    }
+}
+
+pub async fn sample_list() -> Json<Value> {
+    let samples: Vec<Value> = SAMPLES
+        .iter()
+        .map(|(name, filename, desc)| {
+            let bytes = sample_body(name).map(|(_, b)| b.len()).unwrap_or(0);
+            json!({"name": name, "filename": filename, "description": desc, "bytes": bytes})
+        })
+        .collect();
+    Json(json!({"ok": true, "samples": samples}))
+}
+
+pub async fn sample_download(Path(name): Path<String>) -> Result<Response, HarnessError> {
+    let (filename, body) = sample_body(&name)
+        .ok_or_else(|| HarnessError::NotFound(format!("no sample named \"{name}\"")))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_owned()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response())
+}
+
+// ---- external database connections (pg-one), via remote_query/remote_exec ----
+//
+// A named connection is just a row in synapse.connections (+ a secret in
+// synapse.secrets for the password). No DDL, no foreign server, no schema
+// import: the pg-synapse-tools-remotedb plugin's remote_query/remote_exec
+// tools resolve the name and open a fresh connection at call time, reusing
+// the same sqlx-backed connection method pg-synapse-sidecar already uses
+// for its own remote Postgres.
+
+#[derive(Deserialize)]
+pub struct ConnectionReq {
+    pub name: String,
+    pub host: String,
+    #[serde(default = "default_pg_port")]
+    pub port: i32,
+    pub dbname: String,
+    pub user: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+fn default_pg_port() -> i32 {
+    5432
+}
+
+pub async fn connection_add(
+    State(state): State<AppState>,
+    Json(req): Json<ConnectionReq>,
+) -> Result<Json<Value>, HarnessError> {
+    let name = req.name.trim().to_lowercase();
+    if !is_safe_identifier(&name) {
+        return Err(HarnessError::BadRequest(
+            "connection name must be lowercase letters, digits, and underscores, starting \
+             with a letter, 30 characters or fewer"
+                .to_owned(),
+        ));
+    }
+    if req.host.trim().is_empty() || req.dbname.trim().is_empty() || req.user.trim().is_empty() {
+        return Err(HarnessError::BadRequest(
+            "host, dbname, and user are required".to_owned(),
+        ));
+    }
+
+    let client = db::connect(&state.db_url).await?;
+    let secret_name = if req.password.is_empty() {
+        None
+    } else {
+        let secret_name = format!("{name}_db_password");
+        client
+            .execute(
+                "INSERT INTO synapse.secrets (name, value) VALUES ($1, $2) \
+                 ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+                &[&secret_name, &req.password],
+            )
+            .await?;
+        Some(secret_name)
+    };
+    client
+        .execute(
+            "INSERT INTO synapse.connections (name, host, port, dbname, \"user\", password_secret) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (name) DO UPDATE SET \
+               host = EXCLUDED.host, port = EXCLUDED.port, dbname = EXCLUDED.dbname, \
+               \"user\" = EXCLUDED.user, password_secret = EXCLUDED.password_secret, \
+               updated_at = now()",
+            &[
+                &name,
+                &req.host.trim(),
+                &req.port,
+                &req.dbname.trim(),
+                &req.user.trim(),
+                &secret_name,
+            ],
+        )
+        .await?;
+
+    Ok(Json(json!({"ok": true, "name": name})))
+}
+
+pub async fn connection_list(State(state): State<AppState>) -> Result<Json<Value>, HarnessError> {
+    let client = db::connect(&state.db_url).await?;
+    let connections = db::jsonb_rows(
+        &client,
+        "SELECT to_jsonb(c)::text FROM ( \
+           SELECT name, host, port, dbname, \"user\", \
+                  (password_secret IS NOT NULL) AS has_password \
+           FROM synapse.connections ORDER BY name) c",
+        &[],
+    )
+    .await?;
+    Ok(Json(json!({"ok": true, "connections": connections})))
 }

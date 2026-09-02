@@ -1,0 +1,23 @@
+[package]
+name        = "pg-synapse-tools-remotedb"
+description = "remote_query / remote_exec tools: run SQL against a named external Postgres connection (synapse.connections), via the sidecar's sqlx-backed SqlExecutor"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[dependencies]
+pg-synapse-core      = { path = "../../crates/pg-synapse-core",   version = "0.1.1" }
+pg-synapse-tools-sql = { path = "../pg-synapse-tools-sql",        version = "0.1.1" }
+pg-synapse-sidecar   = { path = "../../crates/pg-synapse-sidecar", version = "0.1.1" }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+schemars     = { workspace = true }
+sqlx         = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "json", "uuid", "chrono", "bigdecimal"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

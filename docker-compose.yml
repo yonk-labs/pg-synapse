@@ -12,11 +12,32 @@ services:
     build:
       context: .
       dockerfile: demo/db/Dockerfile
+    # Preloading is not an optimisation, it is what makes
+    # pg_synapse.master_key safe. A custom GUC belonging to a library that has
+    # not loaded yet is an unflagged placeholder, readable by any role, so
+    # without this a fresh session reads the encryption key straight out of
+    # the configuration before ever touching synapse.*. Preloading defines the
+    # GUC with its SUPERUSER_ONLY flag at postmaster start, before any session
+    # exists. See docs/threat-model.md.
+    command: ["postgres",
+              "-c", "shared_preload_libraries=pg_synapse_pgrx",
+              # Runs queued work in its own process and its own transactions,
+              # so an agent's result no longer depends on the session that
+              # asked for it still being there. Names a database because a
+              # worker connects to exactly one.
+              "-c", "pg_synapse.worker_database=synapse_demo"]
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: synapse_demo
     ports:
       - "55432:5432"
+    volumes:
+      # Shared with harness at the same path: this is the tools-fs sandbox
+      # root inside the extension process (see runtime_holder.rs), and where
+      # the harness's /api/upload writes files a pg-one agent can then
+      # read_file(). Same absolute path in both containers so a path the
+      # harness returns is directly usable by the agent, no translation.
+      - fs_uploads:/tmp/pg_synapse_fs
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d synapse_demo"]
       interval: 3s
@@ -28,12 +49,22 @@ services:
       context: demo/harness
     environment:
       DATABASE_URL: "host=db port=5432 user=postgres password=postgres dbname=synapse_demo"
-      # Prefill for the UI endpoint form (the repo's documented test LLM).
-      DEFAULT_LLM_BASE_URL: "http://192.168.1.193:8000/v1"
-      DEFAULT_LLM_MODEL: "Intel/Qwen3-Coder-Next-int4-AutoRound"
+      # Prefill for the UI endpoint form. No real endpoint belongs in a
+      # tracked file (personal LAN addresses are not portable to other
+      # checkouts); point DEFAULT_LLM_BASE_URL/DEFAULT_LLM_MODEL at your own
+      # server via a local, gitignored .env file (docker compose loads one
+      # automatically from the repo root) instead of editing this file.
+      DEFAULT_LLM_BASE_URL: "${DEFAULT_LLM_BASE_URL:-http://localhost:8000/v1}"
+      DEFAULT_LLM_MODEL: "${DEFAULT_LLM_MODEL:-local-model}"
+      UPLOAD_DIR: "/tmp/pg_synapse_fs/uploads"
     ports:
       # Override the host port with HARNESS_PORT=nnnn docker compose up.
       - "${HARNESS_PORT:-8080}:8080"
+    volumes:
+      - fs_uploads:/tmp/pg_synapse_fs
     depends_on:
       db:
         condition: service_healthy
+
+volumes:
+  fs_uploads:

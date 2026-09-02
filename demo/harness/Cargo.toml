@@ -11,7 +11,7 @@ publish     = false
 # (the build context is demo/harness only, with no workspace root present).
 
 [dependencies]
-axum         = "0.8"
+axum         = { version = "0.8", features = ["multipart"] }
 tokio        = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
 tokio-postgres = "0.7"
 serde        = { version = "1", features = ["derive"] }

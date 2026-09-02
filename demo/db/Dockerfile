@@ -7,12 +7,30 @@
 #
 # The demo build drops the default `embed-ort` feature so the image does not
 # need ONNX Runtime (the demo never calls synapse.embed). It also drops the
-# fs / lede / llama-cpp / anthropic plugins the demo does not use. What stays:
+# llama-cpp / anthropic provider plugins the demo does not use. What stays:
 #   pg17            required Postgres version feature
 #   tools-http      http_get / http_post / http_head
 #   tools-calc      calculator (used by the guardrails scenario)
 #   tools-clock     get_current_time
 #   tools-delegate  call_agent
+#   tools-fs        read_file / write_file / edit_file / list_files / grep,
+#                   sandboxed under /tmp/pg_synapse_fs (see runtime_holder.rs);
+#                   pg-one's file-upload flow writes into that same path via
+#                   a shared volume with the harness container
+#   tools-remotedb  remote_query / remote_exec against a named external
+#                   Postgres connection (synapse.connections), the sidecar's
+#                   own sqlx-backed connection method reused as a tool
+#   tools-loadfile  load_csv / load_json: read an uploaded file and insert its
+#                   rows directly, so a model never spends output tokens
+#                   writing row values. Requires tools-fs for the sandbox.
+#   tools-newssearch  search_news via Google News RSS, no API key required
+#   tools-readarticle  read_article: fetch a URL and extract its main text
+#                   via a Readability-style DOM heuristic, so an agent can
+#                   read what a search_news link actually says
+#   tools-lede      lede_compress: text -> executive brief. No `lede` binary
+#                   is installed in this image, so it always runs the
+#                   built-in deterministic extractive-summary fallback, not
+#                   the real lede CLI shim (see plugins/pg-synapse-tools-lede)
 # provider-openai and tools-sql are non-optional dependencies of the host
 # crate and are always compiled in.
 #
@@ -43,7 +61,7 @@ COPY . .
 # reported by pg_config (usr/lib/postgresql/17/lib, usr/share/postgresql/17).
 RUN cd crates/pg-synapse-pgrx \
  && cargo pgrx package --no-default-features \
-      --features "pg17 tools-http tools-calc tools-clock tools-delegate"
+      --features "pg17 tools-http tools-calc tools-clock tools-delegate tools-fs tools-remotedb tools-newssearch tools-readarticle tools-lede tools-loadfile"
 
 FROM postgres:17
 

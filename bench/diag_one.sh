@@ -13,7 +13,7 @@ SCEN_DIR="$BENCH/scenarios/$SCEN_NAME"
 # --- model: vllm-qwen3-coder (remote, no auth) ---
 PROV="openai"
 MODEL_ID="Intel/Qwen3-Coder-Next-int4-AutoRound"
-BASE_URL="http://192.168.1.193:8000/v1"
+BASE_URL="http://localhost:8000/v1"
 
 # --- PG connection (mirror run_bench.sh) ---
 PG_PORT="28817"

@@ -10,7 +10,7 @@ SELECT synapse.llm_profile_set(
   'vllm-default',
   'openai',
   'Intel/Qwen3-Coder-Next-int4-AutoRound',
-  'http://192.168.1.193:8000/v1',
+  'http://localhost:8000/v1',
   NULL,
   '{}'::jsonb
 );

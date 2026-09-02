@@ -2,7 +2,7 @@
 
 Overall verdict: **PASS with one honest model-capability limitation.**
 
-Real systems only: live vLLM at `http://192.168.1.193:8000/v1`
+Real systems only: live vLLM at `http://localhost:8000/v1`
 (`Intel/Qwen3-Coder-Next-int4-AutoRound`), a real dockerized Postgres 17 on
 a non-default port, a real `pg-synapse-sidecar` binary, and locally
 downloaded Granite GGUF models served via `llama-cpp-python`. No mocks.

@@ -21,7 +21,7 @@ the agent's tool calls, and the message log.
   `pg_synapse_pgrx.control`, and the `.so` under
   `~/.pgrx/17.<x>/pgrx-install/`.
 - An OpenAI-compatible LLM endpoint that supports tool calls. Default:
-  `http://192.168.1.193:8000/v1` (vLLM serving
+  `http://localhost:8000/v1` (vLLM serving
   `Intel/Qwen3-Coder-Next-int4-AutoRound`).
 
 ## Path A: automated (recommended for v0.1-alpha)
@@ -47,7 +47,7 @@ bash examples/sql-agent-readwrite/run.sh
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `PG_SYNAPSE_LLM_BASE_URL` | `http://192.168.1.193:8000/v1` | OpenAI-compatible endpoint |
+| `PG_SYNAPSE_LLM_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible endpoint |
 | `PG_SYNAPSE_LLM_MODEL` | `Intel/Qwen3-Coder-Next-int4-AutoRound` | Model id |
 | `PGRX_PG_VERSION` | `17` | Which `cargo pgrx` managed pg to use |
 | `PGRX_PORT` | `28817` | TCP port that pgrx pg17 listens on |

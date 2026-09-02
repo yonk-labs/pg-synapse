@@ -5,7 +5,7 @@
 //! Run with:
 //!
 //! ```text
-//! PG_SYNAPSE_TEST_LLM_BASE_URL=http://192.168.1.193:8000/v1 \
+//! PG_SYNAPSE_TEST_LLM_BASE_URL=http://localhost:8000/v1 \
 //! PG_SYNAPSE_TEST_LLM_MODEL=granite-3.1-2b-instruct \
 //! cargo test -p pg-synapse-provider-openai --features live-tests --test live
 //! ```

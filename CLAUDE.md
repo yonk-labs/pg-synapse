@@ -13,9 +13,13 @@ from public sources.
 
 - **No em-dashes** anywhere: source, docs, tests, commit messages. Use
   period, comma, parens, colon, or "to" for ranges. Grep before committing.
-- **No `unsafe`** in the kernel or plugins. `#![forbid(unsafe_code)]` is set;
-  the pgrx host is the only place `unsafe` could appear (pgrx FFI) and it is
-  currently clean.
+- **No `unsafe`** in the kernel or plugins. The pgrx host is the only place it
+  may appear, uses `#![deny(unsafe_code)]` rather than `forbid`, and has
+  exactly two `#[allow(unsafe_code)]` sites, each justified in a comment where
+  it appears: `spi_executor::with_tool_subtransaction` (drives Postgres
+  internal subtransactions) and `worker::pg_synapse_worker_main` (needs
+  `#[unsafe(no_mangle)]` so Postgres can dlsym the background worker's entry
+  point). Adding a third is a decision to raise, not to make quietly.
 - **Typed errors only.** No `Result<_, String>` or `Result<_, Box<dyn Error>>`
   at any trait boundary. Extend the error enums in
   `crates/pg-synapse-core/src/error.rs`.
@@ -81,10 +85,12 @@ errors with a 0.17 path, the binary drifted; reinstall.
 
 ## LLM test endpoint
 
-Default test LLM is an OpenAI-compatible vLLM at
-`http://192.168.1.193:8000/v1`. Override with `PG_SYNAPSE_TEST_LLM_BASE_URL`
-and `PG_SYNAPSE_TEST_LLM_MODEL`. The model must support function-calling for
-the agent demos to work.
+No endpoint is baked into the repo: set `PG_SYNAPSE_TEST_LLM_BASE_URL` and
+`PG_SYNAPSE_TEST_LLM_MODEL` in your own shell environment to point at
+whatever OpenAI-compatible server you have (vLLM, llama.cpp server, LM
+Studio, real OpenAI). The model must support function-calling for the agent
+demos to work. Live tests are gated behind `--features live-tests` and skip
+cleanly when these are unset.
 
 ## Module map
 

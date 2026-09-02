@@ -166,6 +166,23 @@ fn err_json(status: StatusCode, msg: impl std::fmt::Display) -> impl IntoRespons
 // Helper: admin auth check
 // ---------------------------------------------------------------------------
 
+/// Compare two byte strings without an early return.
+///
+/// `==` on a secret leaks how many leading bytes matched through timing. That
+/// is a hard signal to exploit across a network on a string this short, so
+/// this is hygiene rather than a fix for a live hole; it costs five lines and
+/// removes the question. Length is deliberately compared without short
+/// circuiting the byte loop.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let mut diff = (a.len() ^ b.len()) as u8;
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn check_admin_token(headers: &HeaderMap, state: &AppState) -> Result<(), impl IntoResponse> {
     match &state.admin_token {
         None => Err(err_json(
@@ -177,7 +194,7 @@ fn check_admin_token(headers: &HeaderMap, state: &AppState) -> Result<(), impl I
                 .get("x-pg-synapse-admin-token")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            if provided == token {
+            if constant_time_eq(provided.as_bytes(), token.as_bytes()) {
                 Ok(())
             } else {
                 Err(err_json(

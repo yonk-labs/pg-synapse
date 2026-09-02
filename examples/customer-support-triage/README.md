@@ -23,7 +23,7 @@ Same as the `sql-agent-readwrite` demo:
 - The extension installed into the pgrx pg17 tree (run `cargo pgrx run pg17`
   once and exit, or `cargo pgrx install --pg-config $(...)`)
 - An OpenAI-compatible LLM that supports tool calls. Default:
-  `http://192.168.1.193:8000/v1` (vLLM serving
+  `http://localhost:8000/v1` (vLLM serving
   `Intel/Qwen3-Coder-Next-int4-AutoRound`).
 
 ## Run it
@@ -50,7 +50,7 @@ bash examples/customer-support-triage/run.sh
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `PG_SYNAPSE_LLM_BASE_URL` | `http://192.168.1.193:8000/v1` | OpenAI-compatible endpoint |
+| `PG_SYNAPSE_LLM_BASE_URL` | `http://localhost:8000/v1` | OpenAI-compatible endpoint |
 | `PG_SYNAPSE_LLM_MODEL` | `Intel/Qwen3-Coder-Next-int4-AutoRound` | Model id |
 | `PGRX_PG_VERSION` | `17` | pgrx-managed pg version |
 | `PGRX_PORT` | `28817` | TCP port |

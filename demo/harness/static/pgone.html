@@ -1,0 +1,1635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg-one</title>
+<style>
+  :root {
+    --bg:#0a0d12; --bg2:#0d1117; --panel:#12161d; --panel2:#181e28; --border:#242c38;
+    --text:#e6ebf2; --muted:#8b98a9; --accent:#5aa9ff; --accent2:#9b7bff;
+    --green:#3fb950; --red:#f85149; --yellow:#e3b341;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+    --grad:linear-gradient(135deg,var(--accent),var(--accent2));
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; }
+  body {
+    margin:0; background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(90,169,255,.08), transparent 60%),
+      radial-gradient(900px 500px at 90% 10%, rgba(155,123,255,.06), transparent 60%),
+      var(--bg);
+    color:var(--text); font:15px/1.55 var(--sans); min-height:100%;
+  }
+  a { color:var(--accent); }
+  button { font:inherit; cursor:pointer; }
+  ::selection { background:rgba(90,169,255,.3); }
+
+  /* ---- top bar ---- */
+  #topbar { display:flex; align-items:center; gap:16px; padding:16px 28px; }
+  #topbar .brand { font-weight:700; letter-spacing:-.01em; font-size:15px; }
+  #topbar .brand span { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #topbar nav { display:flex; gap:4px; margin-left:8px; }
+  #topbar nav button { background:none; border:0; color:var(--muted); padding:7px 12px; border-radius:8px; font-size:13.5px; }
+  #topbar nav button:hover { color:var(--text); background:var(--panel2); }
+  #topbar nav button.active { color:var(--text); background:var(--panel2); }
+  #topbar .grow { flex:1; }
+  #conn { font-family:var(--mono); font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  #conn .dot { width:7px; height:7px; border-radius:50%; background:var(--red); }
+  #conn.ok .dot { background:var(--green); }
+  #conn a { font-size:12px; margin-left:2px; }
+
+  main { max-width:1040px; margin:0 auto; padding:0 24px 80px; }
+  .view { display:none; }
+  .view.active { display:block; animation:fade .35s ease; }
+  @keyframes fade { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+  /* ---- connect strip (only shown when no LLM configured) ---- */
+  #connect-strip { max-width:560px; margin:10px auto 0; padding:14px 16px; border:1px solid var(--border);
+    border-radius:12px; background:var(--panel); display:none; }
+  #connect-strip.show { display:block; }
+  #connect-strip .row { display:flex; gap:8px; margin-top:8px; }
+  #connect-strip input { flex:1; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 10px; font-size:13px; }
+  #connect-strip button { background:var(--grad); border:0; color:#fff; padding:8px 16px; border-radius:8px; font-weight:600; font-size:13px; }
+  #connect-strip .small { color:var(--muted); font-size:12.5px; }
+  #connect-strip .status { margin-top:6px; font-size:12.5px; }
+
+  /* ---- BUILD view: the hero ---- */
+  #view-build { padding-top:9vh; text-align:center; }
+  #view-build h1 { font-size:44px; line-height:1.15; margin:0 0 10px; letter-spacing:-.02em; font-weight:700; }
+  #view-build h1 .accent { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  #view-build .sub { color:var(--muted); font-size:16px; margin:0 0 34px; }
+  .builder { max-width:640px; margin:0 auto; }
+  .builder textarea {
+    width:100%; resize:none; background:var(--panel); border:1px solid var(--border); color:var(--text);
+    border-radius:16px; padding:18px 20px; font:15.5px/1.5 var(--sans); min-height:64px;
+    box-shadow:0 20px 60px rgba(0,0,0,.35); transition:border-color .15s;
+  }
+  .builder textarea:focus { outline:none; border-color:var(--accent); }
+  .builder .row { display:flex; justify-content:space-between; align-items:center; margin-top:14px; }
+  .builder .examples { display:flex; gap:6px; flex-wrap:wrap; }
+  .chip { background:var(--panel2); border:1px solid var(--border); color:var(--muted); border-radius:999px;
+    padding:6px 13px; font-size:12.5px; }
+  .chip:hover { color:var(--text); border-color:var(--accent); }
+  #build-go { background:var(--grad); border:0; color:#fff; font-weight:700; font-size:14.5px;
+    padding:11px 24px; border-radius:11px; box-shadow:0 8px 24px rgba(90,169,255,.25); }
+  #build-go:disabled { opacity:.5; cursor:default; }
+  #build-status { margin-top:20px; color:var(--muted); font-size:13.5px; min-height:20px; }
+  #build-status.busy::before { content:"⟳ "; display:inline-block; animation:spin 1s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #build-trace { max-width:640px; margin:22px auto 0; text-align:left; display:none; }
+  #build-trace.show { display:block; }
+  #build-trace summary { cursor:pointer; color:var(--muted); font-size:13px; }
+  #build-trace pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px 14px;
+    font-family:var(--mono); font-size:12px; white-space:pre-wrap; margin-top:8px; max-height:280px; overflow:auto; }
+  .admin-tog { color:var(--muted); font-size:12px; margin-left:14px; cursor:pointer; user-select:none; }
+  .admin-tog input { vertical-align:middle; margin-right:4px; }
+  .sys-badge { display:inline-block; margin-left:8px; padding:1px 6px; border-radius:6px;
+    background:#2a2f3a; color:var(--muted); font-size:10.5px; font-family:var(--mono); vertical-align:middle; }
+  .s-h { font-size:13px; color:var(--muted); margin:26px 0 12px; font-weight:600; }
+  .s-card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 16px; margin-bottom:10px; }
+  .s-card .s-kind { color:var(--accent); font-size:11px; font-family:var(--mono); margin-bottom:6px; }
+  .s-card .s-text { font-size:13.5px; line-height:1.55; margin-bottom:10px; }
+  .s-card .s-why { color:var(--muted); font-size:12px; line-height:1.5; margin-bottom:10px; }
+  .s-card .s-meta { color:var(--muted); font-size:11.5px; font-family:var(--mono); }
+  .q-intro { color:var(--muted); font-size:12.5px; line-height:1.6; margin-bottom:14px; max-width:640px; }
+  .q-card { background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:14px 16px; margin-bottom:10px; }
+  .q-card .q-ask { font-weight:600; font-size:14px; margin-bottom:8px; }
+  .q-card .q-meta { color:var(--muted); font-size:11.5px; font-family:var(--mono); margin-bottom:10px; }
+  .q-card details { margin-top:10px; }
+  .q-card details summary { color:var(--muted); font-size:12px; cursor:pointer; }
+  .q-card details pre { background:#0d1117; border:1px solid var(--border); border-radius:8px;
+    padding:10px; overflow-x:auto; font-size:11.5px; margin-top:8px; white-space:pre-wrap; }
+  .q-result { margin-top:12px; }
+  .sc-row { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px; }
+  .sc-row .sc-what { font-size:13.5px; margin-bottom:6px; }
+  .sc-row .sc-when { color:var(--muted); font-size:11.5px; font-family:var(--mono); }
+  .run-row { display:flex; gap:12px; align-items:baseline; padding:7px 10px;
+    border-bottom:1px solid var(--border); font-size:12px; font-family:var(--mono); }
+  .run-ok { color:#4ade80; } .run-bad { color:#f87171; }
+  .lim-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-bottom:16px; }
+  .lim-grid label { display:block; }
+  .lim-k { display:block; font-size:12.5px; font-weight:600; margin-bottom:6px; }
+  .lim-grid input { width:100%; margin-bottom:6px; }
+  .lim-h { display:block; color:var(--muted); font-size:11.5px; line-height:1.5; }
+  .btn.danger { background:#3a1d1d; border-color:#6b2a2a; color:#ff9c9c; }
+  .btn.danger:hover { background:#4a2323; }
+  .f-upload { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
+  .f-row { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px; }
+  .f-name { font-family:var(--mono); font-size:13px; margin-bottom:4px; }
+  .f-meta { color:var(--muted); font-size:11.5px; font-family:var(--mono); margin-bottom:10px; }
+  .f-act { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .f-act select { font-size:12px; }
+  .stat-row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+  .stat { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 16px; min-width:104px; }
+  .stat .v { font-size:22px; font-weight:700; font-family:var(--mono); }
+  .stat .k { color:var(--muted); font-size:11px; margin-top:3px; }
+  .act-card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px; }
+  .act-head { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap;
+    font-family:var(--mono); font-size:11.5px; color:var(--muted); }
+  .act-agent { color:var(--fg); font-weight:600; font-size:13px; font-family:var(--mono); }
+  .act-io { font-size:12px; line-height:1.5; margin-top:8px; }
+  .act-io .lbl { color:var(--muted); font-family:var(--mono); font-size:10.5px; }
+  .q-unconfirmed { color:#e0a458; font-size:11.5px; margin-bottom:8px; }
+  .q-new { margin-top:20px; border-top:1px solid var(--border); padding-top:16px; }
+  .q-new summary { color:var(--muted); font-size:12.5px; cursor:pointer; margin-bottom:12px; }
+  .q-new input[type=text], .q-new textarea { width:100%; margin-bottom:8px; }
+  .q-new textarea { min-height:70px; font-family:var(--mono); font-size:12px; }
+  .q-confirm { display:block; color:var(--muted); font-size:12px; margin-bottom:10px; }
+  .goto-apps { margin-top:44px; }
+  .goto-apps a { color:var(--muted); font-size:13px; }
+
+  /* ---- DASHBOARD view ---- */
+  #view-dashboard .head { display:flex; align-items:center; margin:28px 0 18px; }
+  #view-dashboard h2 { font-size:20px; margin:0; }
+  #view-dashboard .grow { flex:1; }
+  .btn { background:var(--panel2); border:1px solid var(--border); color:var(--text); border-radius:9px;
+    padding:8px 14px; font-size:13.5px; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--grad); border:0; color:#fff; font-weight:600; }
+  .app-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  .app-card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px 18px;
+    cursor:pointer; transition:border-color .15s, transform .15s; text-align:left; }
+  .app-card:hover { border-color:var(--accent); transform:translateY(-2px); }
+  .app-card.new { border-color:var(--accent); box-shadow:0 0 0 3px rgba(90,169,255,.15); }
+  .app-card .name { font-weight:700; font-size:15px; margin-bottom:6px; font-family:var(--mono); }
+  .app-card .desc { color:var(--muted); font-size:12.5px; line-height:1.5; max-height:52px; overflow:hidden; }
+  .app-card .meta { margin-top:12px; display:flex; gap:6px; flex-wrap:wrap; }
+  .tag { font-size:10.5px; color:var(--muted); border:1px solid var(--border); border-radius:6px; padding:2px 7px;
+    font-family:var(--mono); }
+  .empty-hint { color:var(--muted); text-align:center; padding:60px 0; font-size:14px; }
+
+  /* ---- manual create form ---- */
+  #manual-form { max-width:520px; margin:16px auto 0; background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:20px 22px; display:none; }
+  #manual-form.show { display:block; }
+  #manual-form label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  #manual-form label:first-child { margin-top:0; }
+  #manual-form input[type=text], #manual-form textarea, #manual-form input[type=number] {
+    width:100%; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 10px; font-size:13.5px; font-family:var(--sans); }
+  #manual-form textarea { font-family:var(--mono); font-size:12.5px; min-height:90px; resize:vertical; }
+  #manual-form .tools { display:flex; gap:10px; flex-wrap:wrap; }
+  #manual-form .tools label { display:flex; align-items:center; gap:5px; margin:0; font-size:12.5px; color:var(--text); }
+  #manual-form .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  #manual-form .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+  #manual-status { font-size:12.5px; color:var(--muted); margin-top:8px; }
+
+  /* ---- DETAIL view ---- */
+  #view-detail .head { display:flex; align-items:center; gap:12px; margin:28px 0 6px; }
+  #view-detail .back { color:var(--muted); font-size:13px; cursor:pointer; }
+  #view-detail h2 { font-family:var(--mono); font-size:21px; margin:0; }
+  #view-detail .prompt-preview { color:var(--muted); font-size:13px; margin:8px 0 20px; max-width:720px; }
+  .seg { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:18px; }
+  .seg button { background:none; border:0; color:var(--muted); padding:9px 4px; margin-right:18px;
+    border-bottom:2px solid transparent; font-size:13.5px; }
+  .seg button.active { color:var(--text); border-color:var(--accent); }
+  .pane { display:none; }
+  .pane.active { display:block; }
+
+  #run-input { width:100%; background:var(--panel); border:1px solid var(--border); color:var(--text);
+    border-radius:10px; padding:12px 14px; font-size:14px; min-height:56px; resize:vertical; }
+  #run-go { margin-top:10px; }
+  #run-status { color:var(--muted); font-size:13px; margin:10px 0; min-height:18px; }
+  #run-output { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:14px 16px;
+    font-size:13.5px; white-space:pre-wrap; display:none; }
+  #run-output.show { display:block; }
+
+  #tables-list { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  #tables-list button { background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:6px 12px; font-size:13px; font-family:var(--mono); }
+  #tables-list button.active { border-color:var(--accent); color:var(--accent); }
+  #table-data { overflow:auto; }
+  table.data-table { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+  table.data-table th, table.data-table td { border-bottom:1px solid var(--border); padding:6px 10px; text-align:left;
+    max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  table.data-table th { color:var(--muted); font-weight:500; }
+
+  .embed-tabs { display:flex; gap:6px; margin-bottom:10px; }
+  .embed-tabs button { background:var(--panel2); border:1px solid var(--border); color:var(--muted);
+    border-radius:8px; padding:6px 12px; font-size:12.5px; }
+  .embed-tabs button.active { color:var(--text); border-color:var(--accent); }
+  .embed-block { position:relative; }
+  .embed-block pre { background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:16px 18px;
+    font-family:var(--mono); font-size:12.5px; overflow:auto; }
+  .embed-block .copy { position:absolute; top:10px; right:10px; background:var(--panel2); border:1px solid var(--border);
+    color:var(--text); border-radius:7px; padding:5px 10px; font-size:11.5px; }
+  .embed-block .copy.copied { border-color:var(--green); color:var(--green); }
+  .embed-note { color:var(--muted); font-size:12px; margin-top:8px; }
+
+  /* ---- BROWSE view ---- */
+  #view-browse .head { margin:28px 0 16px; }
+  #browse-grid { display:grid; grid-template-columns:220px 1fr; gap:0; border:1px solid var(--border);
+    border-radius:12px; overflow:hidden; min-height:340px; }
+  #browse-tree { border-right:1px solid var(--border); padding:10px; overflow:auto; max-height:520px; }
+  #browse-tree .sch { color:var(--accent); font-family:var(--mono); font-size:12.5px; cursor:pointer; padding:4px 0; }
+  #browse-tree .tbl { color:var(--text); font-family:var(--mono); font-size:12.5px; cursor:pointer; padding:3px 0 3px 16px; }
+  #browse-tree .tbl:hover, #browse-tree .sch:hover { color:var(--accent); }
+  #browse-tree .tbl.sel { color:var(--accent); font-weight:600; }
+  #browse-data { padding:14px 16px; overflow:auto; }
+  .hint { color:var(--muted); font-size:13px; }
+
+  /* ---- CONNECTIONS view ---- */
+  #view-connections .head { display:flex; align-items:center; margin:28px 0 16px; }
+  #conn-form { max-width:480px; background:var(--panel); border:1px solid var(--border); border-radius:14px;
+    padding:20px 22px; margin-bottom:24px; }
+  #conn-form label { display:block; font-size:12px; color:var(--muted); margin:12px 0 4px; }
+  #conn-form label:first-child { margin-top:0; }
+  #conn-form input[type=text], #conn-form input[type=number], #conn-form input[type=password] {
+    width:100%; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    border-radius:8px; padding:8px 10px; font-size:13.5px; }
+  #conn-form .two { display:grid; grid-template-columns:2fr 1fr; gap:12px; }
+  #conn-form .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; align-items:center; }
+  #conn-status { font-size:12.5px; color:var(--muted); }
+  .conn-list { display:flex; flex-direction:column; gap:8px; max-width:640px; }
+  .conn-card { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:12px 16px; display:flex; align-items:center; gap:12px; font-family:var(--mono); font-size:13px; }
+  .conn-card .cn-name { font-weight:700; min-width:120px; }
+  .conn-card .cn-meta { color:var(--muted); flex:1; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="brand">pg-<span>one</span></div>
+  <nav>
+    <button data-nav="build" class="active">Build</button>
+    <button data-nav="dashboard">Your apps</button>
+    <button data-nav="browse">Browse data</button>
+    <button data-nav="connections">Connections</button>
+    <button data-nav="files">Files</button>
+    <button data-nav="activity">Activity</button>
+    <button data-nav="samples">Samples</button>
+  </nav>
+  <div class="grow"></div>
+  <div id="conn"><span class="dot"></span><span id="conn-text">checking connection...</span><a id="conn-change" href="#" style="display:none">change</a></div>
+  <label class="admin-tog" title="Show the harness's own agents and the synapse schema. A view filter, not a security boundary: everything stays reachable over SQL and over the API with ?admin=1."><input type="checkbox" id="admin-tog" /> admin</label>
+</div>
+
+<div id="connect-strip">
+  <div class="small">Connect an OpenAI-compatible LLM endpoint to build and run apps.</div>
+  <div class="row">
+    <input id="cs-url" type="text" placeholder="http://host:8000/v1">
+    <input id="cs-model" type="text" placeholder="model name" style="max-width:200px">
+  </div>
+  <div class="row">
+    <input id="cs-key" type="text" placeholder="API key (optional)">
+    <button id="cs-save">Connect</button>
+  </div>
+  <div class="status" id="cs-status"></div>
+</div>
+
+<main>
+
+  <!-- BUILD -->
+  <section class="view active" id="view-build">
+    <h1>What do you want to<br>build <span class="accent">today?</span></h1>
+    <p class="sub">Describe an app. pg-one designs the tables, seeds them, and creates an agent for it, right in your database.</p>
+    <div class="builder">
+      <textarea id="build-input" rows="2" placeholder="a tool to track my gym members and who showed up this week"></textarea>
+      <div class="row" id="attach-row">
+        <input type="file" id="build-file" style="display:none">
+        <button class="chip" id="build-file-btn">&#128206; attach a file</button>
+        <button class="chip" id="build-sample-btn">or use sample data (product reviews)</button>
+        <span class="small" id="attach-status"></span>
+      </div>
+      <div class="row">
+        <div class="examples">
+          <button class="chip" data-ex="Track overdue invoices for my small business and draft reminders">AR collections</button>
+          <button class="chip" data-ex="Triage inbound support tickets by urgency and category">Support triage</button>
+          <button class="chip" data-ex="Score inbound sales leads as hot, warm, or cold from free-text notes">Lead scoring</button>
+        </div>
+        <button id="build-go">Build it &rarr;</button>
+      </div>
+      <div id="build-status"></div>
+      <div id="build-trace">
+        <details>
+          <summary>What it did</summary>
+          <pre id="build-trace-body"></pre>
+        </details>
+      </div>
+    </div>
+    <div class="goto-apps"><a href="#" data-nav="dashboard">or browse what you've already built &rarr;</a></div>
+  </section>
+
+  <!-- DASHBOARD -->
+  <section class="view" id="view-dashboard">
+    <div class="head">
+      <h2>Your apps</h2>
+      <div class="grow"></div>
+      <button class="btn" id="btn-manual-toggle">+ Add manually</button>
+      <button class="btn primary" data-nav="build" style="margin-left:8px">+ New app</button>
+    </div>
+
+    <div id="manual-form">
+      <label>Name (used as its schema too, e.g. <code>gym_tracker</code>)</label>
+      <input type="text" id="m-name" placeholder="my_app">
+      <label>System prompt</label>
+      <textarea id="m-prompt" placeholder="You are a ... you can ..."></textarea>
+      <label>Tools</label>
+      <div class="tools" id="m-tools"></div>
+      <div class="two">
+        <div><label>max_iterations</label><input type="number" id="m-maxiter" value="10"></div>
+        <div><label>timeout_ms</label><input type="number" id="m-timeout" value="60000"></div>
+      </div>
+      <div class="foot">
+        <span id="manual-status"></span>
+        <button class="btn" id="btn-manual-cancel">cancel</button>
+        <button class="btn primary" id="btn-manual-save">save</button>
+      </div>
+    </div>
+
+    <div class="app-grid" id="app-grid"></div>
+  </section>
+
+  <!-- DETAIL -->
+  <section class="view" id="view-detail">
+    <div class="head">
+      <span class="back" data-nav="dashboard">&larr; your apps</span>
+    </div>
+    <h2 id="d-name"></h2>
+    <div class="prompt-preview" id="d-prompt"></div>
+
+    <div class="seg">
+      <button data-pane="run" class="active">Run</button>
+      <button data-pane="tables">Tables</button>
+      <button data-pane="questions">Questions</button>
+      <button data-pane="schedule">Schedule</button>
+      <button data-pane="revise">Revise</button>
+      <button data-pane="limits">Limits</button>
+      <button data-pane="danger">Delete</button>
+      <button data-pane="embed">Embed / API</button>
+    </div>
+
+    <div class="pane active" id="pane-run">
+      <textarea id="run-input" placeholder="give it something to do..."></textarea>
+      <div><button class="btn primary" id="run-go">Run</button></div>
+      <div id="run-status"></div>
+      <pre id="run-output"></pre>
+    </div>
+
+    <div class="pane" id="pane-tables">
+      <div id="tables-list"></div>
+      <div id="table-data"><div class="hint">no dedicated schema found for this app yet</div></div>
+    </div>
+
+    <div class="pane" id="pane-questions">
+      <div class="q-intro">
+        A question is compiled to SQL once, then answered by Postgres every time
+        after that. No model runs when you ask it, so the answer is the same
+        every time and costs nothing.
+      </div>
+      <div id="q-list"></div>
+      <details class="q-new">
+        <summary>save a new question</summary>
+        <input type="text" id="q-name" placeholder="short_name" />
+        <input type="text" id="q-nl" placeholder="What do you want to know?" />
+        <textarea id="q-sql" placeholder="SELECT ..."></textarea>
+        <label class="q-confirm"><input type="checkbox" id="q-ok" /> I have read this SQL and approve it</label>
+        <div><button class="btn primary" id="q-save">Save question</button></div>
+        <div id="q-save-status"></div>
+      </details>
+    </div>
+
+    <div class="pane" id="pane-schedule">
+      <div class="q-intro">
+        An agent that runs once produces a result. An agent that runs on a
+        schedule produces a dataset, and only a dataset can be mined. Set the
+        first run to the time you want it to happen; it keeps that time.
+      </div>
+      <div id="sched-list"></div>
+      <details class="q-new">
+        <summary>add a schedule</summary>
+        <input type="text" id="sc-input" placeholder="what should it do each time?" />
+        <input type="text" id="sc-every" placeholder="how often (1 day, 6 hours, 30 minutes)" value="1 day" />
+        <input type="text" id="sc-first" placeholder="first run, e.g. 2026-09-01 09:00 (blank = one interval from now)" />
+        <div><button class="btn primary" id="sc-save">Add schedule</button></div>
+        <div id="sc-status"></div>
+      </details>
+      <h3 class="s-h">Recent runs</h3>
+      <div id="sched-runs"></div>
+    </div>
+
+    <div class="pane" id="pane-limits">
+      <div class="q-intro">
+        Which model this app runs on, and the three guardrails. Every run stops
+        at whichever guardrail it hits first, and the stop is recorded
+        honestly: a run that ran out of turns says max_iterations, not
+        "completed".
+      </div>
+      <div class="lim-grid">
+        <label>
+          <span class="lim-k">Model</span>
+          <select id="lim-tier">
+            <option value="large">Large: slower, handles harder jobs</option>
+            <option value="small">Small: much faster, may not cope</option>
+          </select>
+          <span class="lim-h" id="lim-tier-h">Pick a size, not a model. Which model each size means is set once for the whole database, so swapping models later does not mean editing every app.</span>
+        </label>
+        <label>
+          <span class="lim-k">Turns</span>
+          <input type="number" id="lim-turns" min="1" max="100" step="1">
+          <span class="lim-h">How many times it may think and call a tool. Reading a file row by row costs one per row; a bulk insert costs one.</span>
+        </label>
+        <label>
+          <span class="lim-k">Timeout (seconds)</span>
+          <input type="number" id="lim-secs" min="1" max="1800" step="1">
+          <span class="lim-h">Wall clock for the whole run. A model call is seconds, so a job with ten of them needs more than ten.</span>
+        </label>
+        <label>
+          <span class="lim-k">Cost cap (USD)</span>
+          <input type="number" id="lim-cost" min="0" step="0.01" placeholder="none">
+          <span class="lim-h">Spend ceiling per run. Blank or zero means no cap.</span>
+        </label>
+      </div>
+      <div><button class="btn primary" id="lim-save">Save limits</button></div>
+      <div id="lim-status"></div>
+    </div>
+
+    <div class="pane" id="pane-danger">
+      <div class="q-intro">
+        Removing an app deletes its definition: its agents, schedules and saved
+        questions. Its tables are kept unless you say otherwise, and its run
+        history is kept either way, because a record you can erase by deleting
+        what it records is not a record.
+      </div>
+      <label class="q-confirm"><input type="checkbox" id="dz-data" /> also delete this app's tables and everything in them</label>
+      <div><button class="btn danger" id="dz-drop">Delete this app</button></div>
+      <div id="dz-status"></div>
+    </div>
+
+    <div class="pane" id="pane-revise">
+      <div class="q-intro">
+        Describe what is wrong or missing. The agent proposes the change and
+        shows you the SQL and the new instructions before anything is applied,
+        because a builder that cannot be corrected is a slot machine.
+      </div>
+      <textarea id="rev-input" placeholder="add a column for the author, and stop storing the full article body"></textarea>
+      <div>
+        <button class="btn primary" id="rev-propose">Propose a change</button>
+      </div>
+      <div id="rev-status"></div>
+      <div id="rev-proposal"></div>
+    </div>
+
+    <div class="pane" id="pane-embed">
+      <div class="embed-tabs">
+        <button data-embed="sql" class="active">SQL</button>
+        <button data-embed="ts">TypeScript</button>
+      </div>
+      <div class="embed-block">
+        <button class="copy" id="embed-copy">copy</button>
+        <pre id="embed-code"></pre>
+      </div>
+      <div class="embed-note" id="embed-note"></div>
+    </div>
+  </section>
+
+  <section class="view" id="view-files">
+    <div class="head"><h2>Files</h2></div>
+    <p class="sub">Upload data, hand it to an app, and run it again whenever you want. Files live in a sandbox the agents can read; nothing else on the machine is reachable.</p>
+    <div class="f-upload">
+      <input type="file" id="f-input" style="display:none">
+      <button class="btn primary" id="f-pick">&#128206; Upload a file</button>
+      <span id="f-status" class="small"></span>
+    </div>
+    <div id="f-list"></div>
+  </section>
+
+  <section class="view" id="view-activity">
+    <div class="head"><h2>Activity</h2></div>
+    <p class="sub">Every run, newest first. Failures included: a history that shows only successes is the first thing that lies to you when an app stops producing.</p>
+    <div id="act-stats" class="stat-row"></div>
+    <h3 class="s-h">Queue</h3>
+    <div id="act-queue"></div>
+    <h3 class="s-h">Runs</h3>
+    <div id="act-runs"></div>
+  </section>
+
+  <section class="view" id="view-samples">
+    <div class="head"><h2>Samples</h2></div>
+    <p class="sub">Prompts that work, and data to feed them. Click a prompt to load it into the builder, or download a file and attach it.</p>
+    <h3 class="s-h">Prompts</h3>
+    <div id="sample-prompts"></div>
+    <h3 class="s-h">Data files</h3>
+    <div id="sample-files"></div>
+  </section>
+
+  <!-- BROWSE -->
+  <section class="view" id="view-browse">
+    <div class="head"><h2>Browse data</h2></div>
+    <div id="browse-grid">
+      <div id="browse-tree"><div class="hint">loading...</div></div>
+      <div id="browse-data"><div class="hint">pick a table</div></div>
+    </div>
+  </section>
+
+  <!-- CONNECTIONS -->
+  <section class="view" id="view-connections">
+    <div class="head"><h2>Connections</h2></div>
+    <p class="sub" style="margin:0 0 18px">
+      Name an external Postgres database once here, and any app can query it with the
+      <code>remote_query</code> / <code>remote_exec</code> tools, by name, no code required.
+      This is the same connection method <code>pg-synapse-sidecar</code> uses for its own remote
+      database. The password is stored as a secret, never shown to an agent.
+    </p>
+    <div id="conn-form">
+      <label>Name (what agents will call it, e.g. <code>sales_db</code>)</label>
+      <input type="text" id="c-name" placeholder="sales_db">
+      <div class="two">
+        <div><label>Host</label><input type="text" id="c-host" placeholder="db.example.com"></div>
+        <div><label>Port</label><input type="number" id="c-port" value="5432"></div>
+      </div>
+      <label>Database name</label>
+      <input type="text" id="c-dbname" placeholder="sales">
+      <div class="two">
+        <div><label>User</label><input type="text" id="c-user" placeholder="reporter"></div>
+        <div><label>Password</label><input type="password" id="c-password"></div>
+      </div>
+      <div class="foot">
+        <span id="conn-status"></span>
+        <button class="btn primary" id="conn-save">Save connection</button>
+      </div>
+    </div>
+    <div class="conn-list" id="conn-list"><div class="hint">loading...</div></div>
+  </section>
+
+</main>
+
+<script>
+// ---------------------------------------------------------------------------
+// pg-one: a single-purpose app-builder UI for pg_synapse. Every capability
+// here (execute an agent, create/upsert an agent, browse a table) already
+// exists as a harness endpoint used by the main demo UI; this page adds no
+// new backend behavior, just a fresh, minimal front end and one meta-agent
+// definition (app_builder) that designs a schema and registers a new agent
+// for whatever idea it is given.
+// ---------------------------------------------------------------------------
+
+const $ = (id) => document.getElementById(id);
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+async function api(path, method, body) {
+  try {
+    const r = await fetch(path, {
+      method: method || "GET",
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { ok: false, error: data.error || r.statusText };
+    return data;
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+let BOOT = { agents: [], profiles: [], tools: [] };
+let CONNECTED = false;
+let CURRENT_AGENT = null;
+
+const APP_BUILDER = {
+  name: "app_builder",
+  system_prompt:
+    "You design and build small database-backed applications inside this Postgres database, " +
+    "driven by a one-line app idea from the user.\n\n" +
+    "The tools this system has. You use some of them yourself, and in step 3 you grant the app " +
+    "you build whichever ones IT needs: a tool you do not hold yourself can still be granted, " +
+    "so never tell the user a tool is unavailable because it is not in your own list.\n" +
+    "- sql_query / sql_exec: read and write THIS Postgres database.\n" +
+    "- describe_schema: every table, column with type and nullability, primary key and foreign " +
+    "key in ONE call. Use it once at the start instead of querying information_schema two or " +
+    "three times; each of those is a model round trip costing seconds, and seeing the foreign " +
+    "keys means writing a correct join the first time.\n" +
+    "- load_csv / load_json: given an uploaded file path and a target table, these read the file " +
+    "and insert every row for you, then report the columns they found. ALWAYS prefer them over " +
+    "read_file when the job is getting a file's rows into tables. They cost ONE tool call " +
+    "whatever the file size, while writing rows yourself costs a token per value and is the most " +
+    "expensive thing an agent can do: measured on a 15-row file, switching cut a run from 78 " +
+    "seconds to 29. Load into a staging table, then transform with ONE INSERT ... SELECT. Staged " +
+    "columns are all text, so cast explicitly.\n" +
+    "- load_url: given a url returning JSON and a target table, fetches it and inserts every row " +
+    "for you, the same one-call-whatever-the-size deal as load_csv. Pass path when the array is " +
+    "wrapped in a key (e.g. \"data\" or \"items\"). Always prefer it over fetching a JSON API and " +
+    "retyping its contents as INSERT values.\n" +
+    "- export_csv: given a SELECT and a file path, writes those rows to a CSV in the uploads " +
+    "directory without the rows passing through you, and the file shows up on the Files page. " +
+    "Use it whenever the job is getting data OUT (a report, an export, a download); summarizing " +
+    "loses the data and typing it out costs a token per cell.\n" +
+    "- read_file: read a file the user uploaded, at a path given to you in the task (relative to " +
+    "a sandboxed uploads directory). You cannot list files the user has not told you about.\n" +
+    "- remote_query / remote_exec: run SQL against a NAMED external Postgres connection (a row in " +
+    "synapse.connections, set up from pg-one's Connections page). If the task names a connection, " +
+    "or you are unsure, SELECT name FROM synapse.connections first to see what is available; use " +
+    "the connection argument exactly matching that name. You cannot connect to a database that has " +
+    "not been added as a connection first; do not invent one.\n" +
+    "- search_news: keyword news search (Google News RSS). Literal keyword matching, not semantic " +
+    "search. Returns title, url, source, and published_at for each result - there is no article " +
+    "body or real summary. IMPORTANT: the url is a news.google.com link that ALWAYS fails if passed " +
+    "to read_article (it only resolves via JavaScript, which read_article cannot run) - this is " +
+    "true of EVERY search_news result, not just the one you tried, so if read_article fails on one, " +
+    "do not re-run search_news hoping for a different, resolvable link; there is no such thing. If " +
+    "an app needs a \"summary\" field for a search_news result, write a short one yourself from the " +
+    "title (that is a real, working summary, not a fallback to apologize for) and move on to the " +
+    "next row - do not spend more than one read_article attempt total figuring this out.\n" +
+    "- fetch_feed: read any RSS or Atom feed (a publisher's own feed, planet.postgresql.org, a " +
+    "vendor changelog) and get back title, url, source and published_at per item. Unlike " +
+    "search_news, these urls are REAL publisher links that read_article can fetch, so when an " +
+    "app needs actual article text, point it at a known feed url rather than search_news.\n" +
+    "- read_article: given a DIRECT article/publisher url (never a news.google.com one - see " +
+    "above), fetches the page and extracts its main title/body text, stripping nav/ads/boilerplate. " +
+    "Heuristic, not perfect: it does not run JavaScript, so pages that only render content client-" +
+    "side may come back empty.\n" +
+    "- lede_compress: given text and a max_tokens budget, returns a short extractive brief of the " +
+    "most salient sentences. Use it after read_article, not instead of it, to keep token spend down " +
+    "when handling long article text.\n\n" +
+    "You have no other capabilities: no general web search, no email sending, no file listing " +
+    "beyond a path you were given. If the idea needs any of those, do not pretend to have done it: " +
+    "build the closest useful version with what you actually have, and say plainly in your final " +
+    "line what you could not do and what the user should do instead.\n\n" +
+    "For the idea you are given, in this order:\n" +
+    "1. Pick a short, valid Postgres identifier for this app: lowercase letters, digits, and " +
+    "underscores only, starting with a letter, 30 characters or fewer (e.g. \"gym_tracker\", " +
+    "\"invoice_tracker\"). This is BOTH the new agent's name AND its dedicated schema name. " +
+    "Query synapse.agents first to make sure the name is not already taken; if it is, add a short suffix.\n" +
+    "2. CREATE SCHEMA <name>, then create the tables that idea needs inside it, with sensible " +
+    "columns and types.\n" +
+    "3. Register the new agent right away, before seeding any data (do not hand-write an INSERT " +
+    "into synapse.agents, use the function): SELECT synapse.agent_create('<name>', '<a system " +
+    "prompt you write for the new agent, describing the app's domain, referencing its own schema " +
+    "<name> by name, telling it which of sql_query/sql_exec/describe_schema/load_csv/load_json/ " +
+    "load_url/export_csv/read_file/remote_query/remote_exec/search_news/fetch_feed/read_article/ " +
+    "lede_compress it needs and how to use them, AND telling it to insert " +
+    "multiple rows in as FEW sql_exec calls as possible (one multi-row INSERT beats one row per " +
+    "call) whenever it processes several records at once, e.g. rows from a file. Also tell it to " +
+    "issue INDEPENDENT writes TOGETHER in one batch rather than one after another (inserts into " +
+    "different tables do not depend on each other, and waiting between them costs a model round " +
+    "trip of several seconds each time), and to verify its work with ONE combined query at the " +
+    "end rather than checking each table separately - measured on a 15-row file, batching the " +
+    "independent inserts and collapsing six verification queries into one took a run from 15 " +
+    "model turns and 78 seconds down to 7 turns and 59 seconds. It has a limited number of tool " +
+    "calls to work with, same as you do>', 'conversation', 'vllm-default', " +
+    "ARRAY['sql_query','sql_exec'<list any of describe_schema/load_csv/load_json/load_url/export_csv/" +
+    "read_file/remote_query/remote_exec/search_news/fetch_feed/" +
+    "read_article/lede_compress the new agent actually needs, comma-separated, each single-" +
+    "quoted>], 15, 90000);\n" +
+    "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'. The app " +
+    "is now usable even if you run out of time before step 5, so do this before seeding data, not after.\n" +
+    "5. If you were given an uploaded file to work from, do NOT read or process it yourself: that is " +
+    "real analysis work (reading every row, judging each one) that belongs to the new agent's own " +
+    "run, with its own time budget, not squeezed into this one. Just make sure the new agent's " +
+    "system prompt (step 3) tells it the exact file path and what to do with it when asked. " +
+    "Otherwise (no file given), insert a handful of seed rows in as FEW sql_exec calls as possible " +
+    "(one multi-row INSERT with several VALUES tuples beats one row per call) so the app has " +
+    "something to show. Make invented seed data obviously sample data (e.g. \"Sample Customer 1\", " +
+    "example.com emails/URLs), never data that could be mistaken for something real or actually " +
+    "fetched.\n" +
+    "6. Finish with exactly one line in this shape: \"Built <name>: <one sentence describing what " +
+    "it does>\", plus, only if relevant, a second short line noting anything you could not do (see " +
+    "above). If you skipped seeding because a file is waiting to be processed (step 5), say so in " +
+    "this line so the caller knows to trigger that run next.\n\n" +
+    "Rules: run ONE statement per tool call, never end a statement with a semicolon, never touch " +
+    "the synapse schema's rows directly (only through synapse.agent_create), never touch any table " +
+    "outside the schema you just created, and always pass values through the params array, never " +
+    "inline them.",
+  executor: "conversation",
+  llm_profile: "vllm-default",
+  tools: ["sql_query", "sql_exec", "describe_schema", "read_file", "remote_query", "remote_exec", "search_news", "read_article", "lede_compress"],
+  max_iterations: 24,
+  timeout_ms: 120000,
+  cost_cap_usd: 0,
+};
+
+// ---- admin view flag ----
+// Hides the harness's own agents and the synapse schema so the app list shows
+// the user's apps and nothing else. This is presentation, not permission:
+// everything is still reachable over SQL and over the API with ?admin=1, and
+// the label says so on hover rather than implying a security boundary.
+let ADMIN = localStorage.getItem("pgone_admin") === "1";
+function adminQ(sep) { return ADMIN ? (sep || "?") + "admin=1" : ""; }
+
+// ---- nav ----
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => v.classList.toggle("active", v.id === "view-" + name));
+  document.querySelectorAll("#topbar nav button").forEach((b) => b.classList.toggle("active", b.dataset.nav === name));
+  if (name === "dashboard") renderDashboard();
+  if (name === "browse") loadBrowseTree();
+  if (name === "connections") loadConnections();
+  if (name === "samples") loadSamples();
+  if (name === "activity") loadActivity();
+  if (name === "files") loadFiles();
+}
+document.querySelectorAll("[data-nav]").forEach((el) =>
+  el.addEventListener("click", (e) => { e.preventDefault(); showView(el.dataset.nav); }));
+
+$("admin-tog").checked = ADMIN;
+$("admin-tog").onchange = async () => {
+  ADMIN = $("admin-tog").checked;
+  localStorage.setItem("pgone_admin", ADMIN ? "1" : "0");
+  await loadBootstrap();
+  renderDashboard();
+  const active = document.querySelector(".view.active");
+  if (active && active.id === "view-browse") loadBrowseTree();
+};
+
+// ---- bootstrap / connection ----
+async function loadBootstrap() {
+  const r = await api("/api/bootstrap" + adminQ());
+  if (!r.ok) return;
+  BOOT = r;
+  CONNECTED = (r.profiles || []).some((p) => p.name === "vllm-default");
+  const conn = $("conn"), text = $("conn-text"), change = $("conn-change"), strip = $("connect-strip");
+  conn.classList.toggle("ok", CONNECTED);
+  if (CONNECTED) {
+    const p = r.profiles.find((p) => p.name === "vllm-default");
+    text.textContent = "connected: " + p.model;
+    change.style.display = "";
+    strip.classList.remove("show");
+  } else {
+    text.textContent = "not connected";
+    change.style.display = "none";
+    strip.classList.add("show");
+    if (r.default_llm) { $("cs-url").value = r.default_llm.base_url; $("cs-model").value = r.default_llm.model; }
+  }
+}
+$("conn-change").onclick = (e) => { e.preventDefault(); $("connect-strip").classList.add("show"); };
+$("cs-save").onclick = async () => {
+  const base_url = $("cs-url").value.trim(), model = $("cs-model").value.trim();
+  if (!base_url || !model) { $("cs-status").textContent = "base url and model are required"; return; }
+  $("cs-status").textContent = "connecting...";
+  const r = await api("/api/profile", "POST", { name: "vllm-default", base_url, model, api_key: $("cs-key").value.trim() });
+  $("cs-status").textContent = r.ok ? "connected" : (r.error || "failed");
+  if (r.ok) await loadBootstrap();
+};
+
+// ---- BUILD ----
+document.querySelectorAll(".chip[data-ex]").forEach((b) =>
+  b.onclick = () => { $("build-input").value = b.dataset.ex; $("build-input").focus(); });
+
+async function ensureAppBuilder() {
+  const r = await api("/api/agent", "POST", APP_BUILDER);
+  return r.ok;
+}
+
+// ---- file attach: either a real upload, or the bundled sample dataset ----
+let ATTACH = null; // { mode: "file" | "sample", file: File | null }
+$("build-file-btn").onclick = () => $("build-file").click();
+$("build-file").onchange = () => {
+  const f = $("build-file").files[0];
+  if (!f) return;
+  ATTACH = { mode: "file", file: f };
+  $("attach-status").textContent = "attached: " + f.name;
+};
+$("build-sample-btn").onclick = () => {
+  ATTACH = { mode: "sample", file: null };
+  $("build-file").value = "";
+  $("attach-status").textContent = "will use: product_reviews_sample.csv";
+};
+function clearAttachment() {
+  ATTACH = null;
+  $("build-file").value = "";
+  $("attach-status").textContent = "";
+}
+// Multipart, not JSON: bypasses the shared api() helper, which always sends
+// content-type: application/json.
+async function uploadAttachment() {
+  if (!ATTACH) return null;
+  if (ATTACH.mode === "sample") {
+    const r = await api("/api/upload/sample", "POST");
+    return r.ok ? r.path : null;
+  }
+  const form = new FormData();
+  form.append("file", ATTACH.file);
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const data = await res.json().catch(() => ({}));
+    return data && data.ok ? data.path : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+$("build-go").onclick = async () => {
+  const idea = $("build-input").value.trim();
+  if (!idea) { $("build-input").focus(); return; }
+  if (!CONNECTED) { $("connect-strip").classList.add("show"); $("build-status").textContent = "connect an LLM endpoint first"; return; }
+  $("build-go").disabled = true;
+  $("build-trace").classList.remove("show");
+  const status = $("build-status");
+  status.className = "busy"; status.textContent = "designing your app...";
+  if (!(await ensureAppBuilder())) { status.className = ""; status.textContent = "could not register the builder agent"; $("build-go").disabled = false; return; }
+
+  // Fold in an uploaded file's path and any saved external connections as
+  // plain facts in the input text: app_builder cannot discover a file it
+  // was never told about, and while it can query synapse.connections
+  // itself, handing it the names directly saves a round trip.
+  let fullInput = idea;
+  let uploadedPath = null;
+  if (ATTACH) {
+    status.textContent = "uploading file...";
+    uploadedPath = await uploadAttachment();
+    clearAttachment();
+    if (!uploadedPath) { status.className = ""; status.textContent = "file upload failed"; $("build-go").disabled = false; return; }
+    // Deliberately does NOT ask app_builder to read/process the file itself:
+    // that is real per-row analysis work with its own time cost, and belongs
+    // to the new agent's own run (fired below, after the agent exists), not
+    // squeezed into app_builder's schema-design budget alongside everything
+    // else. See the "stopped early (timed_out)" failure this replaced.
+    fullInput += "\n\nA data file has been uploaded at path \"" + uploadedPath + "\". Design for this " +
+      "kind of data, give the new agent read_file access, and tell it (in the system prompt you " +
+      "write for it) that exact path and what to do with it when asked. Do not read the file yourself.";
+    status.textContent = "designing your app...";
+  }
+  const cr = await api("/api/connection");
+  const conns = (cr.ok && cr.connections) ? cr.connections : [];
+  if (conns.length) {
+    fullInput += "\n\nAvailable external database connections (query via remote_query/remote_exec): " +
+      conns.map((c) => c.name + " (" + c.dbname + " on " + c.host + ")").join(", ") + ".";
+  }
+
+  const before = new Set((BOOT.agents || []).map((a) => a.name));
+  const r = await api("/api/execute", "POST", { agent: "app_builder", input: fullInput });
+  if (!r.ok) { status.className = ""; status.textContent = r.error || "failed to start"; $("build-go").disabled = false; return; }
+
+  const runId = r.run_id;
+  const poll = async () => {
+    const s = await api("/api/run/" + runId);
+    if (!s.ok) { status.className = ""; status.textContent = s.error || "lost the run"; $("build-go").disabled = false; return; }
+    const run = s.run;
+    if (run.phase === "starting" || run.phase === "running") {
+      status.textContent = "designing your app... (" + Math.round((Date.now() - run.started_at_ms) / 1000) + "s)";
+      setTimeout(poll, 1200);
+      return;
+    }
+    $("build-go").disabled = false;
+    status.className = "";
+    if (run.phase === "failed") { status.textContent = run.error || "run failed"; return; }
+    const env = run.envelope || {};
+    if (env.status && env.status !== "completed") {
+      status.textContent = "stopped early (" + env.status + "). " + (env.output || "");
+      return;
+    }
+    const sqls = (run.messages || [])
+      .filter((m) => m.role === "assistant" && m.tool_name === "sql_exec")
+      .map((m) => { try { return JSON.parse(m.tool_input).query; } catch (e) { return null; } })
+      .filter(Boolean);
+    if (sqls.length) { $("build-trace").classList.add("show"); $("build-trace-body").textContent = sqls.join(";\n\n"); }
+
+    await loadBootstrap();
+    const after = (BOOT.agents || []).map((a) => a.name);
+    // app_builder itself can look "new" on the very first build (it is
+    // created by ensureAppBuilder() just above, before this snapshot), so
+    // it is never a valid highlight target regardless of name ordering.
+    const created = after.filter((n) => !before.has(n) && n !== "app_builder");
+
+    if (!created.length) {
+      // A "completed" status is not proof anything usable got built: the
+      // run can exhaust its iteration budget mid-build (often while
+      // seeding data) and land here with empty output and no registered
+      // agent. Say so plainly instead of silently doing nothing - this
+      // is exactly the failure mode a silent dashboard swap would hide.
+      status.textContent = (env.output && env.output.trim())
+        ? env.output
+        : "The builder ran but didn't finish registering an agent (it may have run out of steps). " +
+          "Check \"what it did\" below" + (sqls.length ? "" : " (no SQL ran at all)") +
+          ", then try again with a shorter or more specific idea.";
+      return;
+    }
+
+    $("build-input").value = "";
+
+    if (!uploadedPath) {
+      status.textContent = env.output || "built.";
+      showView("dashboard");
+      renderDashboard(created[0]);
+      return;
+    }
+
+    // Phase 2: the new agent's OWN run processes the file, with its OWN
+    // iteration/time budget (not app_builder's), on the app's detail page
+    // so progress is visible right where the user lands next.
+    status.textContent = (env.output || "built.") + " Now processing your file...";
+    openDetail(created[0]);
+    const processInput = "Process the uploaded file at path \"" + uploadedPath +
+      "\" and insert its normalized rows into your table(s).";
+    $("run-input").value = processInput;
+    startAgentRun(created[0], processInput);
+  };
+  poll();
+};
+
+// ---- DASHBOARD ----
+function renderDashboard(highlight) {
+  const grid = $("app-grid");
+  const agents = (BOOT.agents || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  if (!agents.length) { grid.innerHTML = ""; grid.parentElement.querySelector(".empty-hint")?.remove();
+    grid.insertAdjacentHTML("afterend", '<div class="empty-hint">nothing built yet. <a href="#" data-nav="build">build your first app</a></div>');
+    document.querySelectorAll("[data-nav]").forEach((el) => el.onclick || (el.onclick = (e) => { e.preventDefault(); showView(el.dataset.nav); }));
+    return;
+  }
+  document.querySelector(".empty-hint")?.remove();
+  grid.innerHTML = agents.map((a) => {
+    const desc = (a.system_prompt || "").replace(/\s+/g, " ").trim();
+    return '<button class="app-card' + (a.name === highlight ? " new" : "") + '" data-agent="' + esc(a.name) + '">' +
+      '<div class="name">' + esc(a.name) + (a.system ? '<span class="sys-badge">system</span>' : "") + '</div>' +
+      '<div class="desc">' + esc(desc) + '</div>' +
+      '<div class="meta">' + (a.tools || []).map((t) => '<span class="tag">' + esc(t) + '</span>').join("") +
+      '<span class="tag">max ' + esc(a.max_iterations) + '</span></div>' +
+      '</button>';
+  }).join("");
+  grid.querySelectorAll("[data-agent]").forEach((b) => b.onclick = () => openDetail(b.dataset.agent));
+}
+
+// ---- manual create ----
+function renderToolChecklist() {
+  $("m-tools").innerHTML = (BOOT.tools || []).map((t) =>
+    '<label><input type="checkbox" value="' + esc(t.name) + '"> ' + esc(t.name) + '</label>').join("");
+}
+$("btn-manual-toggle").onclick = () => { renderToolChecklist(); $("manual-form").classList.add("show"); };
+$("btn-manual-cancel").onclick = () => $("manual-form").classList.remove("show");
+$("btn-manual-save").onclick = async () => {
+  const name = $("m-name").value.trim(), prompt = $("m-prompt").value.trim();
+  if (!name || !prompt) { $("manual-status").textContent = "name and prompt are required"; return; }
+  const tools = [...document.querySelectorAll("#m-tools input:checked")].map((i) => i.value);
+  const r = await api("/api/agent", "POST", {
+    name, system_prompt: prompt, executor: "conversation", llm_profile: "vllm-default", tools,
+    max_iterations: parseInt($("m-maxiter").value, 10) || 10,
+    timeout_ms: parseInt($("m-timeout").value, 10) || 60000,
+  });
+  $("manual-status").textContent = r.ok ? "saved" : (r.error || "failed");
+  if (r.ok) { $("manual-form").classList.remove("show"); $("m-name").value = ""; $("m-prompt").value = "";
+    await loadBootstrap(); renderDashboard(name); }
+};
+
+// ---- DETAIL ----
+function openDetail(name) {
+  CURRENT_AGENT = name;
+  const a = (BOOT.agents || []).find((x) => x.name === name);
+  if (!a) return;
+  $("d-name").textContent = a.name;
+  $("d-prompt").textContent = (a.system_prompt || "").replace(/\s+/g, " ").trim();
+  $("run-input").value = ""; $("run-output").classList.remove("show"); $("run-status").textContent = "";
+  showView("detail");
+  setPane("run");
+  loadAgentTables(a.name);
+  loadQuestions(a.name);
+  loadSchedules(a.name);
+  loadLimits(a);
+  $("rev-input").value = ""; $("rev-proposal").innerHTML = ""; $("rev-status").textContent = "";
+  renderEmbed(a.name, document.querySelector(".embed-tabs button.active")?.dataset.embed || "sql");
+}
+document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.onclick = () => setPane(b.dataset.pane));
+function setPane(name) {
+  document.querySelectorAll(".seg button[data-pane]").forEach((b) => b.classList.toggle("active", b.dataset.pane === name));
+  document.querySelectorAll(".pane").forEach((p) => p.classList.toggle("active", p.id === "pane-" + name));
+}
+
+// Shared by the Run tab's button and the automatic "process my uploaded
+// file" run pg-one fires right after building an app from a file.
+async function startAgentRun(agent, input) {
+  if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
+  $("run-go").disabled = true;
+  $("run-status").textContent = "running...";
+  $("run-output").classList.remove("show");
+  const r = await api("/api/execute", "POST", { agent, input });
+  if (!r.ok) { $("run-status").textContent = r.error || "failed to start"; $("run-go").disabled = false; return; }
+  const poll = async () => {
+    const s = await api("/api/run/" + r.run_id);
+    if (!s.ok) { $("run-status").textContent = s.error || "lost the run"; $("run-go").disabled = false; return; }
+    const run = s.run;
+    if (run.phase === "starting" || run.phase === "running") {
+      $("run-status").textContent = "running... (" + Math.round((Date.now() - run.started_at_ms) / 1000) + "s)";
+      setTimeout(poll, 1000);
+      return;
+    }
+    $("run-go").disabled = false;
+    if (run.phase === "failed") { $("run-status").textContent = run.error || "run failed"; return; }
+    const env = run.envelope || {};
+    $("run-status").textContent = (env.status || "done") + " · " + (env.tokens_in || 0) + " in / " + (env.tokens_out || 0) + " out";
+    $("run-output").textContent = env.output || "(no output)";
+    $("run-output").classList.add("show");
+    if (env.status === "completed") loadAgentTables(agent);
+  };
+  poll();
+}
+$("run-go").onclick = () => {
+  const input = $("run-input").value.trim();
+  if (input) startAgentRun(CURRENT_AGENT, input);
+};
+
+// ---- tables (scoped to the agent's own schema) ----
+async function loadAgentTables(agentName) {
+  const list = $("tables-list"), out = $("table-data");
+  list.innerHTML = ""; out.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/schema/tree" + adminQ());
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not load schema") + '</div>'; return; }
+  const schema = (r.tree || []).find((s) => s.schema === agentName);
+  if (!schema || !schema.tables.length) {
+    out.innerHTML = '<div class="hint">no dedicated schema named "' + esc(agentName) +
+      '" found. Apps built here get their own schema; hand-added agents may point at existing tables instead.</div>';
+    return;
+  }
+  list.innerHTML = schema.tables.map((t) => '<button data-t="' + esc(t) + '">' + esc(t) + '</button>').join("");
+  list.querySelectorAll("button").forEach((b) => b.onclick = () => {
+    list.querySelectorAll("button").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+    loadTableData(agentName, b.dataset.t);
+  });
+  list.querySelector("button").click();
+}
+async function loadTableData(schema, table) {
+  const out = $("table-data");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const [c, rows] = await Promise.all([
+    api("/api/schema/columns?schema=" + encodeURIComponent(schema) + "&table=" + encodeURIComponent(table)),
+    api("/api/schema/rows?schema=" + encodeURIComponent(schema) + "&table=" + encodeURIComponent(table) + "&limit=50"),
+  ]);
+  const cn = (c.ok && c.columns.length) ? c.columns.map((x) => x.column) : (rows.rows && rows.rows[0] ? Object.keys(rows.rows[0]) : []);
+  if (!rows.ok || !rows.rows || !rows.rows.length) { out.innerHTML = '<div class="hint">no rows</div>'; return; }
+  out.innerHTML = "<table class='data-table'><tr>" + cn.map((x) => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
+    rows.rows.map((r) => "<tr>" + cn.map((x) => {
+      const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
+      return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
+    }).join("") + "</tr>").join("") + "</table>";
+}
+
+// ---- revise ----
+// SC-002 targets 80 percent of builds working unedited. This is the other 20
+// percent. The agent proposes; a human accepts. Nothing is applied from a
+// model's output without being shown first.
+$("rev-propose").onclick = async () => {
+  const st = $("rev-status"), out = $("rev-proposal");
+  const want = ($("rev-input").value || "").trim();
+  if (!want) { st.textContent = "describe the change you want first"; return; }
+  if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
+  st.className = "busy"; st.textContent = "working out what to change...";
+  out.innerHTML = "";
+
+  const app = CURRENT_AGENT;
+  const agent = (BOOT.agents || []).find((a) => a.name === app);
+  const prompt =
+    "The app \"" + app + "\" needs a change. Its schema is the Postgres schema \"" + app + "\".\n\n" +
+    "Requested change: " + want + "\n\n" +
+    "Inspect the current tables first with sql_query against information_schema. " +
+    "Then make the change with sql_exec: add, alter or drop columns and tables as needed. " +
+    "Preserve existing data where you reasonably can. " +
+    "Finish with one line describing exactly what you changed.";
+
+  const r = await api("/api/execute", "POST", { agent: "db_architect", input: prompt });
+  if (!r.ok) { st.className = ""; st.textContent = r.error || "failed"; return; }
+  pollRevision(r.run_id, app);
+};
+
+async function pollRevision(runId, app) {
+  const st = $("rev-status"), out = $("rev-proposal");
+  const s = await api("/api/run/" + runId);
+  if (!s.ok) { st.className = ""; st.textContent = s.error || "lost the run"; return; }
+  const run = s.run;
+  if (run.phase === "starting" || run.phase === "running") {
+    st.textContent = "working... (" + Math.round((Date.now() - run.started_at_ms) / 1000) + "s)";
+    setTimeout(() => pollRevision(runId, app), 1200);
+    return;
+  }
+  st.className = "";
+  if (run.phase === "failed") { st.textContent = run.error || "the change failed"; return; }
+  const env = run.envelope || {};
+  const failed = env.status && env.status !== "completed";
+  st.textContent = failed ? ("stopped: " + env.status) : "applied";
+  out.innerHTML =
+    '<div class="q-card">' +
+      '<div class="q-ask">' + (failed ? "What went wrong" : "What changed") + '</div>' +
+      '<div class="act-io">' + esc(env.output || env.error || "(no detail)") + '</div>' +
+      ((env.tool_calls && env.tool_calls.length)
+        ? '<details><summary>the SQL it ran (' + env.tool_calls.length + ' calls)</summary><pre>' +
+            esc(env.tool_calls.map((t) => (t.args && (t.args.query || t.args.sql)) || t.name).join(";\n\n")) +
+          '</pre></details>'
+        : "") +
+    '</div>';
+  loadAgentTables(app);
+}
+
+// ---- schedules ----
+async function loadSchedules(app) {
+  const list = $("sched-list");
+  list.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/schedules");
+  if (!r.ok) { list.innerHTML = '<div class="hint">' + esc(r.error || "could not load") + '</div>'; return; }
+  if (!r.schedules || !r.schedules.length) {
+    list.innerHTML = '<div class="hint">not scheduled. It only runs when you click Run.</div>';
+  } else {
+    list.innerHTML = r.schedules.map((s) =>
+      '<div class="sc-row">' +
+        '<div class="sc-what">' + esc(s.input) + '</div>' +
+        '<div class="sc-when">every ' + esc(s.every) +
+          ' &middot; next ' + esc(fmtTime(s.next_run_at)) +
+          (s.last_run_at ? ' &middot; last ' + esc(fmtTime(s.last_run_at)) : " &middot; never run") +
+          (s.enabled ? "" : " &middot; DISABLED") + '</div>' +
+        '<div style="margin-top:10px"><button class="btn" data-drop="' + esc(s.schedule_id) + '">Remove</button> ' +
+        '<button class="btn primary" id="sc-now">Run due schedules now</button></div>' +
+      '</div>'
+    ).join("");
+    list.querySelectorAll("button[data-drop]").forEach((b) => b.onclick = async () => {
+      await api("/api/schedule/" + encodeURIComponent(b.dataset.drop) + "/drop", "POST", {});
+      loadSchedules(app);
+    });
+    const now = list.querySelector("#sc-now");
+    if (now) now.onclick = async () => {
+      now.disabled = true; now.textContent = "firing...";
+      const t = await api("/api/tick", "POST", {});
+      now.textContent = t.ok ? ("fired " + t.fired) : "failed";
+      setTimeout(() => loadSchedules(app), 800);
+    };
+  }
+  loadRuns(app);
+}
+
+function fmtTime(iso) {
+  if (!iso) return "never";
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+// A schedule you cannot see failing is worse than no schedule, so failed runs
+// are shown in the same list as successful ones rather than hidden.
+async function loadRuns(app) {
+  const out = $("sched-runs");
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/runs");
+  if (!r.ok || !r.runs || !r.runs.length) { out.innerHTML = '<div class="hint">no runs yet</div>'; return; }
+  out.innerHTML = r.runs.map((x) => {
+    const ok = x.status === "completed";
+    return '<div class="run-row">' +
+      '<span class="' + (ok ? "run-ok" : "run-bad") + '">' + esc(x.status) + '</span>' +
+      '<span>' + esc(fmtTime(x.started_at)) + '</span>' +
+      '<span style="color:var(--muted)">' + esc(x.model || "") + '</span>' +
+      '<span style="color:var(--muted)">' + (x.duration_ms || 0) + 'ms</span>' +
+      '<span style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(x.output || "") + '</span>' +
+    '</div>';
+  }).join("");
+}
+
+$("sc-save").onclick = async () => {
+  const st = $("sc-status");
+  const body = {
+    app: CURRENT_AGENT, agent: CURRENT_AGENT,
+    input: ($("sc-input").value || "").trim(),
+    every: ($("sc-every").value || "").trim(),
+    first_run_at: ($("sc-first").value || "").trim() || null,
+  };
+  if (!body.input || !body.every) { st.textContent = "what to do and how often are both required"; return; }
+  st.textContent = "saving...";
+  const r = await api("/api/schedule", "POST", body);
+  st.textContent = r.ok ? "scheduled" : (r.error || "failed");
+  if (r.ok) { $("sc-input").value = ""; $("sc-first").value = ""; loadSchedules(CURRENT_AGENT); }
+};
+
+// ---- limits ----
+// Turns, wall clock and spend: the three guardrails a DBA is being asked to
+// trust. Shown as seconds rather than milliseconds because nobody thinks in
+// milliseconds about a job that calls a language model.
+function loadLimits(agent) {
+  $("lim-turns").value = agent.max_iterations ?? "";
+  $("lim-secs").value = agent.timeout_ms ? Math.round(agent.timeout_ms / 1000) : "";
+  $("lim-cost").value = (agent.cost_cap_usd && agent.cost_cap_usd > 0) ? agent.cost_cap_usd : "";
+  $("lim-tier").value = agent.model_tier || "large";
+  showTier(agent);
+  $("lim-status").textContent = "";
+}
+
+// Say what the choice actually resolves to. A tier names a setting, and a
+// setting can be unset or pinned past, so "small" on its own would claim a
+// choice that may not be in effect.
+function showTier(agent) {
+  const h = $("lim-tier-h");
+  const base = "Pick a size, not a model. Which model each size means is set once for the whole database, so swapping models later does not mean editing every app. " +
+    "Small is worth trying for narrow jobs and is dramatically faster, but it is a real capability drop, not just a speed setting: a small model asked to work across a schema may get the answer wrong rather than slowly. Check Activity after switching.";
+  if (agent.llm_profile_main) {
+    h.textContent = base + " This app currently pins " + agent.llm_profile_main +
+      " directly; saving a size here replaces that pin with the size.";
+  } else if (agent.resolved_profile) {
+    h.textContent = base + " Right now this runs on " + agent.resolved_profile + ".";
+  } else {
+    h.textContent = base + " No model is configured for this size yet, so runs will fail until one is.";
+  }
+}
+
+$("lim-save").onclick = async () => {
+  const st = $("lim-status");
+  const turns = parseInt($("lim-turns").value, 10);
+  const secs = parseInt($("lim-secs").value, 10);
+  const cost = parseFloat($("lim-cost").value);
+  const body = {};
+  if (Number.isFinite(turns)) body.max_iterations = turns;
+  if (Number.isFinite(secs)) body.timeout_ms = secs * 1000;
+  body.cost_cap_usd = Number.isFinite(cost) ? cost : 0;
+  body.model_tier = $("lim-tier").value;
+  st.className = "busy"; st.textContent = "saving...";
+  const r = await api("/api/agent/" + encodeURIComponent(CURRENT_AGENT) + "/limits", "POST", body);
+  st.className = "";
+  if (!r.ok) { st.textContent = r.error || "could not save"; return; }
+  st.textContent = "saved: " + r.model_tier + " model" +
+    (r.resolved_profile ? " (" + r.resolved_profile + ")" : "") + ", " +
+    r.max_iterations + " turns, " +
+    Math.round(r.timeout_ms / 1000) + "s, " +
+    (r.cost_cap_usd ? ("$" + r.cost_cap_usd + " cap") : "no cost cap");
+  // Keep the in-page copy honest, so reopening the app shows what was saved
+  // rather than what was loaded at boot.
+  const a = (BOOT.agents || []).find((x) => x.name === CURRENT_AGENT);
+  if (a) {
+    a.max_iterations = r.max_iterations; a.timeout_ms = r.timeout_ms;
+    a.cost_cap_usd = r.cost_cap_usd; a.model_tier = r.model_tier;
+    a.resolved_profile = r.resolved_profile;
+    showTier(a);
+  }
+};
+
+// ---- files ----
+// Upload, hand to an app, run again, delete. The point of listing them is that
+// an upload you cannot see is an upload you have lost.
+$("f-pick").onclick = () => $("f-input").click();
+$("f-input").onchange = async () => {
+  const file = $("f-input").files[0];
+  if (!file) return;
+  const st = $("f-status");
+  st.className = "small busy"; st.textContent = "uploading " + file.name + "...";
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const d = await res.json().catch(() => ({}));
+    st.className = "small";
+    st.textContent = d.ok ? ("uploaded " + d.filename) : (d.error || "upload failed");
+  } catch (e) {
+    st.className = "small"; st.textContent = String(e);
+  }
+  $("f-input").value = "";
+  loadFiles();
+};
+
+async function loadFiles() {
+  const out = $("f-list");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/files");
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not list files") + '</div>'; return; }
+  if (!r.files || !r.files.length) {
+    out.innerHTML = '<div class="hint">no files yet. Upload one above, or grab a sample from the Samples page.</div>';
+    return;
+  }
+  // Only agents belonging to an app can be handed a file: they are the ones
+  // with a schema of their own to put the rows in. Asking the apps endpoint is
+  // the accurate way to know that; filtering BOOT.agents by "not system" also
+  // catches demo scenario agents, which have no schema and would fail.
+  const appList = await api("/api/apps");
+  const apps = (appList.ok ? appList.apps || [] : [])
+    .flatMap((a) => a.agents || []);
+  out.innerHTML = r.files.map((f) =>
+    '<div class="f-row" data-f="' + esc(f.filename) + '">' +
+      '<div class="f-name">' + esc(f.filename) + '</div>' +
+      '<div class="f-meta">' + f.bytes + ' bytes &middot; ' + esc(f.path) + '</div>' +
+      '<div class="f-act">' +
+        '<select data-agent>' +
+          (apps.length ? apps.map((a) => '<option>' + esc(a) + '</option>').join("")
+                       : '<option value="">build an app first</option>') +
+        '</select>' +
+        '<button class="btn primary" data-proc' + (apps.length ? "" : " disabled") + '>Process</button>' +
+        '<button class="btn danger" data-del>Delete</button>' +
+      '</div>' +
+      '<div class="q-result"></div>' +
+    '</div>'
+  ).join("");
+
+  out.querySelectorAll(".f-row").forEach((row) => {
+    const name = row.dataset.f;
+    row.querySelector("[data-del]").onclick = async () => {
+      const d = await api("/api/file/" + encodeURIComponent(name) + "/delete", "POST", {});
+      if (!d.ok) { row.querySelector(".q-result").innerHTML = '<div class="hint">' + esc(d.error) + '</div>'; return; }
+      loadFiles();
+    };
+    row.querySelector("[data-proc]").onclick = async () => {
+      const agent = row.querySelector("[data-agent]").value;
+      const res = row.querySelector(".q-result");
+      if (!agent) { res.innerHTML = '<div class="hint">build an app first</div>'; return; }
+      if (!CONNECTED) { showView("build"); $("connect-strip").classList.add("show"); return; }
+      res.innerHTML = '<div class="hint">handing it to ' + esc(agent) + '...</div>';
+      const r2 = await api("/api/file/" + encodeURIComponent(name) + "/process", "POST", { agent });
+      if (!r2.ok) { res.innerHTML = '<div class="hint">' + esc(r2.error || "failed") + '</div>'; return; }
+      pollFileRun(r2.run_id, res, agent);
+    };
+  });
+}
+
+async function pollFileRun(runId, res, agent) {
+  const s = await api("/api/run/" + runId);
+  if (!s.ok) { res.innerHTML = '<div class="hint">' + esc(s.error || "lost the run") + '</div>'; return; }
+  const run = s.run;
+  if (run.phase === "starting" || run.phase === "running") {
+    res.innerHTML = '<div class="hint">' + esc(agent) + ' is working... (' +
+      Math.round((Date.now() - run.started_at_ms) / 1000) + 's)</div>';
+    setTimeout(() => pollFileRun(runId, res, agent), 1200);
+    return;
+  }
+  if (run.phase === "failed") { res.innerHTML = '<div class="hint">' + esc(run.error || "failed") + '</div>'; return; }
+  const env = run.envelope || {};
+  const ok = env.status === "completed";
+  res.innerHTML = '<div class="q-card"><div class="q-ask ' + (ok ? "" : "run-bad") + '">' +
+    esc(env.status || "done") + '</div><div class="act-io">' +
+    esc(env.output || env.error || "(no output)") + '</div></div>';
+  loadAgentTables(agent);
+}
+
+// ---- delete an app ----
+$("dz-drop").onclick = async () => {
+  const st = $("dz-status"), app = CURRENT_AGENT;
+  const dropData = $("dz-data").checked;
+  // A confirm rather than a modal, because the irreversible half is the data
+  // and the sentence should say which one you are about to do.
+  const msg = dropData
+    ? "Delete the app \"" + app + "\" AND permanently destroy its tables and all their rows?"
+    : "Delete the app \"" + app + "\"? Its tables and data are kept.";
+  if (!window.confirm(msg)) return;
+  st.className = "busy"; st.textContent = "deleting...";
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/drop", "POST", { drop_data: dropData });
+  st.className = "";
+  if (!r.ok) { st.textContent = r.error || "delete failed"; return; }
+  const d = r.removed || {};
+  st.textContent = "deleted" + (d.data_dropped ? " with its data" : "; its tables were kept");
+  $("dz-data").checked = false;
+  await loadBootstrap();
+  renderDashboard();
+  showView("dashboard");
+};
+
+// ---- activity ----
+async function loadActivity() {
+  const runsEl = $("act-runs"), qEl = $("act-queue"), stEl = $("act-stats");
+  runsEl.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/runs");
+  if (!r.ok) { runsEl.innerHTML = '<div class="hint">' + esc(r.error || "could not load") + '</div>'; return; }
+
+  const s = r.stats || {};
+  stEl.innerHTML = [
+    ["total runs", s.total], ["completed", s.completed], ["failed", s.failed],
+    ["last 24h", s.last_24h], ["avg ms", s.avg_ms], ["tokens", s.tokens],
+  ].map(([k, v]) => '<div class="stat"><div class="v">' + esc(v === null || v === undefined ? "0" : v) +
+      '</div><div class="k">' + esc(k) + '</div></div>').join("");
+
+  qEl.innerHTML = (r.queue && r.queue.length)
+    ? r.queue.map((q) => '<div class="run-row"><span class="' +
+        (q.status === "done" ? "run-ok" : (q.status === "error" ? "run-bad" : "")) + '">' + esc(q.status) + '</span>' +
+        '<span>' + esc(q.agent) + '</span><span style="color:var(--muted)">' + esc(q.source || "manual") + '</span>' +
+        '<span style="color:var(--muted)">' + esc(fmtTime(q.enqueued_at)) + '</span>' +
+        (q.error ? '<span class="run-bad">' + esc(q.error) + '</span>' : "") + '</div>').join("")
+    : '<div class="hint">queue is empty</div>';
+
+  runsEl.innerHTML = r.runs.map((x) => {
+    const ok = x.status === "completed";
+    return '<div class="act-card">' +
+      '<div class="act-head">' +
+        '<span class="act-agent">' + esc(x.agent_name) + '</span>' +
+        '<span class="' + (ok ? "run-ok" : "run-bad") + '">' + esc(x.status) + '</span>' +
+        '<span>' + esc(fmtTime(x.started_at)) + '</span>' +
+        '<span>' + esc(x.model || "no model") + '</span>' +
+        '<span>' + (x.duration_ms || 0) + 'ms</span>' +
+        '<span>' + ((x.tokens_in || 0) + (x.tokens_out || 0)) + ' tok</span>' +
+        '<span>as ' + esc(x.caller_role || "unknown") + '</span>' +
+      '</div>' +
+      (x.input ? '<div class="act-io"><span class="lbl">in </span>' + esc(x.input) + '</div>' : "") +
+      (x.output ? '<div class="act-io"><span class="lbl">out </span>' + esc(x.output) + '</div>' : "") +
+    '</div>';
+  }).join("");
+}
+
+// ---- samples ----
+// Prompts are grouped by the kind of job they represent, because the useful
+// thing to show a newcomer is not one clever prompt but the shape of the four
+// or five jobs this is actually good at.
+const SAMPLE_PROMPTS = [
+  { kind: "watch and judge",
+    text: "Track Postgres news. Every morning search the news for PostgreSQL articles, read each one, and store the title, source, publication date and a short summary in a table.",
+    why: "Recurring ingest with judgment applied. The agent decides what counts as Postgres news and writes typed rows. This is the app the Questions tab then mines." },
+  { kind: "clean and classify",
+    text: "I have messy product reviews from several channels. Build me an app that splits them into people, products and reviews, and scores the sentiment of each one.",
+    why: "Existing free text becomes structured rows with foreign keys. Pair it with the reviews CSV below." },
+  { kind: "triage and route",
+    text: "Build a support ticket triage app. For each ticket work out the category, the urgency, and which team should own it, and flag anything that looks like an outage.",
+    why: "Judgment no CASE statement can express. Pair it with the tickets CSV below." },
+  { kind: "categorise the uncategorisable",
+    text: "Take raw expense descriptions off a card feed and sort them into categories like travel, software, meals and equipment, with a confidence for each.",
+    why: "The classic problem a regex cannot solve. Pair it with the expenses CSV below." },
+  { kind: "watch the database itself",
+    text: "Watch this database for slow queries. Look at pg_stat_statements, find the worst offenders, and suggest an index for each one with the reason it would help.",
+    why: "The subject of the app is the database's own telemetry, so no data moves anywhere at all." },
+];
+
+function loadSamples() {
+  $("sample-prompts").innerHTML = SAMPLE_PROMPTS.map((p, i) =>
+    '<div class="s-card">' +
+      '<div class="s-kind">' + esc(p.kind) + '</div>' +
+      '<div class="s-text">' + esc(p.text) + '</div>' +
+      '<div class="s-why">' + esc(p.why) + '</div>' +
+      '<button class="btn primary" data-prompt="' + i + '">Use this prompt</button>' +
+    '</div>'
+  ).join("");
+  $("sample-prompts").querySelectorAll("button[data-prompt]").forEach((b) => b.onclick = () => {
+    $("build-input").value = SAMPLE_PROMPTS[+b.dataset.prompt].text;
+    showView("build");
+    $("build-input").focus();
+  });
+  loadSampleFiles();
+}
+
+async function loadSampleFiles() {
+  const out = $("sample-files");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/samples");
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "could not load samples") + '</div>'; return; }
+  out.innerHTML = (r.samples || []).map((f) =>
+    '<div class="s-card">' +
+      '<div class="s-text">' + esc(f.filename) + '</div>' +
+      '<div class="s-why">' + esc(f.description) + '</div>' +
+      '<a class="btn primary" href="/api/sample/' + encodeURIComponent(f.name) + '" download>Download</a>' +
+      '<div class="s-meta" style="margin-top:8px">' + f.bytes + ' bytes</div>' +
+    '</div>'
+  ).join("");
+}
+
+// ---- named questions ----
+// A question stores the SQL it compiled to. Showing that SQL is deliberate: a
+// DBA who can read the query before trusting it is the difference between a
+// governed feature and a black box.
+async function loadQuestions(app) {
+  const list = $("q-list");
+  list.innerHTML = '<div class="hint">loading...</div>';
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/questions");
+  if (!r.ok) { list.innerHTML = '<div class="hint">' + esc(r.error || "could not load questions") + '</div>'; return; }
+  if (!r.questions || !r.questions.length) {
+    list.innerHTML = '<div class="hint">no saved questions yet. Save one below, and it becomes an endpoint you can call from anywhere.</div>';
+    return;
+  }
+  list.innerHTML = r.questions.map((q) =>
+    '<div class="q-card" data-q="' + esc(q.name) + '">' +
+      '<div class="q-ask">' + esc(q.nl_text) + '</div>' +
+      '<div class="q-meta">GET /api/app/' + esc(app) + '/q/' + esc(q.name) + '</div>' +
+      (q.confirmed ? "" : '<div class="q-unconfirmed">not reviewed yet, so it will not run</div>') +
+      '<button class="btn primary" data-run="' + esc(q.name) + '"' + (q.confirmed ? "" : " disabled") + '>Ask</button>' +
+      '<details><summary>the SQL this compiles to</summary><pre>' + esc(q.sql_text || "") + '</pre></details>' +
+      '<div class="q-result"></div>' +
+    '</div>'
+  ).join("");
+  list.querySelectorAll("button[data-run]").forEach((b) => b.onclick = () => runQuestion(app, b.dataset.run));
+}
+
+async function runQuestion(app, name) {
+  const card = document.querySelector('.q-card[data-q="' + CSS.escape(name) + '"]');
+  const out = card.querySelector(".q-result");
+  out.innerHTML = '<div class="hint">asking...</div>';
+  const t0 = performance.now();
+  const r = await api("/api/app/" + encodeURIComponent(app) + "/q/" + encodeURIComponent(name));
+  const ms = Math.round(performance.now() - t0);
+  if (!r.ok) { out.innerHTML = '<div class="hint">' + esc(r.error || "failed") + '</div>'; return; }
+  if (!r.rows || !r.rows.length) { out.innerHTML = '<div class="hint">no rows</div>'; return; }
+  const cols = Object.keys(r.rows[0]);
+  out.innerHTML = "<table class='data-table'><tr>" + cols.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr>" +
+    r.rows.map((row) => "<tr>" + cols.map((c) => {
+      const v = row[c]; const d = (v === null || v === undefined) ? "" : String(v);
+      return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
+    }).join("") + "</tr>").join("") + "</table>" +
+    '<div class="q-meta" style="margin-top:8px">' + r.row_count + ' rows in ' + ms + 'ms, no model involved</div>';
+}
+
+$("q-save").onclick = async () => {
+  const st = $("q-save-status");
+  const body = {
+    app: CURRENT_AGENT,
+    name: ($("q-name").value || "").trim(),
+    nl_text: ($("q-nl").value || "").trim(),
+    kind: "sql",
+    sql_text: ($("q-sql").value || "").trim(),
+    confirmed: $("q-ok").checked,
+  };
+  if (!body.name || !body.nl_text || !body.sql_text) { st.textContent = "name, question, and SQL are all required"; return; }
+  st.textContent = "saving...";
+  const r = await api("/api/question", "POST", body);
+  if (!r.ok) { st.textContent = r.error || "save failed"; return; }
+  st.textContent = r.confirmed ? "saved" : "saved, but unreviewed so it will not run until approved";
+  $("q-name").value = ""; $("q-nl").value = ""; $("q-sql").value = ""; $("q-ok").checked = false;
+  loadQuestions(CURRENT_AGENT);
+};
+
+// ---- embed / API snippets ----
+document.querySelectorAll(".embed-tabs button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll(".embed-tabs button").forEach((x) => x.classList.remove("active"));
+  b.classList.add("active");
+  renderEmbed(CURRENT_AGENT, b.dataset.embed);
+});
+function renderEmbed(agent, kind) {
+  if (!agent) return;
+  if (kind === "ts") {
+    $("embed-code").textContent =
+`import { PgSynapseClient } from "pg-synapse-client";
+
+const synapse = new PgSynapseClient(pool); // any pg.Pool-compatible client
+
+const result = await synapse.execute("${agent}", "your input here");
+console.log(result.output);`;
+    $("embed-note").textContent = "pg-synapse-client lives in clients/typescript in this repo (not yet published to npm).";
+  } else {
+    $("embed-code").textContent =
+`SELECT synapse.execute('${agent}', 'your input here');
+
+-- or from a Postgres client library in any language, e.g.:
+-- pool.query("SELECT synapse.execute($1, $2)", ["${agent}", "your input here"])`;
+    $("embed-note").textContent = "Works from any Postgres client. Auth is whatever role your connection already uses.";
+  }
+}
+$("embed-copy").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($("embed-code").textContent);
+    $("embed-copy").textContent = "copied"; $("embed-copy").classList.add("copied");
+    setTimeout(() => { $("embed-copy").textContent = "copy"; $("embed-copy").classList.remove("copied"); }, 1400);
+  } catch (e) { $("embed-copy").textContent = "select + copy manually"; }
+};
+
+// ---- BROWSE (unscoped schema browser) ----
+let BROWSE_SEL = null;
+async function loadBrowseTree() {
+  const tree = $("browse-tree");
+  const r = await api("/api/schema/tree" + adminQ());
+  if (!r.ok) { tree.innerHTML = '<div class="hint">' + esc(r.error || "unavailable") + '</div>'; return; }
+  tree.innerHTML = (r.tree || []).map((s) =>
+    '<div class="sch" data-s="' + esc(s.schema) + '">' + esc(s.schema) + '</div>' +
+    s.tables.map((t) => '<div class="tbl" data-s="' + esc(s.schema) + '" data-t="' + esc(t) + '">' + esc(t) + '</div>').join("")
+  ).join("");
+  tree.querySelectorAll(".tbl").forEach((el) => el.onclick = () => {
+    tree.querySelectorAll(".tbl").forEach((x) => x.classList.remove("sel"));
+    el.classList.add("sel");
+    BROWSE_SEL = { schema: el.dataset.s, table: el.dataset.t };
+    loadBrowseData();
+  });
+}
+async function loadBrowseData() {
+  if (!BROWSE_SEL) return;
+  const out = $("browse-data");
+  out.innerHTML = '<div class="hint">loading...</div>';
+  const [c, rows] = await Promise.all([
+    api("/api/schema/columns?schema=" + encodeURIComponent(BROWSE_SEL.schema) + "&table=" + encodeURIComponent(BROWSE_SEL.table)),
+    api("/api/schema/rows?schema=" + encodeURIComponent(BROWSE_SEL.schema) + "&table=" + encodeURIComponent(BROWSE_SEL.table) + "&limit=50"),
+  ]);
+  const cn = (c.ok && c.columns.length) ? c.columns.map((x) => x.column) : (rows.rows && rows.rows[0] ? Object.keys(rows.rows[0]) : []);
+  let html = '<div class="hint" style="margin-bottom:8px">' + esc(BROWSE_SEL.schema) + "." + esc(BROWSE_SEL.table) + '</div>';
+  if (rows.ok && rows.rows && rows.rows.length) {
+    html += "<table class='data-table'><tr>" + cn.map((x) => "<th>" + esc(x) + "</th>").join("") + "</tr>" +
+      rows.rows.map((r) => "<tr>" + cn.map((x) => {
+        const v = r[x]; const d = (v === null || v === undefined) ? "" : String(v);
+        return "<td title='" + esc(d) + "'>" + esc(d) + "</td>";
+      }).join("") + "</tr>").join("") + "</table>";
+  } else {
+    html += '<div class="hint">no rows</div>';
+  }
+  out.innerHTML = html;
+}
+
+// ---- CONNECTIONS ----
+async function loadConnections() {
+  const list = $("conn-list");
+  const r = await api("/api/connection");
+  if (!r.ok) { list.innerHTML = '<div class="hint">' + esc(r.error || "could not load connections") + '</div>'; return; }
+  const conns = r.connections || [];
+  list.innerHTML = conns.length
+    ? conns.map((c) =>
+        '<div class="conn-card"><span class="cn-name">' + esc(c.name) + '</span>' +
+        '<span class="cn-meta">' + esc(c.user) + '@' + esc(c.host) + ':' + esc(c.port) + '/' + esc(c.dbname) +
+        (c.has_password ? ' &middot; password saved' : ' &middot; no password') + '</span></div>').join("")
+    : '<div class="hint">no connections yet. Add one above, then reference its name when you describe an app ' +
+      '(e.g. "using the sales_db connection...").</div>';
+}
+$("conn-save").onclick = async () => {
+  const name = $("c-name").value.trim(), host = $("c-host").value.trim(), dbname = $("c-dbname").value.trim(),
+    user = $("c-user").value.trim();
+  if (!name || !host || !dbname || !user) { $("conn-status").textContent = "name, host, database, and user are required"; return; }
+  $("conn-status").textContent = "saving...";
+  const r = await api("/api/connection", "POST", {
+    name, host, dbname, user,
+    port: parseInt($("c-port").value, 10) || 5432,
+    password: $("c-password").value,
+  });
+  $("conn-status").textContent = r.ok ? "saved" : (r.error || "failed");
+  if (r.ok) {
+    $("c-name").value = ""; $("c-host").value = ""; $("c-dbname").value = "";
+    $("c-user").value = ""; $("c-password").value = ""; $("c-port").value = "5432";
+    await loadConnections();
+  }
+};
+
+// ---- boot ----
+loadBootstrap();
+</script>
+</body>
+</html>

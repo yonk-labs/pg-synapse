@@ -17,7 +17,6 @@
 #![warn(missing_docs)]
 
 mod api;
-mod db;
 
 use std::sync::Arc;
 
@@ -35,7 +34,7 @@ use pg_synapse_tools_sql::SqlToolsPlugin;
 use sqlx::PgPool;
 use tracing::{info, warn};
 
-use db::{SqlxProfileSource, SqlxSqlExecutor};
+use pg_synapse_sidecar::db::{SqlxProfileSource, SqlxSqlExecutor};
 
 /// Sidecar HTTP host for pg_synapse.
 ///

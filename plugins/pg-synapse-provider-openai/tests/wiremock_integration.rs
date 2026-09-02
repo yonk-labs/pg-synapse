@@ -299,7 +299,7 @@ async fn factory_builds_provider_with_base_url_from_profile() {
         provider: "openai".into(),
         model: "granite-3.1-2b-instruct".into(),
         api_key_secret: None,
-        base_url: Some("http://192.168.1.193:8000/v1".into()),
+        base_url: Some("http://localhost:8000/v1".into()),
         params: serde_json::json!({
             "cost_per_million_tokens_in": 0.0,
             "cost_per_million_tokens_out": 0.0

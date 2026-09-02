@@ -33,7 +33,7 @@ api_key_env   = "OPENAI_API_KEY"
 [[model]]
 key           = "vllm-qwen3-coder"
 kind          = "remote_openai"
-base_url      = "http://192.168.1.193:8000/v1"
+base_url      = "http://localhost:8000/v1"
 model         = "Intel/Qwen3-Coder-Next-int4-AutoRound"
 # No api_key_env: local vLLM endpoint, no auth required.
 

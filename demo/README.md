@@ -24,9 +24,12 @@ The first build is slow (it compiles the Rust extension inside the db image,
 expect 10 to 25 minutes cold); later builds hit the Docker cache. Then:
 
 1. Open <http://localhost:8080>.
-2. Panel 1 (LLM endpoint): the form is prefilled with the repo's test
-   endpoint; change it to your server, hit **Test** (probes `GET /models`
-   from the harness), then **Save**. This writes `synapse.llm_profiles` via
+2. Panel 1 (LLM endpoint): the form is prefilled with a `localhost:8000`
+   placeholder (no real endpoint is tracked in this repo); change it to
+   your server, hit **Test** (probes `GET /models` from the harness), then
+   **Save**. To skip retyping it every run, drop a local, gitignored `.env`
+   in the repo root with `DEFAULT_LLM_BASE_URL=...` / `DEFAULT_LLM_MODEL=...`
+   (`docker compose` loads it automatically). This writes `synapse.llm_profiles` via
    `synapse.llm_profile_set()`, and the API key (if any) via
    `synapse.secret_set()`.
 3. Panel 2 (Load a demo): pick a scenario, click **Load**, then click one of
@@ -139,6 +142,12 @@ runs `CREATE EXTENSION pg_synapse_pgrx` on first boot.
   Postgres volume. Do not expose it to a network you do not trust.
 - The tool list in the agent editor is the set compiled into the demo image
   (`sql_query`, `sql_exec`, `http_get`, `http_post`, `http_head`,
-  `calculator`, `get_current_time`, `call_agent`).
+  `calculator`, `get_current_time`, `call_agent`, `read_file`, `write_file`,
+  `list_files`, `remote_query`, `remote_exec`, `search_news`,
+  `read_article`, `lede_compress`).
+- `demo/reset.sh` wipes the stack's Docker volumes, brings it back up, and
+  re-seeds the `vllm-default` LLM profile (`DEFAULT_LLM_BASE_URL` /
+  `DEFAULT_LLM_MODEL` env, or the repo defaults) so a fresh test run does not
+  need a manual Panel 1 click first.
 - `synapse.embed` is present but non-functional in this image by design
   (the `embed-ort` feature is dropped to keep ONNX Runtime out).

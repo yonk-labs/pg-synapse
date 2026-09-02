@@ -11,7 +11,7 @@ for pg_synapse v0.1.
 - A Postgres 15, 16, or 17. The simplest route is a pgrx-managed instance:
   `cargo pgrx init --pg17 download`.
 - An OpenAI-compatible LLM endpoint that supports tool calls. The default in
-  the examples is a vLLM server at `http://192.168.1.193:8000/v1` serving
+  the examples is a vLLM server at `http://localhost:8000/v1` serving
   `Intel/Qwen3-Coder-Next-int4-AutoRound`. Any OpenAI-compatible runtime works
   (real OpenAI, vLLM, llama-cpp-server, LM Studio).
 - An ONNX Runtime shared library (1.24.x) on the library path **only if** you
@@ -59,7 +59,7 @@ SELECT synapse.llm_profile_set(
   'vllm',                              -- profile name
   'openai',                            -- provider
   'Intel/Qwen3-Coder-Next-int4-AutoRound', -- model id
-  'http://192.168.1.193:8000/v1',      -- base_url (NULL = OpenAI default)
+  'http://localhost:8000/v1',      -- base_url (NULL = OpenAI default)
   NULL,                                -- api_key_secret name (NULL = none)
   '{}'::jsonb                          -- provider params
 );

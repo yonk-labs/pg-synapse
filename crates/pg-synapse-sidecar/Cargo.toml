@@ -9,6 +9,10 @@ repository.workspace   = true
 homepage.workspace     = true
 authors.workspace      = true
 
+[lib]
+name = "pg_synapse_sidecar"
+path = "src/lib.rs"
+
 [[bin]]
 name = "pg-synapse-sidecar"
 path = "src/main.rs"

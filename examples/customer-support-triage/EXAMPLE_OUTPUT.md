@@ -1,6 +1,6 @@
 # Captured run: customer-support-triage
 
-Captured live against vLLM at `http://192.168.1.193:8000/v1` running
+Captured live against vLLM at `http://localhost:8000/v1` running
 `Intel/Qwen3-Coder-Next-int4-AutoRound`.
 
 ## Setup
@@ -24,7 +24,7 @@ Captured live against vLLM at `http://192.168.1.193:8000/v1` running
 
 ```text
 >>> Running triage workflow
->>>   endpoint: http://192.168.1.193:8000/v1
+>>>   endpoint: http://localhost:8000/v1
 >>>   model:    Intel/Qwen3-Coder-Next-int4-AutoRound
 ```
 
