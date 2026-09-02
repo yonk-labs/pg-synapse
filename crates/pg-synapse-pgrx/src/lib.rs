@@ -21,8 +21,17 @@
 // requires one tightly-scoped `unsafe` block to drive Postgres internal
 // subtransactions (the C-level mechanism PL/pgSQL's `BEGIN ... EXCEPTION`
 // uses). SQL `SAVEPOINT` statements are rejected inside a SECURITY DEFINER
-// function, so the SQL-only approach cannot work in production. The single
-// allowed `unsafe` site is `spi_executor::with_tool_subtransaction`.
+// function, so the SQL-only approach cannot work in production.
+//
+// Two allowed sites, both `#[allow(unsafe_code)]` and both justified where
+// they appear:
+//   1. `spi_executor::with_tool_subtransaction`, the subtransaction driver
+//      described above.
+//   2. `worker::pg_synapse_worker_main`, which needs `#[unsafe(no_mangle)]`
+//      because Postgres resolves a background worker's entry point by dlsym
+//      and a mangled symbol is not findable. Unsafe only in the link-time
+//      sense (two crates exporting one name); no unsafe block, nothing
+//      dereferenced.
 #![deny(unsafe_code)]
 #![allow(non_snake_case)]
 #![warn(missing_docs)]
@@ -36,6 +45,7 @@ mod runtime_holder;
 mod schema_guc;
 mod spi_executor;
 mod sql_functions;
+mod worker;
 
 pub use runtime_holder::{kernel_handle, rebuild_kernel};
 
@@ -45,6 +55,10 @@ pub use runtime_holder::{kernel_handle, rebuild_kernel};
 extern "C-unwind" fn _PG_init() {
     schema_guc::register_gucs();
     runtime_holder::initialize_tokio_runtime();
+    // After the GUCs, because it reads one to decide whether to exist. A no-op
+    // unless an operator named a database, and a LOG rather than an error if
+    // the library was not preloaded.
+    worker::register();
 }
 
 // Schema bootstrap: creates the synapse schema, tables, and roles when the
@@ -1261,6 +1275,8 @@ mod tests {
             "pg_synapse.default_timeout_ms",
             "pg_synapse.default_timeout_seconds",
             "pg_synapse.inline_timeout_ms",
+            "pg_synapse.worker_database",
+            "pg_synapse.worker_interval_ms",
             "pg_synapse.default_max_iterations",
             "pg_synapse.default_cost_cap_usd",
             "pg_synapse.trace_enabled",

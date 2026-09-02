@@ -19,7 +19,13 @@ services:
     # the configuration before ever touching synapse.*. Preloading defines the
     # GUC with its SUPERUSER_ONLY flag at postmaster start, before any session
     # exists. See docs/threat-model.md.
-    command: ["postgres", "-c", "shared_preload_libraries=pg_synapse_pgrx"]
+    command: ["postgres",
+              "-c", "shared_preload_libraries=pg_synapse_pgrx",
+              # Runs queued work in its own process and its own transactions,
+              # so an agent's result no longer depends on the session that
+              # asked for it still being there. Names a database because a
+              # worker connects to exactly one.
+              "-c", "pg_synapse.worker_database=synapse_demo"]
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: synapse_demo

@@ -13,9 +13,13 @@ from public sources.
 
 - **No em-dashes** anywhere: source, docs, tests, commit messages. Use
   period, comma, parens, colon, or "to" for ranges. Grep before committing.
-- **No `unsafe`** in the kernel or plugins. `#![forbid(unsafe_code)]` is set;
-  the pgrx host is the only place `unsafe` could appear (pgrx FFI) and it is
-  currently clean.
+- **No `unsafe`** in the kernel or plugins. The pgrx host is the only place it
+  may appear, uses `#![deny(unsafe_code)]` rather than `forbid`, and has
+  exactly two `#[allow(unsafe_code)]` sites, each justified in a comment where
+  it appears: `spi_executor::with_tool_subtransaction` (drives Postgres
+  internal subtransactions) and `worker::pg_synapse_worker_main` (needs
+  `#[unsafe(no_mangle)]` so Postgres can dlsym the background worker's entry
+  point). Adding a third is a decision to raise, not to make quietly.
 - **Typed errors only.** No `Result<_, String>` or `Result<_, Box<dyn Error>>`
   at any trait boundary. Extend the error enums in
   `crates/pg-synapse-core/src/error.rs`.

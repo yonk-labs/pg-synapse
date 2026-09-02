@@ -116,6 +116,21 @@ pub static MAX_CONCURRENT_RUNS: GucSetting<i32> = GucSetting::<i32>::new(4);
 /// set it and `all_gucs_registered` sees it.)
 pub static SIDECAR_URL: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
 
+/// Database the background worker connects to. Empty means no worker.
+pub static WORKER_DATABASE: GucSetting<Option<CString>> = GucSetting::<Option<CString>>::new(None);
+
+/// How often the background worker looks for queued work, in milliseconds.
+pub static WORKER_INTERVAL_MS: GucSetting<i32> = GucSetting::<i32>::new(1_000);
+
+/// The configured worker database, or `None` when no worker should run.
+pub fn worker_database() -> Option<String> {
+    WORKER_DATABASE
+        .get()
+        .and_then(|c: std::ffi::CString| c.into_string().ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
 /// pgcrypto master key for secret encryption. None means secrets are stored
 /// in cleartext (the v0.1 default).
 ///
@@ -186,6 +201,35 @@ pub fn register_gucs() {
         100,
         i32::MAX,
         GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        c"pg_synapse.worker_database",
+        c"Database the background worker connects to.",
+        c"Empty means no worker runs. Read once at server start, so changing it needs a restart. Requires pg_synapse_pgrx in shared_preload_libraries; a worker cannot be registered from a lazily loaded library.",
+        &WORKER_DATABASE,
+        // Sighup, NOT Postmaster, even though the value is only ever read at
+        // startup and a change needs a restart to matter. Defining a
+        // PGC_POSTMASTER variable is a FATAL error in any session that loads
+        // the library lazily ("cannot create PGC_POSTMASTER variables after
+        // startup"), which would take down every install that does not
+        // preload, not merely fail to start a worker. The context describes
+        // when the variable may be *set*; the restart requirement is the
+        // worker's, and belongs in the description rather than in a setting
+        // that breaks unrelated sessions.
+        GucContext::Sighup,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        c"pg_synapse.worker_interval_ms",
+        c"How often the background worker looks for queued work (milliseconds).",
+        c"Default: 1000.",
+        &WORKER_INTERVAL_MS,
+        50,
+        i32::MAX,
+        GucContext::Sighup,
         GucFlags::default(),
     );
 
