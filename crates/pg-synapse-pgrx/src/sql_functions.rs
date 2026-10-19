@@ -1354,6 +1354,10 @@ END;"#,
             a.components.guardrails = row.get::<String>(3).ok().flatten();
             a.components.memory = row.get::<String>(4).ok().flatten();
             a.components.critique = row.get::<String>(5).ok().flatten();
+            // `memory` is the column as written; `memory_with_lessons` is what
+            // the run actually sees. Keeping them apart lets a tuner write the
+            // raw column back without baking folded lessons into it.
+            let raw_memory = a.components.memory.clone();
             crate::spi_executor::load_harness_extras(client, &mut a)?;
             let total = a
                 .components
@@ -1365,7 +1369,8 @@ END;"#,
                 "system_prompt": a.system_prompt,
                 "soul": a.soul,
                 "guardrails": a.components.guardrails,
-                "memory": a.components.memory,
+                "memory": raw_memory,
+                "memory_with_lessons": a.components.memory,
                 "critique": a.components.critique,
                 "skills": a.components.skills,
                 "tool_hints": a.components.tool_hints,

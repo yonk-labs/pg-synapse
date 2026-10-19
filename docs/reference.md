@@ -101,7 +101,7 @@ tokens_out, cost_usd, duration_ms, tool_calls[]}`; error envelope:
 | `tool_hint_add(agent text, tool_name text, error_pattern text, hint text) -> bigint` | admin | Hint appended to a tool error containing `error_pattern` (case-insensitive substring). NULL agent = all agents; NULL tool = all tools. |
 | `lesson_add(agent text, cue text, lesson text, evidence text, confidence text, source_execution uuid) -> bigint` | admin | Add an active lesson; folded into the agent's memory at load. All three text fields required. |
 | `lesson_retire(lesson_id bigint, superseded_by bigint)` | admin | Stop folding a lesson in; optionally record its successor. |
-| `agent_harness(agent text) -> jsonb` | both | The composed harness: components, skills, hints, always-on block and char count against the cap. |
+| `agent_harness(agent text) -> jsonb` | both | The composed harness: components (`memory` as written, `memory_with_lessons` as the run sees it), skills, hints, always-on block and char count against the cap. |
 | `trajectory(execution_id uuid, trunc int default 10000) -> text` | both | Render a run's messages as `[ACTION]` / `[OBSERVATION]` / `[ERROR]` lines; observations over `trunc` chars are cut with an explicit marker. |
 
 ### Reactive triggers (ADR D14, operator-approved 2026-05-17)

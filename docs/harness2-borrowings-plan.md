@@ -69,7 +69,7 @@ memory and lessons are data the host loads, not kernel logic.
 
 ### Tuner
 
-- [ ] B9 `bench/tune.py`: Propose-Probe-Compose over one scenario.
+- [x] B9 `bench/tune.py`: Propose-Probe-Compose over one scenario.
       k base rollouts, INV and DOM proposals from an improver (Claude CLI
       by default, any OpenAI-compatible endpoint otherwise), one probe
       each, one composed final, selection by `assert.sql` with token count
@@ -80,11 +80,11 @@ memory and lessons are data the host loads, not kernel logic.
 
 ### Docs and defaults
 
-- [ ] B10 Evidence-boundary guardrail text as a shared default in
+- [x] B10 Evidence-boundary guardrail text as a shared default in
       `docs/AGENTS-GUIDE.md` and in the Plexus seeds.
-- [ ] B11 CHANGELOG, `docs/reference.md` (new tables, functions), update
+- [x] B11 CHANGELOG, `docs/reference.md` (new tables, functions), update
       `docs/harness2-comparison.md` status column.
-- [ ] B12 Verification: fmt, clippy, tests green; Plexus image builds;
+- [x] B12 Verification: fmt, clippy, tests green; Plexus image builds;
       live SQL smoke against the image (`trajectory`, `load_skill`, hint
       injection).
 
@@ -162,6 +162,44 @@ next turn and answered correctly: 4 iterations, 2401 tokens in. This is
 the Harness2 claim ("a hook costs nothing until the error happens and
 cannot be skipped") reproduced on a 4B model with no prompt change.
 
+### B9 tuner, first live run
+
+`bench/tune.py` was first run against a3_triage at k=1 with Ollama's
+default 4k context: the 4B model's context overflowed around iteration 20,
+the run hit the 240 s wall clock, and pg_synapse returned a `timed_out`
+outcome with no messages, so the improver saw an empty trajectory and
+correctly answered KEEP_BASE. Two fixes followed: Ollama now serves with
+`OLLAMA_CONTEXT_LENGTH=32768`, and the tuner accepts a scenario path plus
+`--from-agent` so it can start from a live agent's composed harness (the
+Plexus scenario has no `system_prompt.txt`; its harness lives in the
+database). The Plexus k=2 run is recorded in `../plexus/RUN.md`.
+
 ## Gaps and next steps
 
-(Filled in at the end.)
+- **A timed-out run loses its trajectory.** `Runtime::execute_inner` wraps
+  the executor in `tokio::time::timeout`, which drops the future and its
+  message log; the envelope has no `execution_id` and nothing lands in
+  `synapse.messages`. For tuning this is the worst case: the runs that most
+  need diagnosing are the ones with no evidence. Fix: have the executor
+  write messages into a shared buffer the runtime can read after the
+  timeout, or persist incrementally at `trace_level = full`.
+- **Sidecar parity.** The sidecar loads `guardrails`, `memory` and
+  `critique` but not skills, hints or lessons. Same follow-up as
+  `trace_level`.
+- **Schema upgrade.** `schema.sql` is the bootstrap file; the three new
+  columns use `ADD COLUMN IF NOT EXISTS`, but the new tables and functions
+  only arrive with `CREATE EXTENSION`. A proper `pg_synapse_pgrx--0.1.1--0.2.0.sql`
+  upgrade script is needed before release.
+- **Tool hints are substrings, not regexes.** Deliberate (no new kernel
+  dependency), but a `kind` column would let a regex variant land later
+  without a migration.
+- **`bench/tune.py` supports `KIND=sql` scenarios only.** The fs scenarios
+  need a sandbox directory per rollout.
+- **`lesson_add` keeps the source execution as text when the rollout DB
+  was dropped.** The tuner's rollouts live in throwaway databases, so the
+  FK cannot point at them; the evidence string carries the id instead.
+- **Selection is deterministic by design.** The tuner picks by the
+  assertion. That is the right call for a product with a deterministic
+  judge, but it means a harness can overfit to one scenario; a held-out
+  sibling scenario (different `SCALE`, or the a3_triage data under the
+  Plexus prompt) is the check to add.

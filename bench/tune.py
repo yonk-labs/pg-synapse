@@ -272,7 +272,7 @@ class Scenario:
         self.dir = d if d.is_dir() else SCENARIOS / name_or_path
         if not self.dir.is_dir():
             raise SystemExit(f"no scenario at {self.dir}")
-        self.name = self.dir.name if d.is_dir() else name_or_path
+        self.name = (self.dir.parent.name if self.dir.name == "scenario" else self.dir.name) if d.is_dir() else name_or_path
         self.scale = scale
         meta = {}
         if (self.dir / "meta.env").is_file():
@@ -844,7 +844,14 @@ def main() -> int:
             lib.run(f"SELECT synapse.agent_set_component({dollar(args.library_agent)}, '{key}', {dollar(comp[key]) if comp[key] else 'NULL'})")
         for s in comp["skills"]:
             lib.run(f"SELECT synapse.skill_set({dollar(args.library_agent)}, {dollar(s['name'])}, {dollar(s['description'])}, {dollar(s['body'])})")
+        existing = lib.run(
+            f"SELECT coalesce(tool_name, '') || '\t' || error_pattern || '\t' || hint FROM synapse.tool_hints "
+            f"WHERE enabled AND (agent IS NULL OR agent = {dollar(args.library_agent)})"
+        ).splitlines()
         for h in comp["tool_hints"]:
+            key = f"{h['tool_name'] or ''}\t{h['error_pattern']}\t{h['hint']}"
+            if key in existing:
+                continue
             tn = dollar(h["tool_name"]) if h["tool_name"] else "NULL"
             lib.run(f"SELECT synapse.tool_hint_add({dollar(args.library_agent)}, {tn}, {dollar(h['error_pattern'])}, {dollar(h['hint'])})")
         log(f"adopted harness applied to agent {args.library_agent}")
