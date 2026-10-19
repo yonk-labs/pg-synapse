@@ -32,9 +32,17 @@ CREATE TABLE IF NOT EXISTS synapse.agents (
   timeout_ms        BIGINT NOT NULL DEFAULT 60000,
   cost_cap_usd      NUMERIC(12,6),
   trace_level       TEXT CHECK (trace_level IN ('off','error','info','debug','full')),
+  -- Harness components (always-on, see docs/harness2-borrowings-plan.md).
+  guardrails        TEXT,
+  memory            TEXT,
+  critique          TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Upgrade path for schemas created before the harness components existed.
+ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS guardrails TEXT;
+ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS memory     TEXT;
+ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS critique   TEXT;
 
 CREATE TABLE IF NOT EXISTS synapse.llm_profiles (
   name             TEXT PRIMARY KEY,
@@ -129,10 +137,109 @@ CREATE TABLE IF NOT EXISTS synapse.agent_queue (
   finished_at TIMESTAMPTZ
 );
 
+
+-- Harness components beyond the always-on columns on synapse.agents.
+--
+-- skills: on-demand procedures. One trigger line per skill is always-on;
+-- the body enters context only when the model calls `load_skill`.
+CREATE TABLE IF NOT EXISTS synapse.skills (
+  agent       TEXT NOT NULL REFERENCES synapse.agents(name) ON DELETE CASCADE,
+  name        TEXT NOT NULL CHECK (name ~ '^[a-z0-9][a-z0-9_-]*$'),
+  description TEXT NOT NULL,
+  body        TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (agent, name)
+);
+
+-- tool_hints: appended to a failed tool call's message when the error text
+-- contains error_pattern (case-insensitive). agent NULL = every agent;
+-- tool_name NULL = every tool. Agent-specific rows are consulted first.
+CREATE TABLE IF NOT EXISTS synapse.tool_hints (
+  hint_id       BIGSERIAL PRIMARY KEY,
+  agent         TEXT REFERENCES synapse.agents(name) ON DELETE CASCADE,
+  tool_name     TEXT,
+  error_pattern TEXT NOT NULL CHECK (length(trim(error_pattern)) > 0),
+  hint          TEXT NOT NULL,
+  enabled       BOOLEAN NOT NULL DEFAULT true,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- lessons: the experience library. Active lessons are folded into the
+-- agent's memory component at load. Every row cites its evidence; the
+-- execution it came from is kept when it still exists.
+CREATE TABLE IF NOT EXISTS synapse.lessons (
+  lesson_id        BIGSERIAL PRIMARY KEY,
+  agent            TEXT NOT NULL REFERENCES synapse.agents(name) ON DELETE CASCADE,
+  cue              TEXT NOT NULL,
+  lesson           TEXT NOT NULL,
+  evidence         TEXT NOT NULL,
+  confidence       TEXT,
+  source_execution UUID REFERENCES synapse.executions(execution_id) ON DELETE SET NULL,
+  status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','retired')),
+  superseded_by    BIGINT REFERENCES synapse.lessons(lesson_id),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS lessons_agent_active_idx ON synapse.lessons (agent) WHERE status = 'active';
+
+-- Render one execution's messages as a readable trajectory in the
+-- [ACTION] / [OBSERVATION] / [ERROR] grammar (borrowed from harness2), so a
+-- human or an improver model reads what the agent did, not table rows.
+-- Observations longer than p_trunc chars are cut with an explicit marker;
+-- the floor of 10000 is where harness2 found shorter cuts start to read as
+-- solver failures. Pure SQL, so the sidecar's seeded schema has it too.
+CREATE OR REPLACE FUNCTION synapse.trajectory_trunc(t TEXT, n INT)
+RETURNS TEXT LANGUAGE sql IMMUTABLE AS $fn$
+  SELECT CASE
+    WHEN t IS NULL THEN ''
+    WHEN n IS NULL OR n <= 0 OR length(t) <= n THEN t
+    ELSE left(t, n) || E'\n[... observation truncated by the renderer at ' || n
+         || ' chars; ' || (length(t) - n) || ' more not shown. This cut is ours, not the agent''s.]'
+  END
+$fn$;
+
+CREATE OR REPLACE FUNCTION synapse.trajectory(p_execution_id UUID, p_trunc INT DEFAULT 10000)
+RETURNS TEXT LANGUAGE sql STABLE AS $fn$
+  WITH header AS (
+    SELECT '[EXECUTION] ' || e.execution_id || ' agent=' || e.agent_name
+           || ' status=' || e.status
+           || ' tokens_in=' || e.tokens_in || ' tokens_out=' || e.tokens_out
+           || ' duration_ms=' || coalesce(e.duration_ms::text, '?') AS line
+    FROM synapse.executions e WHERE e.execution_id = p_execution_id
+  ),
+  body AS (
+    SELECT m.seq,
+      CASE m.role
+        WHEN 'system' THEN '[SYSTEM]' || E'\n' || coalesce(m.content, '')
+        WHEN 'user' THEN '[USER]' || E'\n' || coalesce(m.content, '')
+        WHEN 'assistant' THEN
+          CASE WHEN m.tool_name IS NOT NULL
+               THEN '[ACTION] ' || m.tool_name || ' ' || coalesce(m.tool_input::text, '{}')
+               ELSE '[ASSISTANT]' || E'\n' || coalesce(m.content, '')
+          END
+        WHEN 'tool' THEN
+          CASE WHEN coalesce(m.content, '') LIKE 'ERROR:%'
+                 OR (m.tool_output IS NOT NULL AND jsonb_typeof(m.tool_output) = 'object'
+                     AND m.tool_output ? 'error')
+               THEN '[ERROR] ' || coalesce(m.tool_name, '?') || E'\n'
+               ELSE '[OBSERVATION] ' || coalesce(m.tool_name, '?') || E'\n'
+          END || synapse.trajectory_trunc(coalesce(m.content, m.tool_output::text, ''), p_trunc)
+        ELSE '[' || upper(m.role) || ']' || E'\n' || coalesce(m.content, '')
+      END AS line
+    FROM synapse.messages m WHERE m.execution_id = p_execution_id
+  )
+  SELECT coalesce((SELECT line FROM header), '[EXECUTION] ' || p_execution_id || ' (no executions row)')
+         || E'\n\n'
+         || coalesce((SELECT string_agg(line, E'\n\n' ORDER BY seq) FROM body), '(no messages persisted; raise trace_level)')
+$fn$;
+
 GRANT USAGE ON SCHEMA synapse TO synapse_admin;
 GRANT USAGE ON SCHEMA synapse TO synapse_user;
 GRANT SELECT ON synapse.executions TO synapse_user;
 GRANT SELECT ON synapse.messages   TO synapse_user;
 GRANT SELECT ON synapse.traces     TO synapse_user;
 GRANT SELECT ON synapse.agent_queue TO synapse_user;
+GRANT SELECT ON synapse.skills     TO synapse_user;
+GRANT SELECT ON synapse.tool_hints TO synapse_user;
+GRANT SELECT ON synapse.lessons    TO synapse_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_admin;

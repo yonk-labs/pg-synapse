@@ -24,6 +24,22 @@ use crate::types::{ExecutionContext, ExecutorOutcome, OutcomeStatus};
 /// Token a critique starts with (or contains) to signal acceptance.
 pub const ACCEPT_TOKEN: &str = "[ACCEPT]";
 
+/// Default critique rubric. The ordering is borrowed from the Harness2
+/// selector prompt: delivery first, then conformance to the requested form,
+/// fidelity to the source material, internal consistency, operational
+/// fitness for whoever consumes the answer, and finish. An agent can replace
+/// it through the `critique` harness component.
+pub const DEFAULT_CRITIQUE: &str = "Critique the previous answer, in this order:\n\
+1. DELIVERY: is everything the request asked for present, in the requested form?\n\
+2. CONFORMANCE: does it follow the stated constraints, format and allowed values exactly?\n\
+3. FIDELITY: check every claim, figure and name against the source material and tool \
+results in this conversation; reject invented specifics.\n\
+4. INTERNAL CONSISTENCY: do totals, counts and cross-references agree with each other?\n\
+5. OPERATIONAL FITNESS: can the intended reader or system act on it without redoing work?\n\
+6. FINISH: no placeholders, no trailing questions, no unexplained omissions.\n\
+If it is acceptable as-is, reply with the literal token [ACCEPT] followed by a brief \
+confirmation. Otherwise, list concrete problems and what to change.";
+
 /// Three-phase reasoning executor: generate, critique, revise.
 ///
 /// Construct via [`ReflectionExecutor::default`] (3 revision rounds) or set
@@ -72,12 +88,14 @@ impl Executor for ReflectionExecutor {
             }
 
             // Phase 2: critique using the judge provider.
-            harness.push_user_message(format!(
-                "Critique the previous answer for accuracy and completeness. \
-                 If it is acceptable as-is, reply with the literal token {ACCEPT_TOKEN} \
-                 followed by a brief confirmation. Otherwise, list concrete \
-                 problems and what to change."
-            ));
+            let critique_prompt = ctx
+                .harness
+                .critique
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(DEFAULT_CRITIQUE);
+            harness.push_user_message(critique_prompt.to_owned());
             let critique = match harness.one_llm_turn_with(judge.clone()).await? {
                 TurnResult::AssistantText(t) => t,
                 TurnResult::ToolCalls(_) => String::new(),
@@ -143,6 +161,7 @@ mod tests {
             caller_role: None,
             trace_level: TraceLevel::default(),
             interrupt_check: None,
+            harness: Default::default(),
         }
     }
 

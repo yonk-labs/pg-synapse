@@ -15,11 +15,14 @@ use async_trait::async_trait;
 use pgrx::JsonB;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
+use pgrx::spi::SpiClient;
 use serde_json::Value;
 
 use pg_synapse_core::error::{RuntimeError, ToolError};
 use pg_synapse_core::runtime::ProfileSource;
-use pg_synapse_core::types::{AgentRow, EmbeddingProfileRow, LlmProfileRow};
+use pg_synapse_core::types::{
+    AgentRow, EmbeddingProfileRow, Harness, LlmProfileRow, Skill, ToolHint,
+};
 use pg_synapse_tools_sql::SqlExecutor;
 
 /// SQL executor that runs queries via SPI from inside a Postgres backend.
@@ -384,7 +387,7 @@ impl ProfileSource for SpiProfileSource {
         Spi::connect(|client| -> Result<Vec<AgentRow>, RuntimeError> {
             let table = client
                 .select(
-                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms, cost_cap_usd, trace_level FROM synapse.agents",
+                    "SELECT name, system_prompt, soul, executor_name, llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools, max_iterations, timeout_ms, cost_cap_usd, trace_level, guardrails, memory, critique FROM synapse.agents",
                     None,
                     &[],
                 )
@@ -424,9 +427,18 @@ impl ProfileSource for SpiProfileSource {
                         .flatten()
                         .and_then(|n| f64::try_from(n).ok()),
                     trace_level: row.get::<String>(13).ok().flatten(),
+                    components: Harness {
+                        guardrails: row.get::<String>(14).ok().flatten(),
+                        memory: row.get::<String>(15).ok().flatten(),
+                        critique: row.get::<String>(16).ok().flatten(),
+                        ..Default::default()
+                    },
                 };
                 crate::schema_guc::apply_guc_fallbacks(&mut agent);
                 out.push(agent);
+            }
+            for agent in out.iter_mut() {
+                load_harness_extras(client, agent).map_err(RuntimeError::Config)?;
             }
             Ok(out)
         })
@@ -463,4 +475,79 @@ impl ProfileSource for SpiProfileSource {
             Ok(out)
         })
     }
+}
+
+/// Header the host writes above the lessons it folds into the memory
+/// component. Lessons are host data (the experience library); the kernel
+/// only ever sees the composed memory text.
+pub(crate) const LESSONS_HEADER: &str =
+    "Lessons from earlier runs of this agent (each cites the execution it came from):";
+
+/// Load the on-demand and data-driven harness components for one agent:
+/// skills, tool hints (agent-specific first, then global) and active lessons
+/// folded into `components.memory`.
+pub(crate) fn load_harness_extras(
+    client: &SpiClient<'_>,
+    agent: &mut AgentRow,
+) -> Result<(), String> {
+    let name_arg = || DatumWithOid::from(agent.name.clone());
+
+    let skills = client
+        .select(
+            "SELECT name, description, body FROM synapse.skills WHERE agent = $1 ORDER BY name",
+            None,
+            &[name_arg()],
+        )
+        .map_err(|e| e.to_string())?;
+    let mut out_skills = Vec::new();
+    for row in skills {
+        out_skills.push(Skill {
+            name: row.get::<String>(1).ok().flatten().unwrap_or_default(),
+            description: row.get::<String>(2).ok().flatten().unwrap_or_default(),
+            body: row.get::<String>(3).ok().flatten().unwrap_or_default(),
+        });
+    }
+    agent.components.skills = out_skills;
+
+    let hints = client
+        .select(
+            "SELECT tool_name, error_pattern, hint FROM synapse.tool_hints \
+             WHERE enabled AND (agent = $1 OR agent IS NULL) \
+             ORDER BY (agent IS NULL), hint_id",
+            None,
+            &[name_arg()],
+        )
+        .map_err(|e| e.to_string())?;
+    let mut out_hints = Vec::new();
+    for row in hints {
+        out_hints.push(ToolHint {
+            tool_name: row.get::<String>(1).ok().flatten(),
+            error_pattern: row.get::<String>(2).ok().flatten().unwrap_or_default(),
+            hint: row.get::<String>(3).ok().flatten().unwrap_or_default(),
+        });
+    }
+    agent.components.tool_hints = out_hints;
+
+    let lessons = client
+        .select(
+            "SELECT cue, lesson FROM synapse.lessons WHERE agent = $1 AND status = 'active' \
+             ORDER BY lesson_id",
+            None,
+            &[name_arg()],
+        )
+        .map_err(|e| e.to_string())?;
+    let mut lines: Vec<String> = Vec::new();
+    for row in lessons {
+        let cue = row.get::<String>(1).ok().flatten().unwrap_or_default();
+        let lesson = row.get::<String>(2).ok().flatten().unwrap_or_default();
+        lines.push(format!("- When {}: {}", cue.trim(), lesson.trim()));
+    }
+    if !lines.is_empty() {
+        let block = format!("{LESSONS_HEADER}\n{}", lines.join("\n"));
+        agent.components.memory = Some(match agent.components.memory.as_deref() {
+            Some(m) if !m.trim().is_empty() => format!("{}\n\n{block}", m.trim_end()),
+            _ => block,
+        });
+    }
+    Ok(())
 }

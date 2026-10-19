@@ -98,6 +98,7 @@ async fn live_agent_run_completes_within_budget() {
             timeout_ms: 60_000,
             cost_cap_usd: None,
             trace_level: None,
+            components: Default::default(),
         });
 
     let runtime = Runtime::builder()

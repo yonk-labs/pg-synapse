@@ -91,6 +91,19 @@ tokens_out, cost_usd, duration_ms, tool_calls[]}`; error envelope:
 | `embed` | `(text text, profile_name text) -> double precision[]` | Embed text with the named (or default) profile; stores nothing |
 | `version` | `() -> text` | Extension package version |
 
+### Harness components (branch `harness2-borrowings`)
+
+| Function | Role | Purpose |
+| --- | --- | --- |
+| `agent_set_component(agent text, component text, value text)` | admin | Set `system_prompt`, `soul`, `guardrails`, `memory` or `critique`. NULL clears (not system_prompt). Enforces the 24,000-char always-on cap. |
+| `skill_set(agent text, name text, description text, body text)` | admin | UPSERT an on-demand skill. `description` becomes the always-on trigger line; `body` loads via the `load_skill` tool. |
+| `skill_drop(agent text, name text)` | admin | Delete a skill. |
+| `tool_hint_add(agent text, tool_name text, error_pattern text, hint text) -> bigint` | admin | Hint appended to a tool error containing `error_pattern` (case-insensitive substring). NULL agent = all agents; NULL tool = all tools. |
+| `lesson_add(agent text, cue text, lesson text, evidence text, confidence text, source_execution uuid) -> bigint` | admin | Add an active lesson; folded into the agent's memory at load. All three text fields required. |
+| `lesson_retire(lesson_id bigint, superseded_by bigint)` | admin | Stop folding a lesson in; optionally record its successor. |
+| `agent_harness(agent text) -> jsonb` | both | The composed harness: components, skills, hints, always-on block and char count against the cap. |
+| `trajectory(execution_id uuid, trunc int default 10000) -> text` | both | Render a run's messages as `[ACTION]` / `[OBSERVATION]` / `[ERROR]` lines; observations over `trunc` chars are cut with an explicit marker. |
+
 ### Reactive triggers (ADR D14, operator-approved 2026-05-17)
 
 These functions extend the `synapse.*` surface beyond v0.1.1 N2.2 for
@@ -108,7 +121,7 @@ reactive trigger support, approved by operator decision recorded 2026-05-17
 
 | Table | Columns |
 | --- | --- |
-| `agents` | name (PK), system_prompt, soul, executor_name (def `conversation`), llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools (text[]), max_iterations (def 10), timeout_ms (def 60000), cost_cap_usd, created_at, updated_at |
+| `agents` | name (PK), system_prompt, soul, executor_name (def `conversation`), llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools (text[]), max_iterations (def 10), timeout_ms (def 60000), cost_cap_usd, trace_level, guardrails, memory, critique, created_at, updated_at |
 | `llm_profiles` | name (PK), provider, model, api_key_secret, base_url, params (jsonb), created_at, updated_at |
 | `embedding_profiles` | name (PK), provider, model, dimension, api_key_secret, base_url, params (jsonb), created_at, updated_at |
 | `secrets` | name (PK), value, created_at, updated_at |
@@ -117,6 +130,9 @@ reactive trigger support, approved by operator decision recorded 2026-05-17
 | `messages` | execution_id (FK), seq, role, content, tool_call_id, tool_name, tool_input (jsonb), tool_output (jsonb), ts; PK (execution_id, seq) |
 | `traces` | execution_id (FK), seq, event, payload (jsonb), ts; PK (execution_id, seq) |
 | `agent_queue` | job_id (PK uuid, default gen_random_uuid()), agent (text), input (text), status (text, CHECK IN ('queued','running','done','error'), default 'queued'), result (jsonb), error (text), source (text, e.g. 'trigger:schema.table'), enqueued_at (timestamptz), started_at (timestamptz), finished_at (timestamptz) |
+| `skills` | agent (FK), name, description (always-on trigger), body (on demand), created_at, updated_at; PK (agent, name) |
+| `tool_hints` | hint_id, agent (nullable FK), tool_name (nullable), error_pattern, hint, enabled, created_at |
+| `lessons` | lesson_id, agent (FK), cue, lesson, evidence, confidence, source_execution (nullable FK), status (active/retired), superseded_by, created_at |
 
 Roles: `synapse_admin` (full DML on all tables), `synapse_user` (SELECT on
 `executions`, `messages`, `traces`, `agent_queue`). Both `NOLOGIN`.

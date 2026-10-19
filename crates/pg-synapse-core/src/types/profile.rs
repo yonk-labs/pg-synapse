@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::harness::Harness;
+
 /// One row in `pg_synapse.llm_profiles`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LlmProfileRow {
@@ -73,6 +75,10 @@ pub struct AgentRow {
     pub cost_cap_usd: Option<f64>,
     /// Per-agent trace-level override. None means inherit the global GUC.
     pub trace_level: Option<String>,
+    /// Harness components (guardrails, memory, skills, tool hints). Hosts
+    /// load these from their own tables; `Default` is the pre-harness agent.
+    #[serde(default)]
+    pub components: Harness,
 }
 
 #[cfg(test)]
@@ -126,6 +132,7 @@ mod tests {
             timeout_ms: 60_000,
             cost_cap_usd: Some(0.50),
             trace_level: None,
+            components: Default::default(),
         };
         let s = serde_json::to_string(&a).unwrap();
         let back: AgentRow = serde_json::from_str(&s).unwrap();

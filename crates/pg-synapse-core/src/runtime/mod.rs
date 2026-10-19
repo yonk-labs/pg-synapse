@@ -25,7 +25,7 @@ use crate::Executor;
 use crate::LlmProvider;
 use crate::error::{ProviderError, RuntimeError};
 use crate::plugin::Registry;
-use crate::tool::ToolRegistry;
+use crate::tool::{LoadSkillTool, ToolRegistry};
 use crate::types::{
     AgentRow, EmbeddingProfileRow, EmbeddingVector, ExecutionContext, ExecutorOutcome,
     LlmProfileRow, OutcomeStatus,
@@ -163,12 +163,17 @@ impl Runtime {
                 ))
             })?;
 
-        let tools = self.resolve_tools(&agent.tools);
+        let mut tools = self.resolve_tools(&agent.tools);
+        // Skills are on-demand: expose the kernel loader only when the agent
+        // has at least one, so agents without skills see no new tool.
+        if !agent.components.skills.is_empty() {
+            tools.add(LoadSkillTool::new(agent.components.skills.clone()));
+        }
 
         // Pre-flight: reject early if the agent needs tool_use but the
         // provider does not support it. Avoids wasting a full LLM call on
         // an executor loop that will fail on the first tool-call response.
-        if !agent.tools.is_empty() && !llm.capabilities().tool_use {
+        if (!agent.tools.is_empty() || !tools.is_empty()) && !llm.capabilities().tool_use {
             return Err(RuntimeError::Config(format!(
                 "agent '{}' has tools but its LLM provider ('{}') does not support tool_use",
                 agent_name,
@@ -200,6 +205,7 @@ impl Runtime {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_default(),
             interrupt_check: self.interrupt_check.clone(),
+            harness: agent.components.clone(),
         };
 
         // Enforce the per-agent wall-clock budget here, at the single
@@ -472,6 +478,7 @@ mod tests {
             timeout_ms: 30_000,
             cost_cap_usd: None,
             trace_level: None,
+            components: Default::default(),
         }
     }
 

@@ -231,20 +231,39 @@ render_seed() {
     sed "s/{{SCALE}}/$scale/g" "$tmpl"
 }
 
-# Check if (model, scenario, scale) is already in results.jsonl.
+# Fingerprint of the harness a scenario runs under: sha1 over the files that
+# shape the agent (system prompt, task, meta). A changed prompt changes the
+# sha, so a stale row never satisfies the resume check. Borrowed from
+# harness2's runmark.fingerprint.
+harness_sha() {
+    local scenario_dir="$1"
+    python3 - "$scenario_dir" <<'PYEOF'
+import hashlib, sys, pathlib
+d = pathlib.Path(sys.argv[1]); h = hashlib.sha1()
+for name in ("system_prompt.txt", "task.txt", "meta.env"):
+    p = d / name
+    h.update(name.encode()); h.update(b"\0")
+    h.update(p.read_bytes() if p.is_file() else b"<absent>"); h.update(b"\0")
+print(h.hexdigest()[:12])
+PYEOF
+}
+
+# Check if (model, scenario, scale, harness_sha) is already in results.jsonl.
+# Rows written before fingerprinting carry no sha and never match.
 already_done() {
-    local mkey="$1" scenario="$2" scale="$3"
+    local mkey="$1" scenario="$2" scale="$3" sha="$4"
     if [[ ! -f "$RESULTS_JSONL" ]]; then return 1; fi
     python3 -c "
 import json, sys
-mkey, scenario, scale = sys.argv[1], sys.argv[2], int(sys.argv[3])
+mkey, scenario, scale, sha = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 with open('$RESULTS_JSONL') as f:
     for line in f:
         row = json.loads(line)
-        if row.get('model')==mkey and row.get('scenario')==scenario and row.get('scale')==scale:
+        if (row.get('model')==mkey and row.get('scenario')==scenario
+                and row.get('scale')==scale and row.get('harness_sha')==sha):
             sys.exit(0)
 sys.exit(1)
-" "$mkey" "$scenario" "$scale" 2>/dev/null
+" "$mkey" "$scenario" "$scale" "$sha" 2>/dev/null
 }
 
 # Append a result row to results.jsonl.
@@ -412,8 +431,9 @@ for MKEY in "${MODEL_KEYS[@]}"; do
         fi
         log "  Kind: $SCENARIO_KIND  Tools: $SCENARIO_TOOLS  MaxIter: $SCENARIO_MAX_ITER"
 
-        if [[ $OPT_FORCE -eq 0 ]] && already_done "$MKEY" "$SCENARIO" "$OPT_SCALE"; then
-            log "  Already done ($MKEY/$SCENARIO/scale=$OPT_SCALE); skipping. Use --force to re-run."
+        HARNESS_SHA="$(harness_sha "$SCENARIO_DIR")"
+        if [[ $OPT_FORCE -eq 0 ]] && already_done "$MKEY" "$SCENARIO" "$OPT_SCALE" "$HARNESS_SHA"; then
+            log "  Already done ($MKEY/$SCENARIO/scale=$OPT_SCALE/harness=$HARNESS_SHA); skipping. Use --force to re-run."
             continue
         fi
 
@@ -682,10 +702,11 @@ print('true' if tcs else 'false')
             "$TASK_PASSED" "$TOOL_EMITTED" \
             "${TOKENS_IN:-0}" "${TOKENS_OUT:-0}" \
             "${LATENCY_MS:-0}" "${ITERATIONS:-0}" \
-            "${ERROR:-}" "$INFRA_ERROR" "$RUN_DATE" <<'PYEOF'
+            "${ERROR:-}" "$INFRA_ERROR" "$RUN_DATE" "${HARNESS_SHA:-}" <<'PYEOF'
 import json, sys
 (_, mkey, scenario, scale, kind, task_passed, tool_emitted,
- tokens_in, tokens_out, latency_ms, iterations, error, infra_error, run_date) = sys.argv
+ tokens_in, tokens_out, latency_ms, iterations, error, infra_error, run_date,
+ harness_sha) = sys.argv
 row = {
     'model': mkey,
     'scenario': scenario,
@@ -700,6 +721,7 @@ row = {
     'error': error[:300],
     'infra_error': infra_error == 'true',
     'run_date': run_date,
+    'harness_sha': harness_sha,
 }
 print(json.dumps(row))
 PYEOF

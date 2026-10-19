@@ -7,7 +7,9 @@ use std::sync::Arc;
 use crate::error::ToolError;
 use crate::types::{ToolCtx, ToolOutput, ToolSchema};
 
+pub mod builtin;
 pub mod mcp_client;
+pub use builtin::{LOAD_SKILL_TOOL, LoadSkillTool};
 pub use mcp_client::{McpClient, McpServerInfo, McpTool, McpToolDef};
 
 /// A function the agent can call. Implementations describe their input via

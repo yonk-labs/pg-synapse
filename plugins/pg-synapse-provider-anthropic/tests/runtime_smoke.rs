@@ -34,6 +34,7 @@ async fn runtime_builder_accepts_anthropic_plugin() {
             timeout_ms: 30_000,
             cost_cap_usd: None,
             trace_level: None,
+            components: Default::default(),
         });
 
     let runtime = Runtime::builder()

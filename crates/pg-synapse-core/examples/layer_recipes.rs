@@ -301,6 +301,7 @@ fn ctx(llm: Arc<dyn LlmProvider>, input: &str) -> ExecutionContext {
         caller_role: None,
         trace_level: pg_synapse_core::types::TraceLevel::default(),
         interrupt_check: None,
+        harness: Default::default(),
     }
 }
 

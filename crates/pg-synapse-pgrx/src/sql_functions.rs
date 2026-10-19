@@ -206,6 +206,14 @@ pub(crate) mod synapse {
                     .unwrap_or_default();
                 let tl = resolve_trace_level(agent_name);
                 let _ = log_execution(&o, agent_name, input, caller_role.as_deref(), tl);
+                // `iterations` = LLM turns = assistant-role messages. The kernel
+                // keeps no separate counter; this is exact for all three
+                // reference executors. The bench reads this key.
+                let iterations = o
+                    .messages
+                    .iter()
+                    .filter(|m| matches!(m.role, pg_synapse_core::types::Role::Assistant))
+                    .count();
                 JsonB(json!({
                     "execution_id": exec_id,
                     "output": o.output,
@@ -214,6 +222,7 @@ pub(crate) mod synapse {
                     "tokens_out": o.tokens_out,
                     "cost_usd": o.cost_usd,
                     "duration_ms": o.duration_ms,
+                    "iterations": iterations,
                     "tool_calls": o.tool_calls.iter().map(|tc| json!({
                         "name": tc.name,
                         "args": tc.args,
@@ -1034,6 +1043,340 @@ END;"#,
             Ok(Some(v)) => JsonB(v),
             Ok(None) => JsonB(json!({ "status": "not_found" })),
             Err(e) => JsonB(json!({ "error": e, "status": "errored" })),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Harness components (harness2-borrowings). See
+    // docs/harness2-borrowings-plan.md. Writes are admin-only (grants.sql);
+    // every write re-checks the always-on cap and rebuilds the kernel.
+    // ------------------------------------------------------------------
+
+    /// Always-on characters an agent would have after `component` is set to
+    /// `value`: system prompt + soul + guardrails + memory + skill trigger
+    /// lines + folded lessons. Mirrors what `LoopHarness::seed_messages`
+    /// composes, by building the same `Harness` the host would load.
+    fn always_on_after(
+        agent: &str,
+        component: Option<&str>,
+        value: Option<&str>,
+    ) -> Result<usize, String> {
+        use pg_synapse_core::types::AgentRow;
+        Spi::connect(|client| -> Result<usize, String> {
+            let table = client
+                .select(
+                    "SELECT system_prompt, soul, guardrails, memory FROM synapse.agents WHERE name = $1",
+                    None,
+                    &[DatumWithOid::from(agent.to_string())],
+                )
+                .map_err(|e| e.to_string())?;
+            let row = match table.into_iter().next() {
+                Some(r) => r,
+                None => return Err(format!("agent '{agent}' does not exist")),
+            };
+            let mut a = AgentRow {
+                name: agent.to_string(),
+                system_prompt: row.get::<String>(1).ok().flatten().unwrap_or_default(),
+                soul: row.get::<String>(2).ok().flatten(),
+                ..Default::default()
+            };
+            a.components.guardrails = row.get::<String>(3).ok().flatten();
+            a.components.memory = row.get::<String>(4).ok().flatten();
+            match component {
+                Some("system_prompt") => a.system_prompt = value.unwrap_or("").to_string(),
+                Some("soul") => a.soul = value.map(str::to_string),
+                Some("guardrails") => a.components.guardrails = value.map(str::to_string),
+                Some("memory") => a.components.memory = value.map(str::to_string),
+                _ => {}
+            }
+            crate::spi_executor::load_harness_extras(client, &mut a)?;
+            Ok(a.components
+                .total_always_on_chars(&a.system_prompt, a.soul.as_deref()))
+        })
+    }
+
+    fn enforce_always_on_cap(agent: &str, total: usize) {
+        use pg_synapse_core::types::ALWAYS_ON_MAX_CHARS;
+        if total > ALWAYS_ON_MAX_CHARS {
+            pgrx::error!(
+                "always-on text for agent '{}' would be {} chars; the cap is {}. Every always-on \
+                 character is paid for on every turn: move procedure into a skill (synapse.skill_set) \
+                 or cut prose.",
+                agent,
+                total,
+                ALWAYS_ON_MAX_CHARS
+            );
+        }
+    }
+
+    /// Set one always-on harness component on an agent: `system_prompt`,
+    /// `soul`, `guardrails`, `memory` or `critique`. NULL clears it (except
+    /// `system_prompt`, which must stay non-empty). Enforces the always-on cap.
+    #[pg_extern(security_definer)]
+    pub fn agent_set_component(agent: &str, component: &str, value: Option<&str>) {
+        let column = match component {
+            "system_prompt" | "soul" | "guardrails" | "memory" | "critique" => component,
+            other => pgrx::error!(
+                "unknown component '{}'; use one of: system_prompt, soul, guardrails, memory, critique",
+                other
+            ),
+        };
+        if column == "system_prompt" && value.map(|v| v.trim().is_empty()).unwrap_or(true) {
+            pgrx::error!("system_prompt must not be empty");
+        }
+        if column != "critique" {
+            match always_on_after(agent, Some(column), value) {
+                Ok(total) => enforce_always_on_cap(agent, total),
+                Err(e) => pgrx::error!("{}", e),
+            }
+        }
+        let args: Vec<DatumWithOid<'_>> = vec![
+            match value {
+                Some(v) => DatumWithOid::from(v.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+            DatumWithOid::from(agent.to_string()),
+        ];
+        let sql =
+            format!("UPDATE synapse.agents SET {column} = $1, updated_at = now() WHERE name = $2");
+        let updated = Spi::connect_mut(|client| {
+            client
+                .update(&sql, None, &args)
+                .map(|t| t.len())
+                .unwrap_or(0)
+        });
+        if updated == 0 {
+            pgrx::error!("agent '{}' does not exist", agent);
+        }
+        rebuild_kernel();
+    }
+
+    /// UPSERT an on-demand skill. `description` becomes the always-on trigger
+    /// line ("When <description>, load the `<name>` skill."); `body` is loaded
+    /// only when the model calls `load_skill`. Enforces the always-on cap.
+    #[pg_extern(security_definer)]
+    pub fn skill_set(agent: &str, name: &str, description: &str, body: &str) {
+        if description.trim().is_empty() || body.trim().is_empty() {
+            pgrx::error!("skill description and body must not be empty");
+        }
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(agent.to_string()),
+            DatumWithOid::from(name.to_string()),
+            DatumWithOid::from(description.to_string()),
+            DatumWithOid::from(body.to_string()),
+        ];
+        if let Err(e) = Spi::run_with_args(
+            "INSERT INTO synapse.skills (agent, name, description, body) VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (agent, name) DO UPDATE SET description = EXCLUDED.description, \
+             body = EXCLUDED.body, updated_at = now()",
+            &args,
+        ) {
+            pgrx::error!("skill_set failed: {}", e);
+        }
+        match always_on_after(agent, None, None) {
+            Ok(total) => {
+                if total > pg_synapse_core::types::ALWAYS_ON_MAX_CHARS {
+                    // Roll the write back by deleting what we just wrote, then
+                    // raise. (The error aborts the transaction anyway; this
+                    // keeps the message accurate for autocommit callers.)
+                    let _ = Spi::run_with_args(
+                        "DELETE FROM synapse.skills WHERE agent = $1 AND name = $2",
+                        &[
+                            DatumWithOid::from(agent.to_string()),
+                            DatumWithOid::from(name.to_string()),
+                        ],
+                    );
+                    enforce_always_on_cap(agent, total);
+                }
+            }
+            Err(e) => pgrx::error!("{}", e),
+        }
+        rebuild_kernel();
+    }
+
+    /// Delete a skill.
+    #[pg_extern(security_definer)]
+    pub fn skill_drop(agent: &str, name: &str) {
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(agent.to_string()),
+            DatumWithOid::from(name.to_string()),
+        ];
+        let _ = Spi::run_with_args(
+            "DELETE FROM synapse.skills WHERE agent = $1 AND name = $2",
+            &args,
+        );
+        rebuild_kernel();
+    }
+
+    /// Add a tool-error hint. `agent` NULL applies to every agent; `tool_name`
+    /// NULL applies to every tool. `error_pattern` is a case-insensitive
+    /// substring of the error text. Returns the new hint_id.
+    #[pg_extern(security_definer)]
+    pub fn tool_hint_add(
+        agent: Option<&str>,
+        tool_name: Option<&str>,
+        error_pattern: &str,
+        hint: &str,
+    ) -> i64 {
+        if error_pattern.trim().is_empty() || hint.trim().is_empty() {
+            pgrx::error!("error_pattern and hint must not be empty");
+        }
+        let args: Vec<DatumWithOid<'_>> = vec![
+            match agent {
+                Some(a) => DatumWithOid::from(a.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+            match tool_name {
+                Some(t) => DatumWithOid::from(t.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+            DatumWithOid::from(error_pattern.to_string()),
+            DatumWithOid::from(hint.to_string()),
+        ];
+        let id = Spi::get_one_with_args::<i64>(
+            "INSERT INTO synapse.tool_hints (agent, tool_name, error_pattern, hint) \
+             VALUES ($1, $2, $3, $4) RETURNING hint_id",
+            &args,
+        );
+        let id = match id {
+            Ok(Some(i)) => i,
+            Ok(None) => pgrx::error!("tool_hint_add returned no id"),
+            Err(e) => pgrx::error!("tool_hint_add failed: {}", e),
+        };
+        rebuild_kernel();
+        id
+    }
+
+    /// Record a lesson in the experience library. `cue` is the shape of
+    /// situation it applies to, `lesson` the operation on the harness,
+    /// `evidence` the executions and trajectory moments it rests on. Active
+    /// lessons are folded into the agent's memory at load, so this enforces
+    /// the always-on cap. Returns the lesson_id.
+    #[pg_extern(security_definer)]
+    pub fn lesson_add(
+        agent: &str,
+        cue: &str,
+        lesson: &str,
+        evidence: &str,
+        confidence: Option<&str>,
+        source_execution: Option<pgrx::Uuid>,
+    ) -> i64 {
+        if cue.trim().is_empty() || lesson.trim().is_empty() || evidence.trim().is_empty() {
+            pgrx::error!(
+                "cue, lesson and evidence must all be non-empty; a lesson without evidence is a guess"
+            );
+        }
+        let args: Vec<DatumWithOid<'_>> = vec![
+            DatumWithOid::from(agent.to_string()),
+            DatumWithOid::from(cue.to_string()),
+            DatumWithOid::from(lesson.to_string()),
+            DatumWithOid::from(evidence.to_string()),
+            match confidence {
+                Some(c) => DatumWithOid::from(c.to_string()),
+                None => DatumWithOid::null::<String>(),
+            },
+            match source_execution {
+                Some(u) => DatumWithOid::from(u),
+                None => DatumWithOid::null::<pgrx::Uuid>(),
+            },
+        ];
+        let id = Spi::get_one_with_args::<i64>(
+            "INSERT INTO synapse.lessons (agent, cue, lesson, evidence, confidence, source_execution) \
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING lesson_id",
+            &args,
+        );
+        let id = match id {
+            Ok(Some(i)) => i,
+            Ok(None) => pgrx::error!("lesson_add returned no id"),
+            Err(e) => pgrx::error!("lesson_add failed: {}", e),
+        };
+        match always_on_after(agent, None, None) {
+            Ok(total) => enforce_always_on_cap(agent, total),
+            Err(e) => pgrx::error!("{}", e),
+        }
+        rebuild_kernel();
+        id
+    }
+
+    /// Retire a lesson (it stops being folded into memory). Optionally name
+    /// the lesson that supersedes it, so the library keeps its history.
+    #[pg_extern(security_definer)]
+    pub fn lesson_retire(lesson_id: i64, superseded_by: Option<i64>) {
+        let args: Vec<DatumWithOid<'_>> = vec![
+            match superseded_by {
+                Some(s) => DatumWithOid::from(s),
+                None => DatumWithOid::null::<i64>(),
+            },
+            DatumWithOid::from(lesson_id),
+        ];
+        let updated = Spi::connect_mut(|client| {
+            client
+                .update(
+                    "UPDATE synapse.lessons SET status = 'retired', superseded_by = $1 WHERE lesson_id = $2",
+                    None,
+                    &args,
+                )
+                .map(|t| t.len())
+                .unwrap_or(0)
+        });
+        if updated == 0 {
+            pgrx::error!("lesson {} does not exist", lesson_id);
+        }
+        rebuild_kernel();
+    }
+
+    /// The composed harness an agent runs under, as JSON: always-on text with
+    /// its character count against the cap, skills, hints and active lessons.
+    /// What the tuner and the demo UI read.
+    #[pg_extern(security_definer)]
+    pub fn agent_harness(agent: &str) -> JsonB {
+        use pg_synapse_core::types::{ALWAYS_ON_MAX_CHARS, AgentRow};
+        let built = Spi::connect(|client| -> Result<serde_json::Value, String> {
+            let table = client
+                .select(
+                    "SELECT system_prompt, soul, guardrails, memory, critique, tools, executor_name FROM synapse.agents WHERE name = $1",
+                    None,
+                    &[DatumWithOid::from(agent.to_string())],
+                )
+                .map_err(|e| e.to_string())?;
+            let row = match table.into_iter().next() {
+                Some(r) => r,
+                None => return Err(format!("agent '{agent}' does not exist")),
+            };
+            let mut a = AgentRow {
+                name: agent.to_string(),
+                system_prompt: row.get::<String>(1).ok().flatten().unwrap_or_default(),
+                soul: row.get::<String>(2).ok().flatten(),
+                tools: row.get::<Vec<String>>(6).ok().flatten().unwrap_or_default(),
+                executor_name: row.get::<String>(7).ok().flatten().unwrap_or_default(),
+                ..Default::default()
+            };
+            a.components.guardrails = row.get::<String>(3).ok().flatten();
+            a.components.memory = row.get::<String>(4).ok().flatten();
+            a.components.critique = row.get::<String>(5).ok().flatten();
+            crate::spi_executor::load_harness_extras(client, &mut a)?;
+            let total = a
+                .components
+                .total_always_on_chars(&a.system_prompt, a.soul.as_deref());
+            Ok(json!({
+                "agent": a.name,
+                "executor_name": a.executor_name,
+                "tools": a.tools,
+                "system_prompt": a.system_prompt,
+                "soul": a.soul,
+                "guardrails": a.components.guardrails,
+                "memory": a.components.memory,
+                "critique": a.components.critique,
+                "skills": a.components.skills,
+                "tool_hints": a.components.tool_hints,
+                "always_on_block": a.components.always_on_block(),
+                "always_on_chars": total,
+                "always_on_cap": ALWAYS_ON_MAX_CHARS,
+            }))
+        });
+        match built {
+            Ok(v) => JsonB(v),
+            Err(e) => JsonB(json!({ "error": e })),
         }
     }
 }

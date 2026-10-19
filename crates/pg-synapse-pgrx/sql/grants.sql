@@ -36,6 +36,13 @@ GRANT EXECUTE ON FUNCTION synapse.tool_register(text, text, jsonb, text, jsonb) 
 GRANT EXECUTE ON FUNCTION synapse.llm_profile_drop(text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.embedding_profile_drop(text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.secret_drop(text) TO synapse_admin;
+-- Harness components (harness2-borrowings): admin writes.
+GRANT EXECUTE ON FUNCTION synapse.agent_set_component(text, text, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.skill_set(text, text, text, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.skill_drop(text, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.tool_hint_add(text, text, text, text) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.lesson_add(text, text, text, text, text, uuid) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.lesson_retire(bigint, bigint) TO synapse_admin;
 
 -- Run / read surface: synapse_user AND synapse_admin.
 GRANT EXECUTE ON FUNCTION synapse.execute(text, text) TO synapse_user;
@@ -55,6 +62,13 @@ GRANT EXECUTE ON FUNCTION synapse.execute_async(text, text) TO synapse_user;
 GRANT EXECUTE ON FUNCTION synapse.execute_async(text, text) TO synapse_admin;
 GRANT EXECUTE ON FUNCTION synapse.execution_status(uuid) TO synapse_user;
 GRANT EXECUTE ON FUNCTION synapse.execution_status(uuid) TO synapse_admin;
+-- Trajectory renderer and harness read-back: both roles.
+GRANT EXECUTE ON FUNCTION synapse.trajectory(uuid, integer) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.trajectory(uuid, integer) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.trajectory_trunc(text, integer) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.trajectory_trunc(text, integer) TO synapse_admin;
+GRANT EXECUTE ON FUNCTION synapse.agent_harness(text) TO synapse_user;
+GRANT EXECUTE ON FUNCTION synapse.agent_harness(text) TO synapse_admin;
 
 -- Reactive triggers surface (T1, ADR D14 / operator approval 2026-05-17).
 -- enqueue: both roles (writers need to enqueue rows from trigger context).

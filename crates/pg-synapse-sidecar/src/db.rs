@@ -130,7 +130,8 @@ impl ProfileSource for SqlxProfileSource {
             "SELECT name, system_prompt, soul, executor_name, \
                     llm_profile_main, llm_profile_small, llm_profile_judge, \
                     embedding_profile, tools, max_iterations, timeout_ms, \
-                    cost_cap_usd::text as cost_cap_usd_text \
+                    cost_cap_usd::text as cost_cap_usd_text, \
+                    guardrails, memory, critique \
              FROM synapse.agents",
         )
         .fetch_all(&self.pool)
@@ -166,6 +167,15 @@ impl ProfileSource for SqlxProfileSource {
                     // only for now (v0.2 sidecar follow-up). None preserves
                     // pre-B19 sidecar behavior (no per-agent trace level).
                     trace_level: None,
+                    // Always-on components come from the agents row. Skills,
+                    // tool hints and lessons are pgrx-host only for now (the
+                    // same v0.2 sidecar follow-up as trace_level).
+                    components: pg_synapse_core::types::Harness {
+                        guardrails: r.try_get("guardrails").ok().flatten(),
+                        memory: r.try_get("memory").ok().flatten(),
+                        critique: r.try_get("critique").ok().flatten(),
+                        ..Default::default()
+                    },
                 })
             })
             .collect()

@@ -46,6 +46,7 @@
 //!         timeout_ms: 30_000,
 //!         cost_cap_usd: None,
 //!         trace_level: None,
+//!         components: Default::default(),
 //!     });
 //!
 //! let _runtime = Runtime::builder()
