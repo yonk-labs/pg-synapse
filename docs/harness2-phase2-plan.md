@@ -140,10 +140,39 @@ stele as the lessons store (optional item 8), sidecar parity (tracked as a gap).
   `status: timed_out` with an `execution_id`, 4 messages logged, and the
   trajectory renders up to the cut.
 
+### Stronger model (TURNOVER step 5)
+
+- Qwen3.6-35B-A3B NVFP4 (`qwen36-nvfp4`) on vLLM at 192.168.1.133:8000,
+  thinking on. Tool calling works out of the box. Only the LLM profile
+  changed; the tuned harness is the 4B one.
+- First run wrote nothing: the model sends `http_post.body` as a
+  JSON-encoded string, the Plexus API answered 422, 44 retries. Fixed in
+  `plugins/pg-synapse-tools-http` (`decode_string_body`: a string that
+  parses to an object or array is sent parsed). Unit test plus a wiremock
+  test; gates 424 passed, 0 failed.
+- Choice: fix the tool rather than add a tool hint. The 422 body does not
+  match a useful hint pattern and every model that does this would need the
+  same hint. The only request the decode changes is a string body that is
+  itself JSON object or array text, which a caller rarely means to send
+  double-encoded.
+- Second run: 4 of 5 (refund decisions and policy_version pass for the
+  first time). Audit failed on the 40-iteration cap after duplicate audit
+  inserts and repeated lookups.
+- `make tune K=2` on this model: all eight rollouts passed (base 2/2), so
+  selection went by tokens: `agg1` adopted at 133k input tokens against
+  195k to 227k for the base; lesson 2 written. `make run` on the adopted
+  harness: 5/5, PASS, 24 iterations, 86 s, the first full pass.
+- The running `plexus-db-1` got the new `.so` by `docker cp` plus restart
+  (the compose service has no data volume, so a recreate wipes the tuned
+  harness). The image itself was rebuilt from the same code.
+
 ## Next steps and gaps
 
-- Re-run `make tune K=2` so partial scoring gets a real test. The current
-  data says it should go after the policy lookup and the `$6` id slot.
+- Partial scoring still has no live test: on Qwen3.6 every rollout passed.
+  A `make tune K=2` on the 4B model (3 of 5) is the run that would use it.
+- The `.so` in the running `plexus-db-1` was swapped in by hand; the image
+  was rebuilt before a doc-comment-only move in `tools-http`, so rebuild it
+  once more before the next `make up`.
 - Sidecar parity: `sql/sidecar-install.sql` and the sidecar loader know the
   three agents columns but not skills, hints or lessons.
 - `--exclude pg_synapse_pgrx` stays the local gate until pgrx gets a

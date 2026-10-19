@@ -59,6 +59,10 @@ plan are in `docs/harness2-comparison.md` and `docs/harness2-borrowings-plan.md`
 - **Upgrade script** `pg_synapse_pgrx--0.1.1--0.2.0.sql` (additive: columns,
   three tables, the trajectory renderer, seven functions, grants). Workspace
   version bumped to 0.2.0.
+- **`http_post` decodes a JSON-encoded string body.** Some models (seen with
+  Qwen3.6-35B-A3B on vLLM) pass `body` as `"{\"k\": 1}"`; that string is now
+  sent as the object it encodes, so the server no longer answers 422. Any
+  other string body is sent unchanged.
 
 ### Runtime hardening (backend containment)
 

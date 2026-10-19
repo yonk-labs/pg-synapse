@@ -129,6 +129,33 @@ async fn http_post_sends_json_body() {
 }
 
 #[tokio::test]
+async fn http_post_decodes_a_json_string_body() {
+    allow_loopback();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/echo"))
+        .and(body_json(serde_json::json!({"k": "v"})))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let template = HttpPost {
+        url: String::new(),
+        body: serde_json::Value::Null,
+        headers: Default::default(),
+    };
+    let url = format!("{}/echo", server.uri());
+    let out = template
+        .run(
+            serde_json::json!({"url": url, "body": "{\"k\": \"v\"}"}),
+            &ToolCtx::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json(out)["status"], 200);
+}
+
+#[tokio::test]
 async fn http_head_returns_status_and_headers() {
     allow_loopback();
     let server = MockServer::start().await;

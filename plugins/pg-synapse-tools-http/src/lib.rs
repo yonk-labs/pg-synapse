@@ -204,7 +204,8 @@ impl HttpGet {
 pub struct HttpPost {
     /// Absolute URL to post to.
     pub url: String,
-    /// Request body, serialized as JSON. Defaults to `null` when omitted.
+    /// Request body as a JSON object, sent as JSON. Defaults to `null` when
+    /// omitted. A string holding a JSON object or array is parsed first.
     #[serde(default)]
     pub body: Value,
     /// Optional request headers, sent verbatim.
@@ -215,7 +216,7 @@ pub struct HttpPost {
 impl HttpPost {
     async fn run(self, _ctx: &ToolCtx) -> Result<ToolOutput, ToolError> {
         guard_url(&self.url, Self::TOOL_NAME).await?;
-        let mut req = http().post(&self.url).json(&self.body);
+        let mut req = http().post(&self.url).json(&decode_string_body(self.body));
         for (k, v) in &self.headers {
             req = req.header(k, v);
         }
@@ -269,6 +270,20 @@ impl HttpHead {
             serde_json::json!({ "status": status, "headers": headers }),
         ))
     }
+}
+
+/// Some models pass `body` as a JSON-encoded string (`"{\"k\": 1}"`) instead
+/// of an object. Sending that verbatim posts a JSON string, which servers
+/// reject, so a string that parses to an object or array is sent parsed.
+/// Any other string is sent as-is.
+fn decode_string_body(body: Value) -> Value {
+    if let Value::String(s) = &body
+        && let Ok(parsed @ (Value::Object(_) | Value::Array(_))) =
+            serde_json::from_str::<Value>(s.trim())
+    {
+        return parsed;
+    }
+    body
 }
 
 /// Plugin that registers `http_get`, `http_post`, and `http_head` against a
@@ -421,5 +436,27 @@ mod tests {
         let p = HttpToolsPlugin;
         assert_eq!(p.name(), "pg-synapse-tools-http");
         assert!(!p.version().is_empty());
+    }
+
+    #[test]
+    fn string_body_holding_json_is_decoded() {
+        assert_eq!(
+            decode_string_body(Value::String(r#" {"k": 1} "#.into())),
+            serde_json::json!({"k": 1})
+        );
+        assert_eq!(
+            decode_string_body(Value::String("[1, 2]".into())),
+            serde_json::json!([1, 2])
+        );
+        for raw in ["plain text", "42", "\"quoted\"", "query=a&k=2"] {
+            assert_eq!(
+                decode_string_body(Value::String(raw.into())),
+                Value::String(raw.into())
+            );
+        }
+        assert_eq!(
+            decode_string_body(serde_json::json!({"k": "v"})),
+            serde_json::json!({"k": "v"})
+        );
     }
 }
