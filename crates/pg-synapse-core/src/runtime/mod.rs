@@ -28,7 +28,7 @@ use crate::plugin::Registry;
 use crate::tool::{LoadSkillTool, ToolRegistry};
 use crate::types::{
     AgentRow, EmbeddingProfileRow, EmbeddingVector, ExecutionContext, ExecutorOutcome,
-    LlmProfileRow, OutcomeStatus,
+    LlmProfileRow, OutcomeStatus, ProgressSink,
 };
 
 /// Source of agent rows, LLM/embedding profile rows, and secret values.
@@ -181,6 +181,11 @@ impl Runtime {
             )));
         }
 
+        // The executor future is dropped when the wall clock runs out, taking
+        // its outcome with it. A progress sink keeps a copy of everything the
+        // loop recorded so the timed-out run still has a trajectory.
+        let progress =
+            (!std::time::Duration::from_millis(agent.timeout_ms).is_zero()).then(ProgressSink::new);
         let ctx = ExecutionContext {
             execution_id: Uuid::new_v4(),
             agent_name: agent.name.clone(),
@@ -206,6 +211,7 @@ impl Runtime {
                 .unwrap_or_default(),
             interrupt_check: self.interrupt_check.clone(),
             harness: agent.components.clone(),
+            progress: progress.clone(),
         };
 
         // Enforce the per-agent wall-clock budget here, at the single
@@ -221,11 +227,14 @@ impl Runtime {
         }
         match tokio::time::timeout(budget, executor.execute(ctx)).await {
             Ok(result) => result.map_err(RuntimeError::from),
-            Err(_elapsed) => Ok(ExecutorOutcome {
-                status: OutcomeStatus::TimedOut,
-                duration_ms: budget.as_millis() as u64,
-                ..Default::default()
-            }),
+            Err(_elapsed) => {
+                let partial = progress.map(|p| p.snapshot()).unwrap_or_default();
+                Ok(ExecutorOutcome {
+                    status: OutcomeStatus::TimedOut,
+                    duration_ms: budget.as_millis() as u64,
+                    ..partial
+                })
+            }
         }
     }
 
@@ -846,6 +855,42 @@ mod tests {
             elapsed < std::time::Duration::from_secs(5),
             "execute should return near the 100ms budget, took {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn timed_out_run_keeps_its_partial_trajectory() {
+        // The first turn answers with a tool call, the second hangs past the
+        // budget. The outcome must still carry the messages recorded before
+        // the cut (system, user, the tool call and its error) so the host can
+        // log an execution row and a trajectory.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.push_tool_call("c1", "missing_tool", serde_json::json!({"q": 1}));
+        mock.push_text("never reached");
+        mock.set_delay_after(1, std::time::Duration::from_secs(30));
+
+        let mut a = agent("a1", "default");
+        a.system_prompt = "be brief".into();
+        a.timeout_ms = 300;
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+        assert_eq!(outcome.status, crate::types::OutcomeStatus::TimedOut);
+        let roles: Vec<_> = outcome.messages.iter().map(|m| m.role).collect();
+        assert!(
+            roles.len() >= 4,
+            "expected system, user, tool call and tool result before the cut, got {roles:?}"
+        );
+        assert_eq!(outcome.tool_calls.len(), 1);
+        assert_eq!(outcome.tool_calls[0].name, "missing_tool");
+        let id = outcome.messages[0].execution_id;
+        assert!(outcome.messages.iter().all(|m| m.execution_id == id));
     }
 
     #[tokio::test]

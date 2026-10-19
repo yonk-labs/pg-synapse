@@ -29,7 +29,7 @@ pub use llm::{
 };
 pub use memory::{MemoryEntry, MemoryId, MemoryScope, MemorySnapshot};
 pub use message::{Message, Role};
-pub use outcome::{ExecutorOutcome, OutcomeStatus};
+pub use outcome::{ExecutorOutcome, OutcomeStatus, ProgressSink};
 pub use profile::{AgentRow, EmbeddingProfileRow, LlmProfileRow};
 pub use tool::{ToolCtx, ToolOutput, ToolSchema};
 pub use trace::{EventKind, ExecutionEvent, TraceLevel};

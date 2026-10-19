@@ -12,6 +12,9 @@ Borrowed from Harness2 (Xu et al. 2026) and reshaped for pg_synapse:
   4. Compose k finals from the whole pool; probe each once.
   5. Select. Unlike Harness2 this uses the scenario's deterministic
      assertion, with token cost as the tie-break; KEEP_BASE is a real answer.
+     When nothing passes and the scenario has a conditions.sql, the final
+     meeting the largest fraction of its conditions wins, but only if it
+     beats the best base rollout.
   6. Reflect: one improver session distils what each edit did and at most
      one transferable lesson (cue / lesson / evidence / confidence), which is
      written to synapse.lessons when a library DSN is given.
@@ -264,7 +267,9 @@ class Scenario:
 
     Needs task.txt, assert.sql and seed.sql.tmpl (or seed.sql). meta.env and
     system_prompt.txt are optional when the base harness comes from a live
-    agent (`--from-agent`).
+    agent (`--from-agent`). conditions.sql is optional: one query returning
+    `condition | ok` rows that break the assertion into parts, used for
+    partial scoring only (assert.sql stays the pass/fail authority).
     """
 
     def __init__(self, name_or_path: str, scale: int = 1):
@@ -290,6 +295,8 @@ class Scenario:
             seed_p = self.dir / "seed.sql"
         self.seed = seed_p.read_text(encoding="utf-8").replace("{{SCALE}}", str(scale))
         self.assert_sql = (self.dir / "assert.sql").read_text(encoding="utf-8")
+        cp = self.dir / "conditions.sql"
+        self.conditions_sql = cp.read_text(encoding="utf-8") if cp.is_file() else None
         sp = self.dir / "system_prompt.txt"
         self.base_prompt = sp.read_text(encoding="utf-8").replace("{{SCALE}}", str(scale)) if sp.is_file() else ""
         self._base_tree: dict[str, str] | None = None
@@ -393,6 +400,11 @@ class Roller:
                 res["trajectory"] = "[EXECUTION] (no execution id returned)\n" + json.dumps(env)[:2000]
             verdict = self.pg.run(self.sc.assert_sql, db=db, check=False)
             res["passed"] = verdict.strip().lower() in ("t", "true")
+            res["score"] = 1.0 if res["passed"] else 0.0
+            if self.sc.conditions_sql:
+                res["conditions"] = parse_conditions(self.pg.run(self.sc.conditions_sql, db=db, check=False))
+                if res["conditions"]:
+                    res["score"] = round(sum(res["conditions"].values()) / len(res["conditions"]), 3)
         except Exception as exc:  # noqa: BLE001 - a dead rollout is recorded, never raised
             res["error"] = res.get("error") or f"{type(exc).__name__}: {exc}"
             res.setdefault("trajectory", f"[ERROR] rollout infrastructure\n{res['error']}")
@@ -403,10 +415,23 @@ class Roller:
                 pass
         res["wall_s"] = round(time.time() - t0, 1)
         out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / f"{label}.json").write_text(json.dumps({k: v for k, v in res.items() if k != "trajectory"}, indent=2))
+        # Condition names describe the grader, and improver sessions can read
+        # outside their workdir, so they stay in memory until summary.json and
+        # REPORT.md are written after the last improver call.
+        (out_dir / f"{label}.json").write_text(json.dumps({k: v for k, v in res.items() if k not in ("trajectory", "conditions", "score")}, indent=2))
         (out_dir / f"{label}.md").write_text(res.get("trajectory", ""))
-        log(f"rollout {label}: passed={res['passed']} iters={res.get('iterations')} tokens={res.get('tokens_in', 0)}+{res.get('tokens_out', 0)} err={res['error'][:80]!r}")
+        log(f"rollout {label}: passed={res['passed']} score={res.get('score', 0.0)} iters={res.get('iterations')} tokens={res.get('tokens_in', 0)}+{res.get('tokens_out', 0)} err={res['error'][:80]!r}")
         return res
+
+
+def parse_conditions(out: str) -> dict[str, bool]:
+    """`psql -At` rows of `condition|ok` into {condition: ok}; malformed rows are skipped."""
+    conds: dict[str, bool] = {}
+    for line in out.splitlines():
+        name, sep, ok = line.rpartition("|")
+        if sep and name.strip():
+            conds[name.strip()] = ok.strip().lower() in ("t", "true")
+    return conds
 
 
 # ----------------------------------------------------------------------------
@@ -694,8 +719,17 @@ def run_stage(label: str, dim: str, job_fn, fallback: dict[str, str], sc: Scenar
     return {"label": label, "dim": dim, "tree": dict(fallback), "kept_base": True, "fell_back": True, "notes": f"fell back to the current harness: {err[:400]}", "changed": {"added": [], "removed": [], "modified": []}}
 
 
+def tokens(r: dict) -> int:
+    return r.get("tokens_in", 0) + r.get("tokens_out", 0)
+
+
 def select(finals: list[tuple[str, dict]], base: list[dict]) -> tuple[str | None, str]:
-    """Pick by assertion, then by fewest total tokens. Returns (label or None for KEEP_BASE, why)."""
+    """Pick by assertion, then by partial score, then by fewest total tokens.
+
+    Returns (label or None for KEEP_BASE, why). A partial score only adopts a
+    final that beats the best base rollout's score, so a harness that is no
+    better than what is live never replaces it on token cost alone.
+    """
     base_pass = sum(1 for r in base if r["passed"])
     passed = [(lbl, r) for lbl, r in finals if r["passed"]]
     if passed:
@@ -703,6 +737,14 @@ def select(finals: list[tuple[str, dict]], base: list[dict]) -> tuple[str | None
         return lbl, f"{len(passed)}/{len(finals)} finals passed the task's end-state check; `{lbl}` passed with the fewest tokens ({r.get('tokens_in', 0)}+{r.get('tokens_out', 0)}). Base passed {base_pass}/{len(base)}."
     if base_pass:
         return None, f"no final passed the end-state check while the base passed {base_pass}/{len(base)}; KEEP_BASE."
+    scored = [(lbl, r) for lbl, r in finals if r.get("conditions")]
+    if scored:
+        base_best = max((r.get("score", 0.0) for r in base), default=0.0)
+        lbl, r = max(scored, key=lambda x: (x[1].get("score", 0.0), -tokens(x[1])))
+        if r.get("score", 0.0) > base_best:
+            met = sum(r["conditions"].values())
+            return lbl, f"nothing passed the full check; `{lbl}` met {met}/{len(r['conditions'])} conditions (score {r['score']}) against the best base score {base_best}, with {tokens(r)} tokens. Adopted on partial progress."
+        return None, f"nothing passed the full check and no final beat the best base score {base_best} (best final `{lbl}` at {r.get('score', 0.0)}); KEEP_BASE."
     # nothing passed: prefer a final that at least delivered output without error, else KEEP_BASE
     delivered = [(lbl, r) for lbl, r in finals if not r.get("error") and (r.get("output") or "").strip()]
     if delivered:
@@ -857,12 +899,12 @@ def main() -> int:
         log(f"adopted harness applied to agent {args.library_agent}")
 
     # report
-    rows = ["| label | dim | passed | iterations | tokens in+out | error |", "|---|---|---|---|---|---|"]
+    rows = ["| label | dim | passed | score | iterations | tokens in+out | error |", "|---|---|---|---|---|---|---|"]
     for r in base:
-        rows.append(f"| {r['label']} | base | {r['passed']} | {r.get('iterations')} | {r.get('tokens_in', 0)}+{r.get('tokens_out', 0)} | {r['error'][:60]} |")
+        rows.append(f"| {r['label']} | base | {r['passed']} | {r.get('score', 0.0)} | {r.get('iterations')} | {r.get('tokens_in', 0)}+{r.get('tokens_out', 0)} | {r['error'][:60]} |")
     for st in stages + finals:
         r = probes.get(st["label"]) or final_probes.get(st["label"])
-        rows.append(f"| {st['label']} | {st['dim']}{' (KEEP_BASE)' if st['kept_base'] else ''}{' (fell back)' if st['fell_back'] else ''} | {r['passed']} | {r.get('iterations')} | {r.get('tokens_in', 0)}+{r.get('tokens_out', 0)} | {r['error'][:60]} |")
+        rows.append(f"| {st['label']} | {st['dim']}{' (KEEP_BASE)' if st['kept_base'] else ''}{' (fell back)' if st['fell_back'] else ''} | {r['passed']} | {r.get('score', 0.0)} | {r.get('iterations')} | {r.get('tokens_in', 0)}+{r.get('tokens_out', 0)} | {r['error'][:60]} |")
     report = [
         f"# tune: {sc.name} (k={args.k}, model={args.llm_model}, improver={args.improver})",
         "",
@@ -876,6 +918,7 @@ def main() -> int:
         "",
         f"Adopted: `{adopted_label}`. {why}",
         "",
+        *(["## Conditions met", "", *[f"- {r['label']}: " + ", ".join(f"{k}={'ok' if v else 'FAIL'}" for k, v in r["conditions"].items()) for r in [*base, *probes.values(), *final_probes.values()] if r.get("conditions")], ""] if sc.conditions_sql else []),
         "## Decisions",
         "",
         *[f"### {st['label']} ({st['dim']})\n\n{st['notes']}\n" for st in stages + finals],

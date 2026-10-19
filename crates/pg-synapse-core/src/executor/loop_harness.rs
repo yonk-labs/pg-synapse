@@ -172,6 +172,7 @@ impl<'a> LoopHarness<'a> {
             for tc in &resp.tool_calls {
                 self.issued_tool_calls.push(tc.clone());
             }
+            self.mirror(|o| o.tool_calls.extend(resp.tool_calls.iter().cloned()));
             return Ok(TurnResult::ToolCalls(resp.tool_calls));
         }
         let text = resp.content.unwrap_or_default();
@@ -315,7 +316,16 @@ impl<'a> LoopHarness<'a> {
     /// (cheap; a handful per run) and gated for persistence by `trace_level`
     /// in the host's `log_execution`, mirroring how messages are handled.
     fn record_event(&mut self, kind: EventKind, payload: serde_json::Value) {
-        self.events.push(ExecutionEvent { kind, payload });
+        let ev = ExecutionEvent { kind, payload };
+        self.mirror(|o| o.events.push(ev.clone()));
+        self.events.push(ev);
+    }
+
+    /// Copy an update into the context's progress sink, when the host set one.
+    fn mirror(&self, f: impl FnOnce(&mut ExecutorOutcome)) {
+        if let Some(sink) = &self.ctx.progress {
+            sink.update(f);
+        }
     }
 
     /// Borrow the recorded trace events.
@@ -398,6 +408,14 @@ impl<'a> LoopHarness<'a> {
         if let Some(c) = resp.usage.cost_usd {
             self.cost_so_far += c;
         }
+        let (tin, tout, cost) = (self.tokens_in, self.tokens_out, self.cost_so_far);
+        let elapsed = self.started_at.elapsed().as_millis() as u64;
+        self.mirror(|o| {
+            o.tokens_in = tin;
+            o.tokens_out = tout;
+            o.cost_usd = (cost > 0.0).then_some(cost);
+            o.duration_ms = elapsed;
+        });
     }
 
     fn record_assistant_response(&mut self, resp: &CompletionResponse) {
@@ -494,6 +512,7 @@ impl<'a> LoopHarness<'a> {
     fn append(&mut self, mut msg: Message) {
         msg.seq = self.seq;
         self.seq += 1;
+        self.mirror(|o| o.messages.push(msg.clone()));
         self.messages.push(msg);
     }
 }
@@ -536,6 +555,7 @@ mod tests {
             trace_level: TraceLevel::default(),
             interrupt_check: None,
             harness: Default::default(),
+            progress: None,
         }
     }
 

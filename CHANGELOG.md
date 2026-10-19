@@ -45,6 +45,20 @@ plan are in `docs/harness2-comparison.md` and `docs/harness2-borrowings-plan.md`
   harness from its own trajectories using the Claude CLI (or any
   OpenAI-compatible endpoint) as the improver and the scenario assertion as
   the judge, and writes the distilled lesson through `synapse.lesson_add`.
+- **Timed-out runs keep their trajectory.** `ExecutionContext.progress` (a
+  `ProgressSink`) mirrors every message, tool call, usage update and trace
+  event as the loop records them; when the wall-clock budget elapses the
+  runtime returns that snapshot with `status = timed_out`, so the host writes
+  the execution row and messages and `execute()` returns an `execution_id`.
+  Before this, a timeout returned no messages and no id.
+- **Partial scoring in `bench/tune.py`.** An optional scenario
+  `conditions.sql` (`condition | ok` rows) gives each rollout a score; when
+  nothing passes the full assertion, the final with the highest score is
+  adopted only if it beats the best base rollout. Condition names stay out of
+  every file an improver session can reach until the run ends.
+- **Upgrade script** `pg_synapse_pgrx--0.1.1--0.2.0.sql` (additive: columns,
+  three tables, the trajectory renderer, seven functions, grants). Workspace
+  version bumped to 0.2.0.
 
 ### Runtime hardening (backend containment)
 

@@ -11,6 +11,7 @@ use crate::llm::LlmProvider;
 use crate::memory::MemoryProvider;
 use crate::tool::ToolRegistry;
 use crate::types::harness::Harness;
+use crate::types::outcome::ProgressSink;
 use crate::types::trace::TraceLevel;
 
 /// Host-supplied cancellation probe, consulted by the executor loop between
@@ -94,6 +95,12 @@ pub struct ExecutionContext {
     /// memory, on-demand skills and tool-error hints. `Default` means the
     /// pre-harness behaviour (system prompt and soul only).
     pub harness: Harness,
+
+    /// Optional live mirror of the run. When set, the loop harness copies
+    /// every message, tool call, usage update and trace event into it as
+    /// they happen, so a host that abandons the executor future (the
+    /// wall-clock timeout) still has the partial trajectory.
+    pub progress: Option<ProgressSink>,
 }
 
 impl ExecutionContext {
@@ -126,6 +133,7 @@ impl ExecutionContext {
             trace_level: self.trace_level,
             interrupt_check: self.interrupt_check.clone(),
             harness: self.harness.clone(),
+            progress: self.progress.clone(),
         }
     }
 }
@@ -158,6 +166,7 @@ mod tests {
             trace_level: TraceLevel::default(),
             interrupt_check: None,
             harness: Default::default(),
+            progress: None,
         }
     }
 

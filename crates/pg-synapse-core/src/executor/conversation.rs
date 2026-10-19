@@ -121,6 +121,7 @@ mod tests {
             trace_level: TraceLevel::default(),
             interrupt_check: None,
             harness: Default::default(),
+            progress: None,
         }
     }
 
