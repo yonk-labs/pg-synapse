@@ -101,6 +101,21 @@ pub extern "C-unwind" fn pg_synapse_worker_main(_arg: pg_sys::Datum) {
         // draining every good one behind it.
         let result = std::panic::catch_unwind(|| {
             BackgroundWorker::transaction(|| {
+                // The kernel is cached per process and `rebuild_kernel` only
+                // clears the cache in the backend that changed a profile or
+                // agent. This process is long lived, so without a rebuild it
+                // never sees agents created after its first job ("agent not
+                // found"). Rebuild only when there is work, so an idle worker
+                // does not re-read the configuration every tick.
+                let has_work = Spi::get_one::<bool>(
+                    "SELECT EXISTS (SELECT 1 FROM synapse.agent_queue WHERE status = 'queued')",
+                )
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+                if has_work {
+                    crate::runtime_holder::rebuild_kernel();
+                }
                 Spi::get_one::<i32>("SELECT synapse.drain_queue(1)").unwrap_or(Some(0))
             })
         });
