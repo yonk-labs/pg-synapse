@@ -15,6 +15,25 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_user') THEN
     CREATE ROLE synapse_user NOLOGIN;
   END IF;
+  -- The role that owns the extension's functions, and therefore the role that
+  -- agent SQL executes as.
+  --
+  -- The SQL surface is SECURITY DEFINER, so agent statements run with the
+  -- privileges of whoever owns those functions. Owned by a superuser, that
+  -- means an agent tool call can reach the operating system:
+  -- `COPY t FROM PROGRAM 'id -un'` is a superuser-only feature and it worked.
+  -- A natural-language prompt reaching a shell is not a theoretical concern
+  -- for an agent whose job is reading untrusted web pages.
+  --
+  -- Owning them as a plain role removes the escalation entirely: the same
+  -- statement now fails because the role is not a superuser, enforced by
+  -- Postgres rather than by our own checking.
+  --
+  -- NOSUPERUSER and NOBYPASSRLS are stated rather than assumed, because both
+  -- are the point.
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'synapse_owner') THEN
+    CREATE ROLE synapse_owner NOLOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS;
+  END IF;
 END
 $bootstrap_roles$;
 
@@ -32,6 +51,12 @@ CREATE TABLE IF NOT EXISTS synapse.agents (
   timeout_ms        BIGINT NOT NULL DEFAULT 60000,
   cost_cap_usd      NUMERIC(12,6),
   trace_level       TEXT CHECK (trace_level IN ('off','error','info','debug','full')),
+  -- Which tier of model this agent wants, when it does not name a profile
+  -- outright. The tiers themselves are configuration
+  -- (pg_synapse.default_llm_profile_main / _small), so an agent says "small"
+  -- and the operator decides what small is, rather than every agent row
+  -- carrying a model name that has to be edited when the model changes.
+  model_tier        TEXT NOT NULL DEFAULT 'large' CHECK (model_tier IN ('small','large')),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -43,6 +68,14 @@ CREATE TABLE IF NOT EXISTS synapse.llm_profiles (
   api_key_secret   TEXT,
   base_url         TEXT,
   params           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- The scan of this database, and whether a human has confirmed it. An agent
+  -- must not be pointed at a database nobody has looked at: the scan is what a
+  -- generated agent reads so it does not invent column names, and the
+  -- confirmation is the moment a DBA gets to say no.
+  scan_json        JSONB,
+  scanned_at       TIMESTAMPTZ,
+  reviewed_at      TIMESTAMPTZ,
+  reviewed_by      TEXT,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -59,11 +92,100 @@ CREATE TABLE IF NOT EXISTS synapse.embedding_profiles (
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- pgcrypto backs the at-rest encryption of secret values. It ships with most
+-- Postgres distributions but not all: a source build without contrib does not
+-- have it, and the pgrx test harness is exactly that. Its absence must not stop
+-- the extension installing, because encryption is opt in and everything else
+-- works without it. Attempting it and moving on is the honest behaviour;
+-- failing the whole install over an optional feature is not.
+DO $pgcrypto$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'pgcrypto unavailable: secret encryption cannot be enabled (%)', SQLERRM;
+END
+$pgcrypto$;
+
 CREATE TABLE IF NOT EXISTS synapse.secrets (
   name        TEXT PRIMARY KEY,
+  -- Ciphertext when is_encrypted, plaintext otherwise. Two representations in
+  -- one column rather than two columns, because a secret is exactly one value
+  -- and a schema that can hold both at once invites them to disagree.
   value       TEXT NOT NULL,
+  is_encrypted BOOLEAN NOT NULL DEFAULT false,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The single place a secret is turned back into its value.
+--
+-- Two callers need this (the profile source when building the kernel, and the
+-- remote-database tools when opening a connection) and a second copy of the
+-- expression is a second chance to get it wrong. Returns NULL for an unknown
+-- name rather than raising, because a missing secret is a condition the caller
+-- reports, not an exception.
+-- plpgsql rather than sql on purpose: a sql function body is parsed when the
+-- function is created, so referencing pgp_sym_decrypt would make this
+-- uncreatable wherever pgcrypto is missing. plpgsql defers that to call time,
+-- so the function exists everywhere and only fails if someone actually stores
+-- an encrypted secret on a server that cannot decrypt one.
+CREATE OR REPLACE FUNCTION synapse.secret_value(secret_name text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+AS $secret_value$
+DECLARE
+  raw text;
+  enc boolean;
+  out_val text;
+BEGIN
+  SELECT s.value, s.is_encrypted INTO raw, enc
+  FROM synapse.secrets s WHERE s.name = secret_name;
+  IF raw IS NULL THEN
+    RETURN NULL;
+  END IF;
+  IF NOT enc THEN
+    RETURN raw;
+  END IF;
+  EXECUTE
+    'SELECT pgp_sym_decrypt(dearmor($1), current_setting(''pg_synapse.master_key'', true))'
+    INTO out_val USING raw;
+  RETURN out_val;
+END
+$secret_value$;
+
+-- Named connections to an external Postgres database, for the
+-- remote_query / remote_exec tools (pg-synapse-tools-remotedb). password
+-- is never stored here directly: password_secret names a row in
+-- synapse.secrets, resolved server-side and never exposed to the model.
+CREATE TABLE IF NOT EXISTS synapse.connections (
+  name             TEXT PRIMARY KEY,
+  host             TEXT NOT NULL,
+  port             INT NOT NULL DEFAULT 5432,
+  dbname           TEXT NOT NULL,
+  "user"           TEXT NOT NULL,
+  password_secret  TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Durable named questions. A question is compiled to SQL once (by an agent or
+-- by hand) and executed by Postgres on every later invocation, so no model runs
+-- at query time. kind='sql' is deterministic and chartable; kind='agent' is
+-- reserved for judgment-shaped questions that must re-run the agent.
+-- confirmed_at records that a human approved the compiled SQL: it is the gate
+-- that keeps model-authored SQL from running unreviewed.
+CREATE TABLE IF NOT EXISTS synapse.questions (
+  app          TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  nl_text      TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'sql',
+  sql_text     TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  confirmed_at TIMESTAMPTZ,
+  PRIMARY KEY (app, name),
+  CONSTRAINT questions_kind_check CHECK (kind IN ('sql', 'agent')),
+  CONSTRAINT questions_sql_present CHECK (kind <> 'sql' OR sql_text IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS synapse.tools (
@@ -86,6 +208,12 @@ CREATE TABLE IF NOT EXISTS synapse.executions (
   cost_usd      NUMERIC(12,6),
   duration_ms   BIGINT,
   caller_role   TEXT,
+  -- The model that answered this run, resolved from the agent's LLM profile
+  -- when the row is written. Auditability needs to answer "which model
+  -- produced this", not just "which agent". Resolved at write time rather
+  -- than carried through the kernel, so if a profile is repointed mid-run
+  -- this records the profile as it stood when the run finished.
+  model         TEXT,
   started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   finished_at   TIMESTAMPTZ
 );
@@ -113,6 +241,494 @@ CREATE TABLE IF NOT EXISTS synapse.traces (
 );
 
 -- Reactive triggers: job queue for async agent invocation from triggers.
+
+-- ---------------------------------------------------------------------------
+-- Apps: the unit of packaging, addressing, and scheduling.
+--
+-- An app used to be a naming convention (a schema plus a same-named agent),
+-- which meant nothing could enumerate apps, describe one, or attach a schedule
+-- or a surface to one. Making it a row is what lets every surface bind to the
+-- same thing.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS synapse.apps (
+  name         TEXT PRIMARY KEY,
+  title        TEXT,
+  description  TEXT,
+  schema_name  TEXT,
+  -- The named connection in synapse.connections this app reaches, when the app
+  -- was built against an existing database rather than its own schema. NULL
+  -- for greenfield apps.
+  connection   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- An app may hold more than one agent. Today the builder creates one, but the
+-- app is the unit, so the binding is a table rather than a naming rule.
+CREATE TABLE IF NOT EXISTS synapse.app_agents (
+  app    TEXT NOT NULL REFERENCES synapse.apps(name) ON DELETE CASCADE,
+  agent  TEXT NOT NULL,
+  PRIMARY KEY (app, agent)
+);
+
+-- ---------------------------------------------------------------------------
+-- Schedules: what turns an automation into a system.
+--
+-- An agent that runs once produces a result; an agent that runs on a schedule
+-- produces a dataset, and only a dataset can be mined.
+--
+-- Deliberately an interval plus an explicit next run, not a cron expression.
+-- Alignment comes free from choosing the first run: set next_run_at to tomorrow
+-- at 09:00 with every_interval '1 day' and it stays at 09:00 forever, with no
+-- expression parser and no new dependency.
+--
+-- ponytail: interval only, so "every Tuesday and Thursday" is not expressible.
+-- Upgrade path is a nullable cron_expr column consulted in preference to
+-- every_interval, if anyone ever asks for it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS synapse.schedules (
+  schedule_id    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  app            TEXT NOT NULL REFERENCES synapse.apps(name) ON DELETE CASCADE,
+  agent          TEXT NOT NULL,
+  input          TEXT NOT NULL,
+  every_interval INTERVAL NOT NULL,
+  next_run_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_run_at    TIMESTAMPTZ,
+  enabled        BOOLEAN NOT NULL DEFAULT true,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT schedules_interval_positive CHECK (every_interval > interval '0')
+);
+
+CREATE INDEX IF NOT EXISTS schedules_due_idx
+  ON synapse.schedules (next_run_at) WHERE enabled;
+
+-- One entry point for any scheduler driver: pg_cron, a sidecar poller, or a
+-- systemd timer. Enqueues every due schedule and advances it, returning how
+-- many it fired.
+--
+-- Two behaviours that matter more than the mechanism:
+--
+--   Overlap. A schedule whose previous run is still queued or running is
+--   skipped rather than stacked, so a slow run cannot pile up behind itself.
+--
+--   Catch up. After downtime a schedule fires ONCE, not once per missed
+--   interval. next_run_at advances by whole intervals to the next future
+--   occurrence in a single step, which preserves the chosen alignment while
+--   refusing to replay a backlog. A catch-up storm on restart would be a
+--   self-inflicted denial of service.
+CREATE OR REPLACE FUNCTION synapse.tick()
+RETURNS integer
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  fired integer := 0;
+  s     RECORD;
+BEGIN
+  FOR s IN
+    SELECT sc.schedule_id, sc.agent, sc.input, sc.next_run_at, sc.every_interval
+    FROM synapse.schedules sc
+    WHERE sc.enabled
+      AND sc.next_run_at <= now()
+      AND NOT EXISTS (
+        SELECT 1 FROM synapse.agent_queue q
+        WHERE q.agent = sc.agent AND q.status IN ('queued', 'running')
+      )
+    ORDER BY sc.next_run_at
+    FOR UPDATE SKIP LOCKED
+  LOOP
+    PERFORM synapse.enqueue(s.agent, s.input, 'schedule');
+
+    UPDATE synapse.schedules
+       SET next_run_at = s.next_run_at + s.every_interval * (
+             floor(
+               EXTRACT(epoch FROM (now() - s.next_run_at))
+               / EXTRACT(epoch FROM s.every_interval)
+             )::int + 1
+           ),
+           last_run_at = now()
+     WHERE schedule_id = s.schedule_id;
+
+    fired := fired + 1;
+  END LOOP;
+
+  RETURN fired;
+END;
+$$;
+
+
+-- ---------------------------------------------------------------------------
+-- Row level provenance.
+--
+-- synapse.executions answers "what did this agent run". It cannot answer
+-- "which run produced this row", which is the question an auditor asks when
+-- they are looking at a row they do not trust.
+--
+-- Deliberately a side table rather than columns on the user's tables. Adding
+-- a _synapse_execution_id column to every generated table would pollute a
+-- schema the user owns, and could not work at all for brownfield apps, where
+-- the customer's database must not be modified.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS synapse.row_provenance (
+  execution_id  UUID NOT NULL,
+  table_schema  TEXT NOT NULL,
+  table_name    TEXT NOT NULL,
+  row_pk        TEXT,
+  op            TEXT NOT NULL,
+  written_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS row_provenance_row_idx
+  ON synapse.row_provenance (table_schema, table_name, row_pk);
+CREATE INDEX IF NOT EXISTS row_provenance_exec_idx
+  ON synapse.row_provenance (execution_id);
+
+-- Stamps a row with the execution that wrote it. Reads the execution id from
+-- the session setting the executor publishes; a write made outside an agent
+-- run has no id and is not recorded, which is correct: it had no agent
+-- provenance to record.
+--
+-- The primary key is discovered from the catalog rather than assumed to be
+-- "id", so this attaches to a table whose key is named anything.
+CREATE OR REPLACE FUNCTION synapse.record_provenance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  exec_id text := nullif(current_setting('synapse.execution_id', true), '');
+  pk_col   text;
+  pk_val   text;
+  rec      record;
+BEGIN
+  IF exec_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT a.attname INTO pk_col
+  FROM pg_index i
+  JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+  WHERE i.indrelid = TG_RELID AND i.indisprimary
+  LIMIT 1;
+
+  IF pk_col IS NOT NULL THEN
+    rec := NEW;
+    EXECUTE format('SELECT ($1).%I::text', pk_col) INTO pk_val USING rec;
+  END IF;
+
+  INSERT INTO synapse.row_provenance
+    (execution_id, table_schema, table_name, row_pk, op)
+  VALUES (exec_id::uuid, TG_TABLE_SCHEMA, TG_TABLE_NAME, pk_val, TG_OP);
+
+  RETURN NULL;
+END;
+$$;
+
+-- Attach provenance recording to one table. Called by the builder for tables
+-- it creates, and available to an operator for a table they own.
+--
+-- SECURITY INVOKER by nature (plain LANGUAGE plpgsql, no DEFINER): creating a
+-- trigger is DDL on the caller's table and should need the caller's rights,
+-- for the same reason attach_agent_trigger does.
+CREATE OR REPLACE FUNCTION synapse.track_provenance(target_schema text, target_table text)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  EXECUTE format(
+    'DROP TRIGGER IF EXISTS synapse_provenance ON %I.%I',
+    target_schema, target_table);
+  EXECUTE format(
+    'CREATE TRIGGER synapse_provenance AFTER INSERT OR UPDATE ON %I.%I '
+    'FOR EACH ROW EXECUTE FUNCTION synapse.record_provenance()',
+    target_schema, target_table);
+END;
+$$;
+
+
+-- ---------------------------------------------------------------------------
+-- Privileged reads, behind SECURITY DEFINER.
+--
+-- The kernel needs agent rows, provider profiles and secret values to start.
+-- It is built lazily and cached for the process, by whichever caller happens
+-- to trigger it first, so if the entry points ran with invoker rights that
+-- caller would need SELECT on all of them, secrets included. That is both
+-- unacceptable and arbitrary: privilege would land on whoever won a race.
+--
+-- Routing the reads through definer functions decouples the two. The entry
+-- points can then drop to the caller's rights for the agent's own SQL without
+-- dragging secret access along with them, which is the prerequisite for F2.
+--
+-- Each returns jsonb so the Rust side does one decode instead of a column
+-- list that has to be kept in step with the table.
+-- ---------------------------------------------------------------------------
+-- Which LLM profile an agent actually runs on.
+--
+-- One function because there are two readers and they must not drift: the
+-- kernel config read below, and the audit write, which records the model that
+-- answered. The first version of tiers resolved only in config_agents, so an
+-- agent running on a tier default worked fine and logged an empty `model`,
+-- which is exactly the column that exists to answer "what produced this".
+--
+-- Order: a profile the agent names outright wins, because someone who pinned a
+-- specific model meant it. Otherwise the agent's tier picks one of the two
+-- configured defaults. Nothing falls back to "some profile that happens to
+-- exist": an agent with no profile and no configured default is a
+-- misconfiguration and the kernel says so.
+--
+-- `pg_synapse.default_llm_profile_main` and `_small` were registered as GUCs
+-- and then read by nothing at all, so setting either did nothing. This is what
+-- makes them mean something.
+CREATE OR REPLACE FUNCTION synapse.agent_llm_profile(p_agent text)
+RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(
+           a.llm_profile_main,
+           CASE WHEN a.model_tier = 'small'
+                THEN NULLIF(current_setting('pg_synapse.default_llm_profile_small', true), '')
+                ELSE NULLIF(current_setting('pg_synapse.default_llm_profile_main', true), '')
+           END)
+  FROM synapse.agents a WHERE a.name = p_agent
+$$;
+
+-- The model an agent actually runs on is resolved here rather than in the
+-- kernel, which has no idea what a GUC is.
+--
+-- Order: a profile the agent names outright wins, because someone who pinned a
+-- specific model meant it. Otherwise the agent's tier picks one of the two
+-- configured defaults. Nothing falls back to "some profile that happens to
+-- exist": an agent with no profile and no configured default is a
+-- misconfiguration and the kernel says so.
+--
+-- `pg_synapse.default_llm_profile_main` and `_small` were registered as GUCs
+-- and then read by nothing at all, so setting either did nothing. This is what
+-- makes them mean something.
+CREATE OR REPLACE FUNCTION synapse.config_agents()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM (
+    SELECT name, system_prompt, soul, executor_name,
+           synapse.agent_llm_profile(name) AS llm_profile_main,
+           COALESCE(
+             llm_profile_small,
+             NULLIF(current_setting('pg_synapse.default_llm_profile_small', true), '')
+           ) AS llm_profile_small,
+           llm_profile_judge, embedding_profile, tools,
+           max_iterations, timeout_ms, cost_cap_usd, trace_level, model_tier
+    FROM synapse.agents) a
+$$;
+
+CREATE OR REPLACE FUNCTION synapse.config_llm_profiles()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(p)), '[]'::jsonb) FROM (
+    SELECT name, provider, model, api_key_secret, base_url,
+           COALESCE(params, '{}'::jsonb) AS params
+    FROM synapse.llm_profiles) p
+$$;
+
+CREATE OR REPLACE FUNCTION synapse.config_embedding_profiles()
+RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT COALESCE(jsonb_agg(to_jsonb(e)), '[]'::jsonb) FROM (
+    SELECT name, provider, model, dimension, api_key_secret, base_url,
+           COALESCE(params, '{}'::jsonb) AS params
+    FROM synapse.embedding_profiles) e
+$$;
+
+-- Secrets are the reason this indirection exists. Never granted to a user
+-- role, reachable only through this function, and the function returns only
+-- the names the kernel asked for rather than the whole table.
+CREATE OR REPLACE FUNCTION synapse.config_secrets(names text[])
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER STABLE AS $config_secrets$
+DECLARE
+  out_val jsonb := '{}'::jsonb;
+  r record;
+BEGIN
+  FOR r IN SELECT s.name FROM synapse.secrets s WHERE s.name = ANY(names)
+  LOOP
+    out_val := out_val || jsonb_build_object(r.name, synapse.secret_value(r.name));
+  END LOOP;
+  RETURN out_val;
+END
+$config_secrets$;
+
+-- One agent's trace level, for the same reason as the config reads above:
+-- `synapse.agents` is not readable by `synapse_user`, and the host resolves
+-- the level on every run to decide what to persist. Safe to grant on its own
+-- terms rather than by trust: the argument names an agent, the answer is one
+-- of five verbosity words, and neither is a secret.
+CREATE OR REPLACE FUNCTION synapse.agent_trace_level(p_agent text)
+RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$
+  SELECT trace_level FROM synapse.agents WHERE name = p_agent
+$$;
+
+-- The audit write, for the same reason in the other direction: a low
+-- privilege caller must still be recordable, or the first thing invoker
+-- rights would break is the audit trail. Granting the tables to user roles is
+-- not the alternative, because an audit trail a caller can write to is one
+-- they can forge.
+--
+-- One call for the whole run, not one per row. The host used to issue an
+-- INSERT per message and per trace event, so a 23 message run cost 24 SPI
+-- round trips; this takes the run as a single jsonb document and unnests it.
+-- Being one call is also what makes it a boundary worth having: an entry point
+-- running as the caller needs exactly one privileged thing here, not a
+-- sequence of them.
+--
+-- `model` is resolved here rather than passed in: it is a property of the
+-- agent's profile as it stands at write time, and the kernel does not carry
+-- it. The messages and events arrays may be absent or empty, which is what a
+-- trace level below the persistence threshold looks like.
+CREATE OR REPLACE FUNCTION synapse.record_run(p jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $record_run$
+DECLARE
+  v_agent text := p->'execution'->>'agent_name';
+  v_exec  uuid := (p->'execution'->>'execution_id')::uuid;
+BEGIN
+  -- The async path pre-inserts a placeholder row under its own id so a poller
+  -- can see the run exists, then the kernel mints a different id for the
+  -- messages. Dropping the placeholder here rather than in a separate
+  -- statement keeps the replacement atomic: no window in which the run has
+  -- two rows, and none in which it has none.
+  IF p ? 'supersedes' THEN
+    DELETE FROM synapse.executions
+     WHERE execution_id = (p->>'supersedes')::uuid;
+  END IF;
+
+  INSERT INTO synapse.executions
+    (execution_id, agent_name, input, output, status, tokens_in, tokens_out,
+     cost_usd, duration_ms, caller_role, model, finished_at)
+  SELECT v_exec, v_agent,
+         e.input, e.output, e.status, e.tokens_in, e.tokens_out,
+         e.cost_usd, e.duration_ms, e.caller_role,
+         (SELECT lp.model FROM synapse.llm_profiles lp
+           WHERE lp.name = synapse.agent_llm_profile(v_agent)),
+         now()
+  FROM jsonb_to_record(p->'execution') AS e(
+    input text, output text, status text, tokens_in int, tokens_out int,
+    cost_usd numeric, duration_ms bigint, caller_role text);
+
+  INSERT INTO synapse.messages
+    (execution_id, seq, role, content, tool_call_id, tool_name,
+     tool_input, tool_output)
+  SELECT v_exec, m.seq, m.role, m.content, m.tool_call_id, m.tool_name,
+         m.tool_input, m.tool_output
+  FROM jsonb_to_recordset(COALESCE(p->'messages', '[]'::jsonb)) AS m(
+    seq int, role text, content text, tool_call_id text, tool_name text,
+    tool_input jsonb, tool_output jsonb);
+
+  INSERT INTO synapse.traces (execution_id, seq, event, payload)
+  SELECT v_exec, t.seq, t.event, t.payload
+  FROM jsonb_to_recordset(COALESCE(p->'events', '[]'::jsonb)) AS t(
+    seq int, event text, payload jsonb);
+END
+$record_run$;
+
+-- The same boundary for a run with no transcript to record: the 'queued'
+-- placeholder the async path writes up front, and the terminal 'errored' row
+-- for a run that failed before the kernel produced an outcome (a cost cap
+-- trip, a kernel build failure, a provider outage). Both are one executions
+-- row at a given status, so they are one function.
+--
+-- Upsert, because the errored write may be updating a placeholder this same
+-- function inserted a moment earlier, or inserting fresh when the failure came
+-- from the synchronous path that never wrote one. The caller should not have
+-- to know which.
+CREATE OR REPLACE FUNCTION synapse.record_status(p jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $record_status$
+DECLARE
+  v_agent text := p->>'agent_name';
+  v_exec  uuid := (p->>'execution_id')::uuid;
+BEGIN
+  INSERT INTO synapse.executions
+    (execution_id, agent_name, input, output, status, caller_role, model,
+     finished_at)
+  VALUES (v_exec, v_agent, COALESCE(p->>'input', ''), p->>'output',
+          p->>'status', p->>'caller_role',
+          (SELECT lp.model FROM synapse.llm_profiles lp
+            WHERE lp.name = synapse.agent_llm_profile(v_agent)),
+          CASE WHEN p->>'status' = 'queued' THEN NULL ELSE now() END)
+  ON CONFLICT (execution_id) DO UPDATE
+    SET status      = EXCLUDED.status,
+        output      = EXCLUDED.output,
+        finished_at = EXCLUDED.finished_at;
+END
+$record_status$;
+
+-- Deliberately NOT granted to synapse_user, and that is the open problem in
+-- F2 rather than an oversight.
+--
+-- The flip these were built for makes the entry points SECURITY INVOKER, and
+-- an entry point running as the caller can only reach a function the caller
+-- may execute. So the flip appears to require granting these two. But a role
+-- that may call synapse.record_run may call it directly, with any payload it
+-- likes, and an audit trail a caller can write to is one they can forge. That
+-- is the same objection that ruled out granting the tables, arriving one level
+-- further in.
+--
+-- The refactor above is worth having either way: each entry point now crosses
+-- the privilege boundary exactly once instead of once per message, which is
+-- what makes the boundary small enough to reason about at all. Deciding who
+-- may cross it is the next question, and the plausible answers (a nonce the
+-- entry point mints and the function checks, a bgworker owning the writes, or
+-- keeping the audit path definer while only the agent's own SQL runs as the
+-- caller) are not interchangeable. Not resolved here.
+
+
+-- Remove an app: its record, its agents, its schedules and its saved
+-- questions. Optionally its data too.
+--
+-- Two decisions worth stating, because both are easy to get wrong silently.
+--
+-- **Data is kept unless asked for.** Dropping an app you built by mistake
+-- should not be the same keystroke as destroying the rows it collected. The
+-- schema survives by default and `drop_data` has to be asked for explicitly.
+--
+-- **The audit trail always survives.** synapse.executions and
+-- synapse.row_provenance are untouched either way. Deleting an app is not a
+-- way to erase what its agents did: an audit history you can remove by
+-- deleting the thing it audits is not an audit history. Provenance rows point
+-- at tables that may no longer exist, which is correct; they record what
+-- happened, not what currently is.
+CREATE OR REPLACE FUNCTION synapse.app_drop(app_name text, drop_data boolean DEFAULT false)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $app_drop$
+DECLARE
+  target_schema text;
+  agent_names   text[];
+  n_questions   int;
+  n_schedules   int;
+BEGIN
+  SELECT a.schema_name INTO target_schema FROM synapse.apps a WHERE a.name = app_name;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'no app named "%"', app_name;
+  END IF;
+
+  SELECT COALESCE(array_agg(agent), '{}') INTO agent_names
+  FROM synapse.app_agents WHERE app = app_name;
+
+  SELECT count(*) INTO n_questions FROM synapse.questions WHERE app = app_name;
+  SELECT count(*) INTO n_schedules FROM synapse.schedules WHERE app = app_name;
+
+  DELETE FROM synapse.questions WHERE app = app_name;
+  -- app_agents and schedules cascade from synapse.apps.
+  DELETE FROM synapse.apps WHERE name = app_name;
+  DELETE FROM synapse.agents WHERE name = ANY(agent_names);
+  DELETE FROM synapse.agent_queue
+   WHERE agent = ANY(agent_names) AND status IN ('queued', 'running');
+
+  IF drop_data AND target_schema IS NOT NULL THEN
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', target_schema);
+  END IF;
+
+  RETURN jsonb_build_object(
+    'app', app_name,
+    'agents_removed', agent_names,
+    'questions_removed', n_questions,
+    'schedules_removed', n_schedules,
+    'schema', target_schema,
+    'data_dropped', drop_data AND target_schema IS NOT NULL,
+    'audit_kept', true
+  );
+END
+$app_drop$;
+
 -- Operator-driven drain (pg_cron or a sidecar poller) runs synapse.drain_queue().
 -- A true background worker drain is the v0.2 upgrade (design spec D8).
 CREATE TABLE IF NOT EXISTS synapse.agent_queue (
@@ -135,4 +751,19 @@ GRANT SELECT ON synapse.executions TO synapse_user;
 GRANT SELECT ON synapse.messages   TO synapse_user;
 GRANT SELECT ON synapse.traces     TO synapse_user;
 GRANT SELECT ON synapse.agent_queue TO synapse_user;
+GRANT SELECT ON synapse.questions   TO synapse_user;
+GRANT SELECT ON synapse.apps        TO synapse_user;
+GRANT SELECT ON synapse.app_agents  TO synapse_user;
+GRANT SELECT ON synapse.schedules   TO synapse_user;
+GRANT SELECT ON synapse.row_provenance TO synapse_user;
+
+-- synapse_owner runs every agent statement, so it needs exactly what the
+-- extension itself does and nothing more: its own schema, its own tables, and
+-- the ability to create the schemas generated apps live in. Notably absent:
+-- superuser, CREATEROLE, and BYPASSRLS.
+GRANT USAGE, CREATE ON SCHEMA synapse TO synapse_owner;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_owner;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA synapse TO synapse_owner;
+ALTER DEFAULT PRIVILEGES IN SCHEMA synapse
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO synapse_owner;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA synapse TO synapse_admin;

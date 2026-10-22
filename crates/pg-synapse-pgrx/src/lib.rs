@@ -21,8 +21,17 @@
 // requires one tightly-scoped `unsafe` block to drive Postgres internal
 // subtransactions (the C-level mechanism PL/pgSQL's `BEGIN ... EXCEPTION`
 // uses). SQL `SAVEPOINT` statements are rejected inside a SECURITY DEFINER
-// function, so the SQL-only approach cannot work in production. The single
-// allowed `unsafe` site is `spi_executor::with_tool_subtransaction`.
+// function, so the SQL-only approach cannot work in production.
+//
+// Two allowed sites, both `#[allow(unsafe_code)]` and both justified where
+// they appear:
+//   1. `spi_executor::with_tool_subtransaction`, the subtransaction driver
+//      described above.
+//   2. `worker::pg_synapse_worker_main`, which needs `#[unsafe(no_mangle)]`
+//      because Postgres resolves a background worker's entry point by dlsym
+//      and a mangled symbol is not findable. Unsafe only in the link-time
+//      sense (two crates exporting one name); no unsafe block, nothing
+//      dereferenced.
 #![deny(unsafe_code)]
 #![allow(non_snake_case)]
 #![warn(missing_docs)]
@@ -31,10 +40,12 @@ use pgrx::prelude::*;
 
 pgrx::pg_module_magic!(name, version);
 
+mod audit_capability;
 mod runtime_holder;
 mod schema_guc;
 mod spi_executor;
 mod sql_functions;
+mod worker;
 
 pub use runtime_holder::{kernel_handle, rebuild_kernel};
 
@@ -44,6 +55,10 @@ pub use runtime_holder::{kernel_handle, rebuild_kernel};
 extern "C-unwind" fn _PG_init() {
     schema_guc::register_gucs();
     runtime_holder::initialize_tokio_runtime();
+    // After the GUCs, because it reads one to decide whether to exist. A no-op
+    // unless an operator named a database, and a LOG rather than an error if
+    // the library was not preloaded.
+    worker::register();
 }
 
 // Schema bootstrap: creates the synapse schema, tables, and roles when the
@@ -241,14 +256,14 @@ mod tests {
     fn exec_sql(sql: &str, params: &[Value]) -> Result<u64, String> {
         let ex = crate::spi_executor::SpiSqlExecutor;
         crate::runtime_holder::tokio()
-            .block_on(async { ex.execute(sql, params, None).await })
+            .block_on(async { ex.execute(sql, params, None, None).await })
             .map_err(|e| e.to_string())
     }
 
     fn query_sql(sql: &str, params: &[Value]) -> Result<Vec<Value>, String> {
         let ex = crate::spi_executor::SpiSqlExecutor;
         crate::runtime_holder::tokio()
-            .block_on(async { ex.query(sql, params, None).await })
+            .block_on(async { ex.query(sql, params, None, None).await })
             .map_err(|e| e.to_string())
     }
 
@@ -485,6 +500,8 @@ mod tests {
             "hi",
             Some("tester"),
             pg_synapse_core::types::TraceLevel::Full,
+            None,
+            &crate::audit_capability::AuditGrant::mint(),
         )
         .expect("log_execution must succeed");
 
@@ -506,6 +523,90 @@ mod tests {
             (cost - 0.123456).abs() < 1e-9,
             "NUMERIC cost must be preserved to 6 decimals, got {cost}"
         );
+    }
+
+    /// F2: the audit trail is one privileged call, and the async path's
+    /// placeholder row is replaced by the real one inside it.
+    ///
+    /// The async entry point writes a `queued` row under an id it mints, then
+    /// the kernel mints a different id for the messages, so the placeholder has
+    /// to go. It used to go in a separate DELETE, which left a window where a
+    /// failure of the write after it would leave the run with no row at all.
+    /// Passing it as `supersedes` puts both in one statement.
+    #[pg_test]
+    fn log_execution_supersedes_the_queued_placeholder() {
+        use pg_synapse_core::types::{ExecutorOutcome, Message, OutcomeStatus};
+        use uuid::Uuid;
+
+        // Standing in for the entry point that would hold this for the run.
+        let grant = crate::audit_capability::AuditGrant::mint();
+
+        let placeholder = Uuid::new_v4();
+        crate::sql_functions::record_status(
+            &placeholder.to_string(),
+            "numeric_agent",
+            Some("hi"),
+            None,
+            "queued",
+            Some("tester"),
+            &grant,
+        )
+        .expect("placeholder must be recordable");
+
+        let real = Uuid::new_v4();
+        let msg: Message = serde_json::from_value(json!({
+            "execution_id": real,
+            "seq": 0,
+            "role": "assistant",
+            "content": "done",
+            "tool_call_id": null,
+            "tool_name": null,
+            "tool_input": null,
+            "tool_output": null,
+            "timestamp": "1970-01-01T00:00:00Z",
+        }))
+        .expect("Message must deserialize");
+        let outcome = ExecutorOutcome {
+            output: "done".into(),
+            messages: vec![msg],
+            tool_calls: vec![],
+            tokens_in: 1,
+            tokens_out: 2,
+            cost_usd: None,
+            duration_ms: 10,
+            status: OutcomeStatus::Completed,
+            events: vec![],
+        };
+        crate::sql_functions::log_execution(
+            &outcome,
+            "numeric_agent",
+            "hi",
+            Some("tester"),
+            pg_synapse_core::types::TraceLevel::Full,
+            Some(&placeholder.to_string()),
+            &grant,
+        )
+        .expect("log_execution must succeed");
+
+        let gone: Option<i64> = Spi::get_one(&format!(
+            "SELECT count(*) FROM synapse.executions WHERE execution_id = '{placeholder}'::uuid"
+        ))
+        .unwrap();
+        assert_eq!(gone, Some(0), "the placeholder row must be superseded");
+
+        let kept: Option<i64> = Spi::get_one(&format!(
+            "SELECT count(*) FROM synapse.executions WHERE execution_id = '{real}'::uuid"
+        ))
+        .unwrap();
+        assert_eq!(kept, Some(1), "the real row must be written");
+
+        // The whole run in one call: the transcript lands with it, not through
+        // a separate INSERT per message.
+        let msgs: Option<i64> = Spi::get_one(&format!(
+            "SELECT count(*) FROM synapse.messages WHERE execution_id = '{real}'::uuid"
+        ))
+        .unwrap();
+        assert_eq!(msgs, Some(1), "messages must be written by the same call");
     }
 
     // ---- N2.2: remaining SQL functions ----
@@ -616,6 +717,276 @@ mod tests {
         let arr = v.as_array().expect("sql_query returns a JSON array");
         assert_eq!(arr.len(), 1, "one row expected: {v}");
         assert_eq!(arr[0]["x"], 1);
+    }
+
+    // ---- Model tiers: settings decide what small and large are ----
+
+    /// The resolution order an agent's model goes through.
+    ///
+    /// Explicit beats tier, tier beats nothing. Checked through
+    /// `config_agents`, which is where the resolution lives, rather than by
+    /// running an agent, which would need an LLM.
+    #[pg_test]
+    fn model_tier_resolves_through_settings() {
+        Spi::run("SET pg_synapse.default_llm_profile_main = 'big-one'").unwrap();
+        Spi::run("SET pg_synapse.default_llm_profile_small = 'little-one'").unwrap();
+        Spi::run(
+            "SELECT synapse.agent_create('tier_probe', 'p', 'conversation', NULL, \
+             ARRAY[]::text[], 4, 60000)",
+        )
+        .unwrap();
+
+        let main_for = |agent: &str| -> Option<String> {
+            let v = jsonb_of(&format!(
+                "SELECT (SELECT x FROM jsonb_array_elements(synapse.config_agents()) x \
+                 WHERE x->>'name' = '{agent}')"
+            ));
+            v.get("llm_profile_main")
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_owned())
+        };
+
+        // Default tier is large, so it takes the large default.
+        assert_eq!(main_for("tier_probe").as_deref(), Some("big-one"));
+
+        // Switching tier switches which setting applies.
+        Spi::run("SELECT synapse.agent_set_model_tier('tier_probe', 'small')").unwrap();
+        assert_eq!(main_for("tier_probe").as_deref(), Some("little-one"));
+
+        // A profile named outright wins over the tier, which is still small.
+        Spi::run("UPDATE synapse.agents SET llm_profile_main = 'pinned' WHERE name = 'tier_probe'")
+            .unwrap();
+        assert_eq!(
+            main_for("tier_probe").as_deref(),
+            Some("pinned"),
+            "an explicitly named profile must beat the tier default"
+        );
+    }
+
+    /// An unknown tier is refused rather than silently stored.
+    #[pg_test(error = "invalid model tier 'enormous'; use 'small' or 'large'")]
+    fn model_tier_rejects_an_unknown_value() {
+        Spi::run(
+            "SELECT synapse.agent_create('tier_bad', 'p', 'conversation', NULL, \
+             ARRAY[]::text[], 4, 60000)",
+        )
+        .unwrap();
+        Spi::run("SELECT synapse.agent_set_model_tier('tier_bad', 'enormous')").unwrap();
+    }
+
+    // ---- D5 / O1: inline trigger mode is bounded by construction ----
+
+    /// The inline ceiling is a stated number, not "much shorter".
+    ///
+    /// O1 was blocking for the DBA persona precisely because D5 described this
+    /// bound in prose. A registered GUC with a default is what turns it into
+    /// something an operator can read, audit and change.
+    #[pg_test]
+    fn inline_timeout_has_a_stated_default() {
+        let v: Option<String> =
+            Spi::get_one("SELECT current_setting('pg_synapse.inline_timeout_ms')").unwrap();
+        assert_eq!(
+            v.as_deref(),
+            Some("2000"),
+            "the inline ceiling must be a stated number"
+        );
+    }
+
+    /// It is a ceiling, not a default: it may only take time away.
+    ///
+    /// An agent configured tighter than the ceiling keeps its own budget, and
+    /// an agent configured looser is cut down to it. Tested on the arithmetic
+    /// rather than by running an agent, which would need an LLM.
+    #[pg_test]
+    fn the_inline_ceiling_only_ever_lowers() {
+        use std::time::Duration;
+        let cap = Duration::from_millis(2_000);
+        let generous = Duration::from_millis(90_000);
+        let tight = Duration::from_millis(500);
+        assert_eq!(
+            generous.min(cap),
+            cap,
+            "a loose agent is cut to the ceiling"
+        );
+        assert_eq!(tight.min(cap), tight, "a tight agent keeps its own budget");
+    }
+
+    /// Every tool that reaches the network is refused inline, and every tool
+    /// that does not is allowed.
+    ///
+    /// The second half is the one that matters over time: `is_egress_tool` is
+    /// a hand-maintained name list, so this pins it against the tools that
+    /// actually exist. A plugin added later without a decision here shows up
+    /// as a failure rather than as a silent hole in D5.
+    #[pg_test]
+    fn every_network_tool_is_refused_inline() {
+        use crate::sql_functions::is_egress_tool;
+
+        for t in [
+            "http_get",
+            "http_head",
+            "http_post",
+            "search_news",
+            "fetch_feed",
+            "read_article",
+            "load_url",
+            "remote_query",
+            "remote_exec",
+            // Transitive: runs another agent, whose tools this check never sees.
+            "call_agent",
+        ] {
+            assert!(
+                is_egress_tool(t),
+                "{t} reaches the network and must be refused inline"
+            );
+        }
+
+        // The complete set of registered tools that do not, as of this commit.
+        for t in [
+            "sql_query",
+            "sql_exec",
+            "describe_schema",
+            "load_csv",
+            "load_json",
+            "export_csv",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_files",
+            "grep",
+            "calculator",
+            "get_current_time",
+            "lede_compress",
+        ] {
+            assert!(
+                !is_egress_tool(t),
+                "{t} is local and must stay usable inline"
+            );
+        }
+    }
+
+    /// O8: the encryption key is not readable by a caller who can run an agent.
+    ///
+    /// `GucContext::Suset` governs who may SET a GUC and says nothing about who
+    /// may read one, so with default flags this returned the key to a
+    /// synapse_user through an ordinary `sql_query` tool call, in one line.
+    /// Per-caller isolation does not help, because a GUC read is not a table
+    /// read and no grant governs it. The `SUPERUSER_ONLY` flag is what closes
+    /// it, and this pins the flag so removing it fails here.
+    ///
+    /// Two functions rather than one, because `pg_test`'s `error =` matches the
+    /// whole message and Postgres reworded this refusal in 16. The behaviour is
+    /// identical on every major; the wording is version trivia and being
+    /// refused at all is the property being pinned.
+    #[cfg(not(feature = "pg15"))]
+    #[pg_test(error = "permission denied to examine \"pg_synapse.master_key\"")]
+    fn master_key_is_not_readable_by_synapse_user() {
+        read_master_key_as_synapse_user();
+    }
+
+    /// The pg15 wording of the same refusal. See above.
+    #[cfg(feature = "pg15")]
+    #[pg_test(
+        error = "must be superuser or have privileges of pg_read_all_settings to examine \"pg_synapse.master_key\""
+    )]
+    fn master_key_is_not_readable_by_synapse_user_pg15() {
+        read_master_key_as_synapse_user();
+    }
+
+    fn read_master_key_as_synapse_user() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run("SELECT current_setting('pg_synapse.master_key')").unwrap();
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    // ---- F2: per-caller isolation, the privilege matrix ----
+    //
+    // Four claims, one test each. Together they are what F2 promised: a
+    // restricted caller can run an agent, cannot read secrets, cannot forge
+    // the audit trail, and cannot reach a table their own role lacks.
+
+    /// A restricted caller can reach everything a run needs.
+    ///
+    /// The entry points are SECURITY INVOKER now, so the privileged work they
+    /// still do has to be reachable as `synapse_user` or no run gets off the
+    /// ground. Actually running an agent needs an LLM the harness does not
+    /// have, so this exercises the plumbing a run depends on instead.
+    #[pg_test]
+    fn synapse_user_can_reach_what_a_run_needs() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run("SELECT synapse.ensure_kernel()").expect("kernel build must be reachable");
+        Spi::run("SELECT synapse.agent_trace_level('nobody')")
+            .expect("trace level must be reachable");
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    /// The trap slice 2a exists to avoid. `ensure_kernel` reads secrets on the
+    /// caller's behalf, but the function that returns them is not granted, so
+    /// a caller cannot ask for one directly.
+    #[pg_test(error = "permission denied for function config_secrets")]
+    fn synapse_user_cannot_read_secrets_through_the_config_reader() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run("SELECT synapse.config_secrets(ARRAY['anything'])").unwrap();
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    /// The audit writer IS granted to `synapse_user`, and that is still not
+    /// enough to write with. Without a token minted by a run in flight the
+    /// call is refused, so the grant does not become a way to forge the trail.
+    // The message is on one line because the pg_test attribute cannot unescape
+    // a continuation inside its `error =` literal.
+    #[allow(clippy::literal_string_with_formatting_args)]
+    #[pg_test(
+        error = "audit writes are reachable only from a run in progress; this function cannot be called directly"
+    )]
+    fn synapse_user_cannot_forge_an_audit_row() {
+        Spi::run("SET ROLE synapse_user").unwrap();
+        Spi::run(
+            "SELECT synapse.audit_status('{\"execution_id\":\"00000000-0000-0000-0000-000000000001\",\
+             \"agent_name\":\"forged\",\"status\":\"completed\"}'::jsonb, \
+             'ffffffffffffffffffffffffffffffff')",
+        )
+        .unwrap();
+        Spi::run("RESET ROLE").unwrap();
+    }
+
+    /// The point of the whole exercise: an agent's SQL reaches what the CALLER
+    /// may reach, not what the extension owner may.
+    ///
+    /// `synapse.secrets` is granted to nobody but admin and owner. While
+    /// `tool_call` was SECURITY DEFINER this same statement ran with the
+    /// owner's rights and returned a count. As INVOKER under `synapse_user` it
+    /// is Postgres that says no, which is the difference between an agent that
+    /// is trusted to behave and one that cannot misbehave.
+    #[pg_test]
+    fn an_agents_sql_cannot_reach_a_table_the_caller_lacks() {
+        // `tool_call` reports a tool failure in its return value rather than
+        // raising, so the denial arrives as JSON. That is the contract an
+        // agent sees too: the model is told it may not read that table and
+        // can act on it, instead of the whole statement aborting.
+        Spi::run("SET ROLE synapse_user").unwrap();
+        let denied = jsonb_of(
+            "SELECT synapse.tool_call('sql_query', \
+             '{\"query\":\"SELECT count(*) AS n FROM synapse.secrets\",\"params\":[]}'::jsonb)",
+        );
+        Spi::run("RESET ROLE").unwrap();
+
+        let msg = denied.to_string();
+        assert!(
+            msg.contains("permission denied for table secrets"),
+            "synapse_user must not reach synapse.secrets through an agent tool, got {msg}"
+        );
+
+        // The same statement as the owner still works, which is what shows the
+        // denial came from the caller's rights and not from a broken tool.
+        let allowed = jsonb_of(
+            "SELECT synapse.tool_call('sql_query', \
+             '{\"query\":\"SELECT count(*) AS n FROM synapse.secrets\",\"params\":[]}'::jsonb)",
+        );
+        assert!(
+            allowed.get("error").is_none(),
+            "the same read must succeed for a privileged caller, got {allowed}"
+        );
     }
 
     // ---- T1: reactive triggers (ADR D14 / operator approval 2026-05-17) ----
@@ -903,6 +1274,9 @@ mod tests {
             "pg_synapse.default_embedding_profile",
             "pg_synapse.default_timeout_ms",
             "pg_synapse.default_timeout_seconds",
+            "pg_synapse.inline_timeout_ms",
+            "pg_synapse.worker_database",
+            "pg_synapse.worker_interval_ms",
             "pg_synapse.default_max_iterations",
             "pg_synapse.default_cost_cap_usd",
             "pg_synapse.trace_enabled",
@@ -971,5 +1345,73 @@ pub mod pg_test {
     #[must_use]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
         vec![]
+    }
+}
+
+/// Map an `execute` envelope onto a queue terminal status.
+///
+/// The queue used to decide this by asking whether an `error` key was present,
+/// which is true only for `OutcomeStatus::Errored`. That left three other
+/// non-success terminal states recorded as `done`: `max_iterations`,
+/// `timed_out`, and `cost_cap_exceeded`. The last two are the wall-clock and
+/// cost guardrails firing, so a guardrail doing its job was being written down
+/// as a successful run, and anyone auditing `synapse.agent_queue` to ask
+/// whether last night's scheduled work completed got the wrong answer.
+///
+/// Only `completed` is a success. Everything else carries a reason.
+///
+/// Returned as (queue status, error reason). Pure, so it is testable without a
+/// live Postgres backend.
+pub(crate) fn queue_status_for(envelope: &serde_json::Value) -> (&'static str, Option<String>) {
+    let status = envelope
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("errored");
+    if status == "completed" {
+        return ("done", None);
+    }
+    let reason = envelope
+        .get("error")
+        .and_then(|e| e.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("run ended with status \"{status}\""));
+    ("error", Some(reason))
+}
+
+#[cfg(test)]
+mod queue_status_tests {
+    use super::queue_status_for;
+    use serde_json::json;
+
+    #[test]
+    fn completed_is_the_only_success() {
+        let (status, err) = queue_status_for(&json!({"status": "completed", "output": "hi"}));
+        assert_eq!(status, "done");
+        assert!(err.is_none());
+    }
+
+    /// The regression this function exists for. Each of these previously
+    /// landed as "done" because no `error` key was present.
+    #[test]
+    fn guardrail_outcomes_are_errors_not_successes() {
+        for s in ["timed_out", "cost_cap_exceeded", "max_iterations"] {
+            let (status, err) = queue_status_for(&json!({"status": s, "output": "partial"}));
+            assert_eq!(status, "error", "{s} must not be recorded as done");
+            assert!(err.unwrap().contains(s), "{s} must say why it stopped");
+        }
+    }
+
+    #[test]
+    fn errored_keeps_its_own_message() {
+        let (status, err) = queue_status_for(&json!({"status": "errored", "error": "boom"}));
+        assert_eq!(status, "error");
+        assert_eq!(err.as_deref(), Some("boom"));
+    }
+
+    /// A malformed envelope is treated as a failure, never as a success.
+    #[test]
+    fn missing_status_is_not_a_success() {
+        let (status, _) = queue_status_for(&json!({}));
+        assert_eq!(status, "error");
     }
 }

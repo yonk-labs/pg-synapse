@@ -382,8 +382,17 @@ impl Runtime {
     }
 
     fn resolve_llm(&self, name: Option<&str>) -> Result<Arc<dyn LlmProvider>, RuntimeError> {
-        let key =
-            name.ok_or_else(|| RuntimeError::Config("agent missing llm_profile_main".to_owned()))?;
+        // Nothing resolved, which for a host that supplies tier defaults means
+        // the agent named no profile and its tier has no default configured.
+        // Say both, because "missing llm_profile_main" sent people looking at
+        // the agent row when the setting was the thing that was empty.
+        let key = name.ok_or_else(|| {
+            RuntimeError::Config(
+                "no LLM profile for this agent: it does not name one and no default is \
+                 configured for its tier (see pg_synapse.default_llm_profile_main / _small)"
+                    .to_owned(),
+            )
+        })?;
         self.llm_providers.get(key).cloned().ok_or_else(|| {
             RuntimeError::Provider(ProviderError::NotRegistered(format!("llm profile '{key}'")))
         })

@@ -1,7 +1,7 @@
 # EXAMPLE_OUTPUT: sql-agent-readwrite
 
 Captured 2026-05-15 against vLLM serving `Intel/Qwen3-Coder-Next-int4-AutoRound`
-at `http://192.168.1.193:8000/v1`, on the v0.1.1 security-hardened pgrx host
+at `http://localhost:8000/v1`, on the v0.1.1 security-hardened pgrx host
 (SECURITY DEFINER functions, SAVEPOINT-per-tool-call, typed positional bind
 params).
 

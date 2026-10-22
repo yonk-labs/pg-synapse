@@ -4,7 +4,7 @@
 //!
 //! | Key                              | Meaning                                                                |
 //! |----------------------------------|------------------------------------------------------------------------|
-//! | `base_url` (profile column)      | Endpoint root, e.g. `http://192.168.1.193:8000/v1`. Wins over params.  |
+//! | `base_url` (profile column)      | Endpoint root, e.g. `http://localhost:8000/v1`. Wins over params.  |
 //! | `params.base_url`                | Fallback endpoint root if the column is null.                          |
 //! | `params._resolved_api_key`       | API key resolved from `api_key_secret` by the host. Wins over raw.     |
 //! | `params.api_key`                 | Raw API key (only used when no secret was resolved).                   |
@@ -116,7 +116,7 @@ mod tests {
             provider: "openai".into(),
             model: "granite-3.1-2b-instruct".into(),
             api_key_secret: None,
-            base_url: Some("http://192.168.1.193:8000/v1".into()),
+            base_url: Some("http://localhost:8000/v1".into()),
             params: serde_json::json!({}),
         };
         let p = f.build(profile).expect("build succeeds");

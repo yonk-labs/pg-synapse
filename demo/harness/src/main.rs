@@ -6,8 +6,13 @@
 mod api;
 mod db;
 mod error;
+mod files;
+mod mcp;
+mod questions;
 mod runs;
+mod scan;
 mod scenarios;
+mod schedules;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -27,10 +32,23 @@ pub struct AppState {
     pub workloads: WorkloadRegistry,
     pub default_llm_base_url: String,
     pub default_llm_model: String,
+    /// Directory shared with the `db` container at the same absolute path
+    /// (the tools-fs sandbox root there is `/tmp/pg_synapse_fs`; see
+    /// docker-compose.yml). A path this harness writes is directly usable
+    /// by an agent's `read_file` tool with no translation.
+    pub upload_dir: String,
 }
 
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const SIDECAR_HTML: &str = include_str!("../static/sidecar.html");
+const PGONE_HTML: &str = include_str!("../static/pgone.html");
+/// Pre-written, not agent-generated: realistic messy product-review data for
+/// pg-one's "use sample data" button, so the file-upload -> normalize flow
+/// has something real to work with without the builder agent having to
+/// invent source data during its own run.
+pub const SAMPLE_REVIEWS_CSV: &str = include_str!("../sample-data/product_reviews_sample.csv");
+pub const SAMPLE_TICKETS_CSV: &str = include_str!("../sample-data/support_tickets_sample.csv");
+pub const SAMPLE_EXPENSES_CSV: &str = include_str!("../sample-data/expenses_sample.csv");
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
@@ -40,18 +58,47 @@ async fn sidecar_page() -> Html<&'static str> {
     Html(SIDECAR_HTML)
 }
 
+async fn pgone_page() -> Html<&'static str> {
+    Html(PGONE_HTML)
+}
+
 #[tokio::main]
 async fn main() {
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
         "host=localhost port=5432 user=postgres password=postgres dbname=synapse_demo".to_owned()
     });
     let addr = std::env::var("HARNESS_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
-    // The repo's documented test endpoint; the UI form defaults to it and the
-    // presenter overrides it at runtime.
+    // A generic placeholder, not a real endpoint: no personal/internal
+    // address belongs baked into this binary. The UI form prefills with
+    // this and the presenter points it at their own server at runtime;
+    // override via DEFAULT_LLM_BASE_URL/DEFAULT_LLM_MODEL (docker-compose.yml
+    // reads these from a local, gitignored .env, not a tracked default).
     let default_llm_base_url = std::env::var("DEFAULT_LLM_BASE_URL")
-        .unwrap_or_else(|_| "http://192.168.1.193:8000/v1".to_owned());
-    let default_llm_model = std::env::var("DEFAULT_LLM_MODEL")
-        .unwrap_or_else(|_| "Intel/Qwen3-Coder-Next-int4-AutoRound".to_owned());
+        .unwrap_or_else(|_| "http://localhost:8000/v1".to_owned());
+    let default_llm_model =
+        std::env::var("DEFAULT_LLM_MODEL").unwrap_or_else(|_| "local-model".to_owned());
+    let upload_dir =
+        std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "/tmp/pg_synapse_fs/uploads".to_owned());
+    std::fs::create_dir_all(&upload_dir)
+        .unwrap_or_else(|e| panic!("cannot create upload dir {upload_dir}: {e}"));
+    // Two containers share this directory at the same path, and they run as
+    // different users: this process is root, while the agent tools run inside
+    // the Postgres backend as `postgres`. Created 0755 by root, the database
+    // side could read an upload but not write one, so export_csv and
+    // write_file failed with EACCES.
+    //
+    // ponytail: 0777 on a demo sandbox shared between two containers, rather
+    // than aligning uids across images. If this is ever deployed for real, run
+    // both as the same user and drop this.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) =
+            std::fs::set_permissions(&upload_dir, std::fs::Permissions::from_mode(0o777))
+        {
+            eprintln!("could not relax permissions on {upload_dir}: {e}");
+        }
+    }
 
     let state = AppState {
         db_url,
@@ -59,11 +106,23 @@ async fn main() {
         workloads: Arc::new(Mutex::new(HashMap::new())),
         default_llm_base_url,
         default_llm_model,
+        upload_dir,
     };
+
+    // The scheduler driver. pg_cron is the better answer for a deployment the
+    // user owns (it survives this process dying), but it needs
+    // shared_preload_libraries and a restart, which a demo container should
+    // not demand. See schedules::spawn_driver.
+    let scheduler_secs: u64 = std::env::var("SCHEDULER_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(60);
+    schedules::spawn_driver(state.db_url.clone(), scheduler_secs);
 
     let app = Router::new()
         .route("/", get(index))
         .route("/sidecar", get(sidecar_page))
+        .route("/pgone", get(pgone_page))
         .route("/api/sidecar/probe", post(api::sidecar_probe))
         .route("/api/sidecar/execute", post(api::sidecar_execute))
         .route("/api/workload/seed", post(api::workload_seed))
@@ -95,6 +154,34 @@ async fn main() {
         .route("/api/probe/{key}", get(api::probe))
         .route("/api/execution/{execution_id}", get(api::execution_detail))
         .route("/api/scenario/{id}", post(api::scenario_load))
+        .route("/api/upload", post(api::upload_file))
+        .route("/api/files", get(files::list))
+        .route("/api/file/{filename}/process", post(files::process))
+        .route("/api/file/{filename}/delete", post(files::delete))
+        .route("/api/upload/sample", post(api::upload_sample))
+        .route(
+            "/api/connection",
+            get(api::connection_list).post(api::connection_add),
+        )
+        .route("/api/connection/{name}/scan", post(scan::scan))
+        .route("/api/connection/{name}/review", post(scan::review))
+        .route("/api/connection/{name}/gate", get(scan::gate))
+        .route("/mcp", post(mcp::rpc))
+        .route("/api/apps", get(schedules::app_list))
+        .route("/api/app/{app}/drop", post(schedules::app_drop))
+        .route("/api/agent/{agent}/limits", post(schedules::agent_limits))
+        .route("/api/runs", get(schedules::all_runs))
+        .route("/api/build-metrics", get(schedules::build_metrics))
+        .route("/api/app/{app}/schedules", get(schedules::schedule_list))
+        .route("/api/app/{app}/runs", get(schedules::app_runs))
+        .route("/api/schedule", post(schedules::schedule_add))
+        .route("/api/schedule/{id}/drop", post(schedules::schedule_drop))
+        .route("/api/tick", post(schedules::tick))
+        .route("/api/samples", get(api::sample_list))
+        .route("/api/sample/{name}", get(api::sample_download))
+        .route("/api/question", post(questions::save))
+        .route("/api/app/{app}/questions", get(questions::list))
+        .route("/api/app/{app}/q/{name}", get(questions::run))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&addr)

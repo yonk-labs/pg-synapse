@@ -1,0 +1,18 @@
+[package]
+name = "pg-synapse-tools-loadfile"
+version = "0.1.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "load_csv / load_json: stage an uploaded file into a table without the model writing the rows"
+repository = "https://github.com/yonk-labs/pg-synapse"
+
+[dependencies]
+pg-synapse-core      = { path = "../../crates/pg-synapse-core", version = "0.1.1" }
+pg-synapse-tools-fs  = { path = "../pg-synapse-tools-fs", version = "0.1.1" }
+pg-synapse-tools-sql = { path = "../pg-synapse-tools-sql", version = "0.1.1" }
+async-trait = "0.1"
+schemars    = "0.8"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+csv         = "1"
+reqwest     = { workspace = true }

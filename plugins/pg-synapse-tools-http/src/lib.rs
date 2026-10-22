@@ -109,6 +109,51 @@ fn host_allowlisted(host: &str) -> bool {
     allowlist().lock().unwrap().contains(host)
 }
 
+/// Where an agent is permitted to send data, as opposed to where it is
+/// forbidden to reach.
+///
+/// [`is_blocked_ip`] stops an agent reaching *into* a network: loopback,
+/// RFC1918, link local, the cloud metadata endpoint. It does nothing about a
+/// compromised agent reading customer rows and POSTing them to a host the
+/// attacker controls, which is a perfectly ordinary public address. For an
+/// agent whose job is reading untrusted web pages, that is the realistic path
+/// out, and inbound denial does not touch it.
+///
+/// Seeded from `PG_SYNAPSE_HTTP_EGRESS_ALLOW`, comma separated. An entry
+/// beginning with a dot matches that domain and its subdomains
+/// (`.example.com` matches `api.example.com` and `example.com`); anything else
+/// must match the host exactly.
+///
+/// **Unset means unrestricted**, which keeps single-tenant installs working as
+/// they always have. Any shared tier must set it: a tenant-authored agent with
+/// unrestricted egress is an exfiltration channel with a friendly UI.
+fn egress_allowlist() -> &'static Option<Vec<String>> {
+    static EGRESS: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+    EGRESS.get_or_init(|| {
+        let raw = std::env::var("PG_SYNAPSE_HTTP_EGRESS_ALLOW").ok()?;
+        let hosts: Vec<String> = raw
+            .split(',')
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect();
+        // An empty or whitespace-only value means "allow nothing", not
+        // "allow everything". Reading it as the latter would turn a typo into
+        // silently disabled egress control.
+        Some(hosts)
+    })
+}
+
+fn egress_permitted(host: &str) -> bool {
+    let Some(allowed) = egress_allowlist().as_ref() else {
+        return true;
+    };
+    let host = host.to_ascii_lowercase();
+    allowed.iter().any(|entry| match entry.strip_prefix('.') {
+        Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
+        None => host == *entry,
+    })
+}
+
 /// Reject a URL that targets a blocked address before any request is sent.
 ///
 /// Enforces http/https only, honors the operator allowlist, blocks IP literals
@@ -131,6 +176,16 @@ async fn guard_url(url: &str, tool: &str) -> Result<(), ToolError> {
     let host = parsed
         .host_str()
         .ok_or_else(|| blocked("url has no host".into()))?;
+
+    // Egress is checked before the inbound allowlist, so a host exempted from
+    // SSRF checks is still subject to where data may be sent. The two lists
+    // answer different questions and neither should override the other.
+    if !egress_permitted(host) {
+        return Err(blocked(format!(
+            "egress to '{host}' is not permitted; PG_SYNAPSE_HTTP_EGRESS_ALLOW does not list it"
+        )));
+    }
+
     if host_allowlisted(host) {
         return Ok(());
     }
@@ -319,6 +374,58 @@ impl Plugin for HttpToolsPlugin {
 mod tests {
     use super::*;
     use std::net::IpAddr;
+
+    #[test]
+    fn egress_unset_allows_everything() {
+        // Single-tenant installs must keep working with no configuration.
+        assert!(matches_egress(None, "example.com"));
+        assert!(matches_egress(None, "anything.at.all"));
+    }
+
+    #[test]
+    fn egress_exact_host_matches_only_itself() {
+        let allow = Some(vec!["news.google.com".to_owned()]);
+        assert!(matches_egress(allow.clone(), "news.google.com"));
+        assert!(!matches_egress(allow.clone(), "evil.com"));
+        // A suffix must not match without the leading dot form, or
+        // "news.google.com.evil.com" would sail through.
+        assert!(!matches_egress(allow, "news.google.com.evil.com"));
+    }
+
+    #[test]
+    fn egress_dot_prefix_matches_domain_and_subdomains() {
+        let allow = Some(vec![".example.com".to_owned()]);
+        assert!(matches_egress(allow.clone(), "example.com"));
+        assert!(matches_egress(allow.clone(), "api.example.com"));
+        assert!(matches_egress(allow.clone(), "a.b.example.com"));
+        assert!(!matches_egress(allow.clone(), "notexample.com"));
+        assert!(!matches_egress(allow, "example.com.evil.net"));
+    }
+
+    #[test]
+    fn egress_is_case_insensitive() {
+        let allow = Some(vec![".example.com".to_owned()]);
+        assert!(matches_egress(allow, "API.Example.COM"));
+    }
+
+    /// An empty allowlist means allow nothing. Reading it as "allow
+    /// everything" would turn a typo in the env var into silently disabled
+    /// egress control, which is the worst possible failure direction.
+    #[test]
+    fn egress_empty_list_allows_nothing() {
+        assert!(!matches_egress(Some(vec![]), "example.com"));
+    }
+
+    /// Mirrors `egress_permitted` against an explicit list rather than the
+    /// process-wide OnceLock, which cannot be reset between tests.
+    fn matches_egress(allowed: Option<Vec<String>>, host: &str) -> bool {
+        let Some(allowed) = allowed else { return true };
+        let host = host.to_ascii_lowercase();
+        allowed.iter().any(|entry| match entry.strip_prefix('.') {
+            Some(domain) => host == domain || host.ends_with(&format!(".{domain}")),
+            None => host == *entry,
+        })
+    }
 
     #[test]
     fn blocks_loopback_private_and_link_local_ips() {

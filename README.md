@@ -131,6 +131,10 @@ docs/                       design spec, quickstarts, reference, recipes
 
 ## Documentation
 
+- `docs/pg-one.md` the app builder: a sentence in, a working database app out
+- `docs/versus-a-cron-script.md` what this does that a cron script cannot, and what it does worse
+- `docs/threat-model.md` what is defended, what is not, and which is deliberate
+- `docs/replicas-and-failover.md` what runs on a standby, what fails, and what failover loses
 - `docs/AGENTS-GUIDE.md` agent catalog: benchmark agents with schemas, sample code, and reactive triggers
 - `docs/design.md` the design contract
 - `docs/extension-quickstart.md` install and first agent (pgrx path)

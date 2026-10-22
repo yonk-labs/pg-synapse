@@ -1,0 +1,11 @@
+ticket_id,opened_at,customer,channel,subject,body
+T-1001,2026-08-01,Northwind Traders,email,Cannot connect after upgrade,"After upgrading to 17.4 our app gets 'too many connections' every morning around 9am. Restarting the pooler clears it for a few hours."
+T-1002,2026-08-01,Contoso Ltd,chat,Billing looks wrong,"We were charged twice in July. Invoice 88213 and 88240 are for the same period. Please refund one."
+T-1003,2026-08-02,Fabrikam,email,Slow dashboard,"The reporting dashboard takes 40 seconds to load since last week. It used to be instant. Nothing changed on our side."
+T-1004,2026-08-03,Adventure Works,phone,Password reset loop,"Reset link says expired immediately. Tried three browsers. Blocking our whole warehouse team."
+T-1005,2026-08-03,Northwind Traders,email,Feature request: CSV export,"Would love to export the audit log to CSV. Right now we copy paste out of the browser."
+T-1006,2026-08-04,Tailspin Toys,chat,Data looks stale,"Numbers on the summary page are two days behind the detail page. Which one is right?"
+T-1007,2026-08-05,Contoso Ltd,email,Urgent: production down,"All API calls returning 503 since 06:12 UTC. This is a full outage for us. Need someone now."
+T-1008,2026-08-05,Fabrikam,email,Thanks,"Just wanted to say the new index advisor saved us. Query went from 12s to 90ms."
+T-1009,2026-08-06,Wide World Importers,chat,How do I add a teammate,"Cannot find where to invite users. Docs mention a Team page but I do not see one."
+T-1010,2026-08-07,Adventure Works,email,Security question,"Does your product store our data outside the EU? Our auditor is asking and we need this in writing."

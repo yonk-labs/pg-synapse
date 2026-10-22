@@ -12,7 +12,7 @@ log). Every example is idempotent: it drops and recreates its demo database.
 ## Shared prerequisites
 
 - A reachable OpenAI-compatible LLM endpoint that supports tool calls.
-  Default: `http://192.168.1.193:8000/v1` (vLLM serving
+  Default: `http://localhost:8000/v1` (vLLM serving
   `Intel/Qwen3-Coder-Next-int4-AutoRound`). Override with
   `PG_SYNAPSE_LLM_BASE_URL` / `PG_SYNAPSE_LLM_MODEL`.
 - `cargo-pgrx` 0.18 and a pgrx-managed Postgres 17

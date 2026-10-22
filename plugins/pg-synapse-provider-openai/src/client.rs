@@ -527,7 +527,7 @@ impl OpenAiProvider {
     /// Construct a provider for `model` against `base_url`.
     ///
     /// `base_url` should be the path prefix that hosts `/chat/completions`,
-    /// for example `https://api.openai.com/v1` or `http://192.168.1.193:8000/v1`.
+    /// for example `https://api.openai.com/v1` or `http://localhost:8000/v1`.
     /// A trailing slash on `base_url` is stripped.
     pub fn new(model: impl Into<String>, base_url: impl Into<String>) -> Self {
         Self {

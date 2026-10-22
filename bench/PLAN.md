@@ -10,7 +10,7 @@ completes (deterministic DB assertion).
 | key | kind | coordinates |
 | --- | --- | --- |
 | openai-gpt5-mini | remote_openai | api.openai.com, model `gpt-5-mini`, key from `.openai` |
-| vllm-qwen3-coder | remote_openai | http://192.168.1.193:8000/v1 (baseline, proven) |
+| vllm-qwen3-coder | remote_openai | http://localhost:8000/v1 (baseline, proven) |
 | gemma-4-E2B-it | local_gguf | unsloth/gemma-4-E2B-it-GGUF :: gemma-4-E2B-it-Q4_K_M.gguf |
 | qwen3.5-2b | local_gguf | unsloth/Qwen3.5-2B-GGUF :: Qwen3.5-2B-Q4_K_M.gguf |
 | qwen3.5-0.8b | local_gguf | unsloth/Qwen3.5-0.8B-GGUF :: Qwen3.5-0.8B-Q4_K_M.gguf |

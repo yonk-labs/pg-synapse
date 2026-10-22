@@ -18,7 +18,7 @@
 #   - A reachable OpenAI-compatible LLM with tool-call support
 #
 # Configure via env vars:
-#   PG_SYNAPSE_LLM_BASE_URL  default: http://192.168.1.193:8000/v1
+#   PG_SYNAPSE_LLM_BASE_URL  default: http://localhost:8000/v1
 #   PG_SYNAPSE_LLM_MODEL     default: Intel/Qwen3-Coder-Next-int4-AutoRound
 #   PGRX_PG_VERSION          default: 17
 #   PGRX_PORT                default: 28817
@@ -32,7 +32,7 @@ if [[ "${1:-}" == "--docker" ]]; then
   exit 2
 fi
 
-LLM_BASE_URL="${PG_SYNAPSE_LLM_BASE_URL:-http://192.168.1.193:8000/v1}"
+LLM_BASE_URL="${PG_SYNAPSE_LLM_BASE_URL:-http://localhost:8000/v1}"
 LLM_MODEL="${PG_SYNAPSE_LLM_MODEL:-Intel/Qwen3-Coder-Next-int4-AutoRound}"
 PG_VER="${PGRX_PG_VERSION:-17}"
 PGRX_PORT="${PGRX_PORT:-28817}"
@@ -64,7 +64,7 @@ ${DEMO_PSQL} -c "CREATE EXTENSION pg_synapse_pgrx;" >/dev/null
 SEED_TMP="$(mktemp)"
 trap 'rm -f "${SEED_TMP}"' EXIT
 sed \
-  -e "s|http://192.168.1.193:8000/v1|${LLM_BASE_URL}|g" \
+  -e "s|http://localhost:8000/v1|${LLM_BASE_URL}|g" \
   -e "s|Intel/Qwen3-Coder-Next-int4-AutoRound|${LLM_MODEL}|g" \
   "${SCRIPT_DIR}/seed.sql" > "${SEED_TMP}"
 

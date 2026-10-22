@@ -1,0 +1,23 @@
+[package]
+name        = "pg-synapse-tools-readarticle"
+description = "read_article tool: fetch a URL and extract its main article text (Mozilla Readability-style), for feeding downstream summarization"
+edition.workspace      = true
+rust-version.workspace = true
+version.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+homepage.workspace     = true
+authors.workspace      = true
+
+[dependencies]
+pg-synapse-core = { path = "../../crates/pg-synapse-core", version = "0.1.1" }
+async-trait  = { workspace = true }
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+schemars     = { workspace = true }
+reqwest      = { workspace = true }
+readability  = { version = "0.3", default-features = false }
+url          = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
