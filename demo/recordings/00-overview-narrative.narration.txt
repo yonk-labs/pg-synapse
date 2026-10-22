@@ -1,0 +1,41 @@
+pg_synapse puts an AI agent loop inside Postgres. You call an agent from plain SQL: select synapse dot execute, an agent name, and a task. The loop runs inside the database backend, its tools read and write your own tables, and you bring your own language model.
+
+The model is yours: any OpenAI compatible endpoint, here one running on this laptop. All it needs is a base URL and a model name, saved in a Postgres table.
+
+There are three pieces. The extension, which holds the agent loop inside Postgres. This demo harness: a small web server, plus the page you are looking at. And the sidecar, for managed Postgres like RDS, where you cannot install extensions: the same kernel runs beside the database, over a normal connection.
+
+A quick tour of the tabs. Demos holds one click scenarios. Run executes any agent and shows its trace. Talk to DB takes plain English. Agent edits prompts and safety limits. Schema, Tree and SQL let you browse and query your data. Tools and Install cover what agents can call, and how to set it up.
+
+Now a real run, the warm up: ticket triage. I expand the panel, open the card, and set it up. It seeds three support tickets, none of them categorized yet.
+
+Here are the tickets, with category and priority empty. The agent has to read each one, decide, and write the answer back.
+
+I click run on triage ticket one. The loop now runs inside the Postgres backend: the kernel sends the ticket to the language model, which lives outside, and the model answers with a tool call.
+
+The run is complete, and the diagram replays the loop: prompts out to the model, rows back from your tables.
+
+The token counters fill in turn by turn. Cost shows n a, because a local model has no price attached, but a dollar cost cap is enforced whenever a price exists.
+
+Here is the outcome: status, tokens, duration, and the number of tool calls. And below it, the full trace: every message and every tool call the agent made.
+
+And the ticket row itself is now categorized and prioritized. The agent wrote it back with a plain SQL tool call.
+
+Next, pg-one, an app builder on the same runtime. Describe an app in a sentence, and an agent designs the tables, seeds them, and registers a new agent for it, all inside your database.
+
+Let's ask for a plant watering log.
+
+The builder is itself an agent. Right now its loop is running in Postgres, writing SQL to create a schema, and tables for plants and watering events.
+
+It registers the new agent before it seeds any data, so even if it runs out of steps, you are left with something usable. Builds usually take half a minute or so on a local model.
+
+Then it seeds a few sample rows, so the app is not empty when you open it.
+
+Still building. Every statement it runs is plain SQL, and the interface lists them afterwards.
+
+Built. The new app appears on the dashboard as a card, with its own prompt and tools. Behind it is a real schema, with real tables and sample rows.
+
+Browse data lets you check what the builder actually created, rather than taking its word for it.
+
+Finally, the plain SQL side channel. Everything you saw is ordinary tables. Every run, including that build, is a row in synapse dot executions.
+
+And every message and tool call is in synapse dot messages. Watch it all from psql while agents run. That is pg_synapse: agents, inside Postgres, from SQL.

@@ -1,0 +1,31 @@
+This is the third scenario: LLM powered ETL. Unstructured text goes in, clean structured rows come out, and the whole transformation happens inside the database, driven by an agent.
+
+The card describes the job. A table called etl dot raw contacts holds messy free text notes, with inconsistent country names, buried email addresses, and every tone of voice. The agent has to extract the contact, clean up the country, and classify what the person wants.
+
+Set up seeds the raw notes, creates an empty clean contacts table, and registers the ETL agent. It is reload safe, so the demo can always be reset.
+
+Let's read the raw data first, using plain SQL. Five notes. Deutschland, SPAIN, U K, Japan, and someone who just said the states. An angry voicemail, a support request, a sales prospect. Nothing here is a clean column.
+
+And the target table, etl dot contacts, is empty. The expected end state check agrees: it starts out failing, because five raw rows are unprocessed.
+
+Now the run. The suggested prompt is: process all raw contacts into the clean contacts table. I click run.
+
+The loop is running inside the Postgres backend. The agent first reads the raw notes with a SQL query, so the language model sees the actual text.
+
+Then, for each note, the model does the part a regular expression cannot do. It finds the name, the company and the email, turns Deutschland or the states into an ISO country code, and judges whether this is a renewal, a complaint, a demo request, or a pricing question.
+
+The run is complete, and the interface replays the loop on the diagram: prompts to the model, and rows flowing between the agent and your tables.
+
+The token counters fill in turn by turn. Cost shows n a, because a local model has no price attached.
+
+Here is the outcome of the run: the status, tokens, duration, and number of tool calls.
+
+And below is the trace: the agent reading the raw notes, then the insert statements it wrote, with the cleaned values.
+
+Now let's look at the result in SQL. Five clean rows in etl dot contacts, each linked back to its raw note. Names, companies and emails are separated into columns.
+
+Look at the country code column. Deutschland became D E, SPAIN became E S, U K became G B, Japan is J P, and the states became U S. And the intent column classifies each message.
+
+Back on the card, the expected end state check agrees: every raw row now has a clean row. PASS.
+
+That is LLM powered ETL: messy text in, structured data out, all inside Postgres.
