@@ -150,6 +150,11 @@ impl<'a> LoopHarness<'a> {
                 system_parts.push(soul.clone());
             }
         }
+        // Harness components (guardrails, memory, skill trigger lines) are
+        // always-on text and land after the soul, once per run.
+        if let Some(block) = self.ctx.harness.always_on_block() {
+            system_parts.push(block);
+        }
         if !system_parts.is_empty() {
             let body = system_parts.join("\n");
             self.push_message(Role::System, Some(body), None);
@@ -235,6 +240,7 @@ impl<'a> LoopHarness<'a> {
             for tc in &resp.tool_calls {
                 self.issued_tool_calls.push(tc.clone());
             }
+            self.mirror(|o| o.tool_calls.extend(resp.tool_calls.iter().cloned()));
             return Ok(TurnResult::ToolCalls(resp.tool_calls));
         }
         let text = resp.content.unwrap_or_default();
@@ -454,7 +460,16 @@ impl<'a> LoopHarness<'a> {
     /// (cheap; a handful per run) and gated for persistence by `trace_level`
     /// in the host's `log_execution`, mirroring how messages are handled.
     fn record_event(&mut self, kind: EventKind, payload: serde_json::Value) {
-        self.events.push(ExecutionEvent { kind, payload });
+        let ev = ExecutionEvent { kind, payload };
+        self.mirror(|o| o.events.push(ev.clone()));
+        self.events.push(ev);
+    }
+
+    /// Copy an update into the context's progress sink, when the host set one.
+    fn mirror(&self, f: impl FnOnce(&mut ExecutorOutcome)) {
+        if let Some(sink) = &self.ctx.progress {
+            sink.update(f);
+        }
     }
 
     /// Borrow the recorded trace events.
@@ -537,6 +552,14 @@ impl<'a> LoopHarness<'a> {
         if let Some(c) = resp.usage.cost_usd {
             self.cost_so_far += c;
         }
+        let (tin, tout, cost) = (self.tokens_in, self.tokens_out, self.cost_so_far);
+        let elapsed = self.started_at.elapsed().as_millis() as u64;
+        self.mirror(|o| {
+            o.tokens_in = tin;
+            o.tokens_out = tout;
+            o.cost_usd = (cost > 0.0).then_some(cost);
+            o.duration_ms = elapsed;
+        });
     }
 
     fn record_assistant_response(&mut self, resp: &CompletionResponse) {
@@ -584,7 +607,13 @@ impl<'a> LoopHarness<'a> {
         msg.tool_call_id = Some(tc.id.clone());
         msg.tool_name = Some(tc.name.clone());
         msg.tool_input = Some(tc.args.clone());
-        let text = format!("ERROR: {err}");
+        let mut text = format!("ERROR: {err}");
+        // A harness tool hint is the cheap form of an error-signature lesson:
+        // it costs nothing until the matching error happens.
+        if let Some(hint) = self.ctx.harness.hint_for(&tc.name, &err.to_string()) {
+            text.push_str("\nHINT: ");
+            text.push_str(hint);
+        }
         msg.content = Some(text.clone());
         msg.tool_output = Some(serde_json::json!({ "error": text }));
         self.append(msg);
@@ -642,6 +671,7 @@ impl<'a> LoopHarness<'a> {
     fn append(&mut self, mut msg: Message) {
         msg.seq = self.seq;
         self.seq += 1;
+        self.mirror(|o| o.messages.push(msg.clone()));
         self.messages.push(msg);
     }
 }
@@ -732,6 +762,8 @@ mod tests {
             caller_role: Some("pg_synapse_user".into()),
             trace_level: TraceLevel::default(),
             interrupt_check: None,
+            harness: Default::default(),
+            progress: None,
         }
     }
 
@@ -1051,5 +1083,93 @@ mod tests {
             TurnResult::AssistantText(s) => assert_eq!(s, "[ACCEPT]"),
             _ => panic!("expected text"),
         }
+    }
+
+    #[test]
+    fn seed_messages_appends_harness_always_on_block() {
+        use crate::types::{Harness, Skill};
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlmProvider::new("m"));
+        let mut ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        ctx.harness = Harness {
+            guardrails: Some("Never inline literals.".into()),
+            memory: Some("tier is one of free, pro, enterprise".into()),
+            skills: vec![Skill {
+                name: "escalation".into(),
+                description: "a ticket mentions an outage".into(),
+                body: "long body".into(),
+            }],
+            ..Default::default()
+        };
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let sys = h.messages()[0].content.clone().unwrap();
+        assert!(sys.contains("Never inline literals."));
+        assert!(sys.contains("tier is one of"));
+        assert!(sys.contains("load the `escalation` skill"));
+        // The skill BODY is on-demand: never in the always-on system message.
+        assert!(!sys.contains("long body"));
+        assert_eq!(h.messages()[1].role, Role::User);
+    }
+
+    #[test]
+    fn empty_harness_leaves_system_message_unchanged() {
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlmProvider::new("m"));
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        assert_eq!(
+            h.messages()[0].content.as_deref(),
+            Some("be helpful\nyou are alice")
+        );
+    }
+
+    #[test]
+    fn push_tool_error_appends_matching_hint() {
+        use crate::types::{Harness, ToolHint};
+        let llm: Arc<dyn LlmProvider> = Arc::new(MockLlmProvider::new("m"));
+        let mut ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        ctx.harness = Harness {
+            tool_hints: vec![ToolHint {
+                tool_name: Some("sql_exec".into()),
+                error_pattern: "there is no parameter $".into(),
+                hint: "Count the $n placeholders.".into(),
+            }],
+            ..Default::default()
+        };
+        let mut h = LoopHarness::new(&ctx);
+        let tc = ToolCall {
+            id: "c1".into(),
+            name: "sql_exec".into(),
+            args: serde_json::json!({}),
+        };
+        h.push_tool_error(
+            &tc,
+            &ToolError::Execution {
+                name: "sql_exec".into(),
+                reason: "there is no parameter $4".into(),
+            },
+        );
+        let content = h.messages().last().unwrap().content.clone().unwrap();
+        assert!(content.starts_with("ERROR: "), "{content}");
+        assert!(
+            content.contains("\nHINT: Count the $n placeholders."),
+            "{content}"
+        );
+
+        // A different tool's error does not pick up the scoped hint.
+        let tc2 = ToolCall {
+            id: "c2".into(),
+            name: "sql_query".into(),
+            args: serde_json::json!({}),
+        };
+        h.push_tool_error(
+            &tc2,
+            &ToolError::Execution {
+                name: "sql_query".into(),
+                reason: "there is no parameter $4".into(),
+            },
+        );
+        let content2 = h.messages().last().unwrap().content.clone().unwrap();
+        assert!(!content2.contains("HINT:"), "{content2}");
     }
 }

@@ -56,6 +56,7 @@ fn agent(name: &str, llm: &str, tools: Vec<String>) -> AgentRow {
         timeout_ms: 30_000,
         cost_cap_usd: None,
         trace_level: None,
+        components: Default::default(),
     }
 }
 

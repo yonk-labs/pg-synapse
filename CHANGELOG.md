@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Harness components and self-tuning (branch `harness2-borrowings`)
+
+Borrowed from Harness2 (Xu et al. 2026, arXiv 2610.14224); the case and the
+plan are in `docs/harness2-comparison.md` and `docs/harness2-borrowings-plan.md`.
+
+- **`Harness` on `ExecutionContext` and `AgentRow.components`.** Guardrails and
+  memory (always-on), `critique` (reflection executor), on-demand skills and
+  tool-error hints. `LoopHarness::seed_messages` composes the always-on block
+  after the soul; `push_tool_error` appends a matching `HINT:` line to the tool
+  message. Agents without components behave exactly as before.
+- **`load_skill` kernel tool** (`tool::builtin::LoadSkillTool`), registered per
+  run only when the agent has skills. A skill's one-line description is
+  always-on as a trigger line; its body enters context only when loaded.
+- **Always-on cap** of 24,000 chars (`ALWAYS_ON_MAX_CHARS`), enforced by the SQL
+  write functions.
+- **SQL surface (v0.2 shaped, additive):** `synapse.agent_set_component`,
+  `synapse.skill_set` / `skill_drop`, `synapse.tool_hint_add`,
+  `synapse.lesson_add` / `lesson_retire`, `synapse.agent_harness(agent)` (the
+  composed harness as JSON) and `synapse.trajectory(execution_id, trunc)` (a
+  run rendered as `[ACTION]` / `[OBSERVATION]` / `[ERROR]` lines; pure SQL, so
+  the sidecar's seeded schema has it too).
+- **Tables:** `synapse.skills`, `synapse.tool_hints`, `synapse.lessons`; new
+  `guardrails`, `memory`, `critique` columns on `synapse.agents` (with
+  `ADD COLUMN IF NOT EXISTS` for existing schemas).
+- **Lessons** are host data: the pgrx host folds active rows into the memory
+  component at load. With pg-one's privilege boundary, that load goes through
+  `synapse.config_harness(agent)` (owner-only, SECURITY DEFINER) and the
+  always-on columns ride along in `synapse.config_agents()`, so the kernel
+  build never reads the harness tables directly. The sidecar loads the three new columns but not skills,
+  hints or lessons yet.
+- **Reflection executor** critique prompt replaced by an ordered rubric
+  (delivery, conformance, fidelity, consistency, operational fitness, finish),
+  overridable per agent through the `critique` component.
+- **`execute()` envelope** now carries `iterations` (assistant turns). The bench
+  had recorded 0 for every row because the key never existed.
+- **Bench:** `harness_sha` fingerprint per result row and in the resume check;
+  `bench/lint_scenarios.py` reports prompts that restate their own assertion;
+  `bench/tune.py`, a Propose-Probe-Compose tuner that improves one scenario's
+  harness from its own trajectories using the Claude CLI (or any
+  OpenAI-compatible endpoint) as the improver and the scenario assertion as
+  the judge, and writes the distilled lesson through `synapse.lesson_add`.
+- **Timed-out runs keep their trajectory.** `ExecutionContext.progress` (a
+  `ProgressSink`) mirrors every message, tool call, usage update and trace
+  event as the loop records them; when the wall-clock budget elapses the
+  runtime returns that snapshot with `status = timed_out`, so the host writes
+  the execution row and messages and `execute()` returns an `execution_id`.
+  Before this, a timeout returned no messages and no id.
+- **Partial scoring in `bench/tune.py`.** An optional scenario
+  `conditions.sql` (`condition | ok` rows) gives each rollout a score; when
+  nothing passes the full assertion, the final with the highest score is
+  adopted only if it beats the best base rollout. Condition names stay out of
+  every file an improver session can reach until the run ends.
+- **Upgrade script** `pg_synapse_pgrx--0.1.1--0.2.0.sql` (additive: columns,
+  three tables, the trajectory renderer, seven functions, grants). Workspace
+  version bumped to 0.2.0.
+- **`http_post` decodes a JSON-encoded string body.** Some models (seen with
+  Qwen3.6-35B-A3B on vLLM) pass `body` as `"{\"k\": 1}"`; that string is now
+  sent as the object it encodes, so the server no longer answers 422. Any
+  other string body is sent unchanged.
+
 ### Runtime hardening (backend containment)
 
 Bulletproofing pass focused on failure containment inside the Postgres

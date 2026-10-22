@@ -25,3 +25,6 @@ secrets.*
 # Local product specs (specy). May contain commercially sensitive context;
 # this is a public repo. Keep untracked.
 spec/
+
+# tuner run artifacts (bench/tune.py)
+bench/tuned/

@@ -52,22 +52,22 @@ tools-readarticle = ["dep:pg-synapse-tools-readarticle"]
 
 [dependencies]
 pgrx       = "=0.18.0"
-pg-synapse-core            = { path = "../pg-synapse-core", version = "0.1.1" }
-pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.1.1" }
-pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql", version = "0.1.1" }
-pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.1.1", optional = true }
-pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.1.1", optional = true }
-pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llama-cpp", version = "0.1.1", optional = true }
-pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.1.1", optional = true }
-pg-synapse-tools-fs        = { path = "../../plugins/pg-synapse-tools-fs", version = "0.1.1", optional = true }
-pg-synapse-tools-lede      = { path = "../../plugins/pg-synapse-tools-lede", version = "0.1.1", optional = true }
-pg-synapse-tools-calc      = { path = "../../plugins/pg-synapse-tools-calc", version = "0.1.1", optional = true }
-pg-synapse-tools-clock     = { path = "../../plugins/pg-synapse-tools-clock", version = "0.1.1", optional = true }
-pg-synapse-tools-delegate  = { path = "../../plugins/pg-synapse-tools-delegate", version = "0.1.1", optional = true }
-pg-synapse-tools-remotedb  = { path = "../../plugins/pg-synapse-tools-remotedb", version = "0.1.1", optional = true }
-pg-synapse-tools-loadfile  = { path = "../../plugins/pg-synapse-tools-loadfile", version = "0.1.1", optional = true }
-pg-synapse-tools-newssearch = { path = "../../plugins/pg-synapse-tools-newssearch", version = "0.1.1", optional = true }
-pg-synapse-tools-readarticle = { path = "../../plugins/pg-synapse-tools-readarticle", version = "0.1.1", optional = true }
+pg-synapse-core            = { path = "../pg-synapse-core", version = "0.2.0" }
+pg-synapse-provider-openai = { path = "../../plugins/pg-synapse-provider-openai", version = "0.2.0" }
+pg-synapse-tools-sql       = { path = "../../plugins/pg-synapse-tools-sql", version = "0.2.0" }
+pg-synapse-tools-http      = { path = "../../plugins/pg-synapse-tools-http", version = "0.2.0", optional = true }
+pg-synapse-embeddings-ort  = { path = "../../plugins/pg-synapse-embeddings-ort", version = "0.2.0", optional = true }
+pg-synapse-provider-llama-cpp = { path = "../../plugins/pg-synapse-provider-llama-cpp", version = "0.2.0", optional = true }
+pg-synapse-provider-anthropic = { path = "../../plugins/pg-synapse-provider-anthropic", version = "0.2.0", optional = true }
+pg-synapse-tools-fs        = { path = "../../plugins/pg-synapse-tools-fs", version = "0.2.0", optional = true }
+pg-synapse-tools-lede      = { path = "../../plugins/pg-synapse-tools-lede", version = "0.2.0", optional = true }
+pg-synapse-tools-calc      = { path = "../../plugins/pg-synapse-tools-calc", version = "0.2.0", optional = true }
+pg-synapse-tools-clock     = { path = "../../plugins/pg-synapse-tools-clock", version = "0.2.0", optional = true }
+pg-synapse-tools-delegate  = { path = "../../plugins/pg-synapse-tools-delegate", version = "0.2.0", optional = true }
+pg-synapse-tools-remotedb  = { path = "../../plugins/pg-synapse-tools-remotedb", version = "0.2.0", optional = true }
+pg-synapse-tools-loadfile  = { path = "../../plugins/pg-synapse-tools-loadfile", version = "0.2.0", optional = true }
+pg-synapse-tools-newssearch = { path = "../../plugins/pg-synapse-tools-newssearch", version = "0.2.0", optional = true }
+pg-synapse-tools-readarticle = { path = "../../plugins/pg-synapse-tools-readarticle", version = "0.2.0", optional = true }
 tokio        = { workspace = true }
 async-trait  = { workspace = true }
 serde        = { workspace = true }

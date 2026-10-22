@@ -1,5 +1,7 @@
 //! Executor outcome: the value returned by [`crate::Executor::execute`].
 
+use std::sync::{Arc, Mutex};
+
 use serde::{Deserialize, Serialize};
 
 use super::llm::ToolCall;
@@ -36,6 +38,38 @@ pub struct ExecutorOutcome {
     /// `#[serde(default)]` keeps older serialized outcomes deserializable.
     #[serde(default)]
     pub events: Vec<ExecutionEvent>,
+}
+
+/// Shared, append-only mirror of an [`ExecutorOutcome`] that is still being
+/// built.
+///
+/// The runtime hands one to the executor through
+/// [`crate::types::ExecutionContext::progress`] and keeps a clone. If the
+/// wall-clock budget elapses, the executor future is dropped mid-turn and
+/// its own outcome is lost; the runtime returns [`ProgressSink::snapshot`]
+/// instead, so the messages and events up to that point still reach the
+/// host's execution log.
+#[derive(Debug, Clone, Default)]
+pub struct ProgressSink(Arc<Mutex<ExecutorOutcome>>);
+
+impl ProgressSink {
+    /// Fresh, empty sink.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Apply `f` to the mirrored outcome.
+    pub fn update(&self, f: impl FnOnce(&mut ExecutorOutcome)) {
+        // A panic while holding the lock leaves the data intact (every
+        // update is a push or an add), so recover from poisoning.
+        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut guard);
+    }
+
+    /// Copy of the mirrored outcome as it stands now.
+    pub fn snapshot(&self) -> ExecutorOutcome {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
 }
 
 /// Reason a run ended.

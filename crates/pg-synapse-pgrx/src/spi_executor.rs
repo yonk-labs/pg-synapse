@@ -15,11 +15,12 @@ use async_trait::async_trait;
 use pgrx::JsonB;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
+use pgrx::spi::SpiClient;
 use serde_json::Value;
 
 use pg_synapse_core::error::{RuntimeError, ToolError};
 use pg_synapse_core::runtime::ProfileSource;
-use pg_synapse_core::types::{AgentRow, EmbeddingProfileRow, LlmProfileRow};
+use pg_synapse_core::types::{AgentRow, EmbeddingProfileRow, LlmProfileRow, Skill, ToolHint};
 use pg_synapse_tools_sql::SqlExecutor;
 
 /// SQL executor that runs queries via SPI from inside a Postgres backend.
@@ -346,6 +347,10 @@ impl ProfileSource for SpiProfileSource {
     }
 
     async fn agents(&self) -> Result<Vec<AgentRow>, RuntimeError> {
+        // `config_agents()` carries the always-on components (guardrails,
+        // memory, critique) inline as `components`. Skills, tool hints and
+        // lessons come from `config_harness(name)`, behind the same definer
+        // boundary, so the kernel build never reads a table directly.
         let mut rows: Vec<AgentRow> = config_json("SELECT synapse.config_agents()")?;
         // A row left NULL or zero by the operator is filled from the matching
         // GUC before it reaches the kernel. This is the single seam for that,
@@ -354,6 +359,12 @@ impl ProfileSource for SpiProfileSource {
         for agent in &mut rows {
             crate::schema_guc::apply_guc_fallbacks(agent);
         }
+        Spi::connect(|client| -> Result<(), RuntimeError> {
+            for agent in rows.iter_mut() {
+                load_harness_extras(client, agent).map_err(RuntimeError::Config)?;
+            }
+            Ok(())
+        })?;
         Ok(rows)
     }
 
@@ -376,4 +387,66 @@ impl ProfileSource for SpiProfileSource {
         serde_json::from_value(value)
             .map_err(|e| RuntimeError::Config(format!("secret decode: {e}")))
     }
+}
+
+/// Header the host writes above the lessons it folds into the memory
+/// component. Lessons are host data (the experience library); the kernel
+/// only ever sees the composed memory text.
+pub(crate) const LESSONS_HEADER: &str =
+    "Lessons from earlier runs of this agent (each cites the execution it came from):";
+
+/// Load the on-demand and data-driven harness components for one agent:
+/// skills, tool hints (agent-specific first, then global) and active lessons
+/// folded into `components.memory`.
+pub(crate) fn load_harness_extras(
+    client: &SpiClient<'_>,
+    agent: &mut AgentRow,
+) -> Result<(), String> {
+    #[derive(Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Lesson {
+        cue: String,
+        lesson: String,
+    }
+    #[derive(Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Extras {
+        skills: Vec<Skill>,
+        tool_hints: Vec<ToolHint>,
+        lessons: Vec<Lesson>,
+    }
+
+    // One definer read, one decode: the same shape as the other
+    // `synapse.config_*` functions, and for the same reason (see schema.sql).
+    let raw = client
+        .select(
+            "SELECT synapse.config_harness($1)",
+            None,
+            &[DatumWithOid::from(agent.name.clone())],
+        )
+        .map_err(|e| e.to_string())?
+        .first()
+        .get_one::<JsonB>()
+        .map_err(|e| e.to_string())?;
+    let extras: Extras = match raw {
+        Some(j) => serde_json::from_value(j.0).map_err(|e| format!("harness decode: {e}"))?,
+        None => Extras::default(),
+    };
+
+    agent.components.skills = extras.skills;
+    agent.components.tool_hints = extras.tool_hints;
+
+    if !extras.lessons.is_empty() {
+        let lines: Vec<String> = extras
+            .lessons
+            .iter()
+            .map(|l| format!("- When {}: {}", l.cue.trim(), l.lesson.trim()))
+            .collect();
+        let block = format!("{LESSONS_HEADER}\n{}", lines.join("\n"));
+        agent.components.memory = Some(match agent.components.memory.as_deref() {
+            Some(m) if !m.trim().is_empty() => format!("{}\n\n{block}", m.trim_end()),
+            _ => block,
+        });
+    }
+    Ok(())
 }

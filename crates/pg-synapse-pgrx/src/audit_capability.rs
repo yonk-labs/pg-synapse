@@ -79,7 +79,7 @@ pub(crate) fn is_live(token: u128) -> bool {
     LIVE.with(|l| l.borrow().contains(&token))
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 pub(crate) fn live_count() -> usize {
     LIVE.with(|l| l.borrow().len())
 }

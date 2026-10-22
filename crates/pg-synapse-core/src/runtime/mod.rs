@@ -26,10 +26,10 @@ use crate::Executor;
 use crate::LlmProvider;
 use crate::error::{ProviderError, RuntimeError};
 use crate::plugin::Registry;
-use crate::tool::ToolRegistry;
+use crate::tool::{LoadSkillTool, ToolRegistry};
 use crate::types::{
     AgentRow, EmbeddingProfileRow, EmbeddingVector, ExecutionContext, ExecutorOutcome,
-    LlmProfileRow, OutcomeStatus,
+    LlmProfileRow, OutcomeStatus, ProgressSink,
 };
 
 /// Source of agent rows, LLM/embedding profile rows, and secret values.
@@ -206,12 +206,17 @@ impl Runtime {
                 ))
             })?;
 
-        let tools = self.resolve_tools(&agent.tools);
+        let mut tools = self.resolve_tools(&agent.tools);
+        // Skills are on-demand: expose the kernel loader only when the agent
+        // has at least one, so agents without skills see no new tool.
+        if !agent.components.skills.is_empty() {
+            tools.add(LoadSkillTool::new(agent.components.skills.clone()));
+        }
 
         // Pre-flight: reject early if the agent needs tool_use but the
         // provider does not support it. Avoids wasting a full LLM call on
         // an executor loop that will fail on the first tool-call response.
-        if !agent.tools.is_empty() && !llm.capabilities().tool_use {
+        if (!agent.tools.is_empty() || !tools.is_empty()) && !llm.capabilities().tool_use {
             return Err(RuntimeError::Config(format!(
                 "agent '{}' has tools but its LLM provider ('{}') does not support tool_use",
                 agent_name,
@@ -219,6 +224,11 @@ impl Runtime {
             )));
         }
 
+        // The executor future is dropped when the wall clock runs out, taking
+        // its outcome with it. A progress sink keeps a copy of everything the
+        // loop recorded so the timed-out run still has a trajectory.
+        let progress =
+            (!std::time::Duration::from_millis(agent.timeout_ms).is_zero()).then(ProgressSink::new);
         let ctx = ExecutionContext {
             execution_id: Uuid::new_v4(),
             agent_name: agent.name.clone(),
@@ -249,6 +259,8 @@ impl Runtime {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_default(),
             interrupt_check: self.interrupt_check.clone(),
+            harness: agent.components.clone(),
+            progress: progress.clone(),
         };
 
         // Enforce the per-agent wall-clock budget here, at the single
@@ -275,11 +287,17 @@ impl Runtime {
         let hard_stop = budget + budget_grace(budget);
         match tokio::time::timeout(hard_stop, executor.execute(ctx)).await {
             Ok(result) => result.map_err(RuntimeError::from),
-            Err(_elapsed) => Ok(ExecutorOutcome {
-                status: OutcomeStatus::TimedOut,
-                duration_ms: hard_stop.as_millis() as u64,
-                ..Default::default()
-            }),
+            Err(_elapsed) => {
+                // The backstop fired inside a call, so the executor never got
+                // to finalize. The progress sink holds everything recorded up
+                // to the cut; return that rather than an empty outcome.
+                let partial = progress.map(|p| p.snapshot()).unwrap_or_default();
+                Ok(ExecutorOutcome {
+                    status: OutcomeStatus::TimedOut,
+                    duration_ms: hard_stop.as_millis() as u64,
+                    ..partial
+                })
+            }
         }
     }
 
@@ -541,6 +559,7 @@ mod tests {
             timeout_ms: 30_000,
             cost_cap_usd: None,
             trace_level: None,
+            components: Default::default(),
         }
     }
 
@@ -995,6 +1014,42 @@ mod tests {
             elapsed < std::time::Duration::from_millis(550),
             "should return at the 500ms budget, not the backstop, took {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn timed_out_run_keeps_its_partial_trajectory() {
+        // The first turn answers with a tool call, the second hangs past the
+        // budget. The outcome must still carry the messages recorded before
+        // the cut (system, user, the tool call and its error) so the host can
+        // log an execution row and a trajectory.
+        let mock = Arc::new(MockLlmProvider::new("m"));
+        mock.push_tool_call("c1", "missing_tool", serde_json::json!({"q": 1}));
+        mock.push_text("never reached");
+        mock.set_delay_after(1, std::time::Duration::from_secs(30));
+
+        let mut a = agent("a1", "default");
+        a.system_prompt = "be brief".into();
+        a.timeout_ms = 300;
+
+        let runtime = Runtime::builder()
+            .with_plugin(MockLlmFactory::new("mock", mock))
+            .with_llm_profile(llm_profile("default"))
+            .with_agent(a)
+            .build()
+            .await
+            .unwrap();
+
+        let outcome = runtime.execute("a1", "hi").await.unwrap();
+        assert_eq!(outcome.status, crate::types::OutcomeStatus::TimedOut);
+        let roles: Vec<_> = outcome.messages.iter().map(|m| m.role).collect();
+        assert!(
+            roles.len() >= 4,
+            "expected system, user, tool call and tool result before the cut, got {roles:?}"
+        );
+        assert_eq!(outcome.tool_calls.len(), 1);
+        assert_eq!(outcome.tool_calls[0].name, "missing_tool");
+        let id = outcome.messages[0].execution_id;
+        assert!(outcome.messages.iter().all(|m| m.execution_id == id));
     }
 
     #[tokio::test]

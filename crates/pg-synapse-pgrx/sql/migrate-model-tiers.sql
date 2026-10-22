@@ -31,7 +31,12 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
              NULLIF(current_setting('pg_synapse.default_llm_profile_small', true), '')
            ) AS llm_profile_small,
            llm_profile_judge, embedding_profile, tools,
-           max_iterations, timeout_ms, cost_cap_usd, trace_level, model_tier
+           max_iterations, timeout_ms, cost_cap_usd, trace_level, model_tier,
+           -- The always-on harness components ride along as one object so
+           -- the row decodes straight into AgentRow.components.
+           jsonb_build_object('guardrails', guardrails,
+                              'memory',     memory,
+                              'critique',   critique) AS components
     FROM synapse.agents) a
 $$;
 

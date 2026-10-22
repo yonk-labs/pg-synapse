@@ -106,6 +106,19 @@ tokens_out, cost_usd, duration_ms, tool_calls[]}`; error envelope:
 | `embed` | `(text text, profile_name text) -> double precision[]` | DEFINER | user | Embed text with the named (or default) profile; stores nothing |
 | `version` | `() -> text` | DEFINER | user | Extension package version |
 
+### Harness components (branch `harness2-borrowings`)
+
+| Function | Role | Purpose |
+| --- | --- | --- |
+| `agent_set_component(agent text, component text, value text)` | admin | Set `system_prompt`, `soul`, `guardrails`, `memory` or `critique`. NULL clears (not system_prompt). Enforces the 24,000-char always-on cap. |
+| `skill_set(agent text, name text, description text, body text)` | admin | UPSERT an on-demand skill. `description` becomes the always-on trigger line; `body` loads via the `load_skill` tool. |
+| `skill_drop(agent text, name text)` | admin | Delete a skill. |
+| `tool_hint_add(agent text, tool_name text, error_pattern text, hint text) -> bigint` | admin | Hint appended to a tool error containing `error_pattern` (case-insensitive substring). NULL agent = all agents; NULL tool = all tools. |
+| `lesson_add(agent text, cue text, lesson text, evidence text, confidence text, source_execution uuid) -> bigint` | admin | Add an active lesson; folded into the agent's memory at load. All three text fields required. |
+| `lesson_retire(lesson_id bigint, superseded_by bigint)` | admin | Stop folding a lesson in; optionally record its successor. |
+| `agent_harness(agent text) -> jsonb` | both | The composed harness: components (`memory` as written, `memory_with_lessons` as the run sees it), skills, hints, always-on block and char count against the cap. |
+| `trajectory(execution_id uuid, trunc int default 10000) -> text` | both | Render a run's messages as `[ACTION]` / `[OBSERVATION]` / `[ERROR]` lines; observations over `trunc` chars are cut with an explicit marker. |
+
 ### Reactive triggers (ADR D14, operator-approved 2026-05-17)
 
 | Function | Signature | Security | Grant | Description |
@@ -126,7 +139,7 @@ complete, not so you call them.
 
 | Function | Security | Why it is not granted |
 | --- | --- | --- |
-| `config_agents`, `config_llm_profiles`, `config_embedding_profiles` | DEFINER | Kernel config reads. Reachable via `ensure_kernel`. |
+| `config_agents`, `config_llm_profiles`, `config_embedding_profiles`, `config_harness(agent)` | DEFINER | Kernel config reads. `config_agents` carries the always-on harness components; `config_harness` returns skills, tool hints and active lessons. Reachable via `ensure_kernel`. |
 | `config_secrets(names text[])` | DEFINER | **Granting this is `SELECT any_secret_you_like`.** It is why `ensure_kernel` exists in the shape it does. |
 | `record_run(p jsonb)`, `record_status(p jsonb)` | DEFINER | The unguarded audit writers. Callers reach them through `audit_run` / `audit_status`. |
 | `secret_value(secret_name text)` | INVOKER | Decrypts one secret. plpgsql, not sql, because the pgrx test harness has no pgcrypto and a sql body is parsed at creation. |
@@ -152,7 +165,7 @@ the grant would just move audit forgery one function along. See
 
 | Table | Columns |
 | --- | --- |
-| `agents` | name (PK), system_prompt, soul, executor_name (def `conversation`), llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools (text[]), max_iterations (def 10), timeout_ms (def 60000), cost_cap_usd, trace_level, model_tier (`small`/`large`, def `large`), created_at, updated_at |
+| `agents` | name (PK), system_prompt, soul, executor_name (def `conversation`), llm_profile_main, llm_profile_small, llm_profile_judge, embedding_profile, tools (text[]), max_iterations (def 10), timeout_ms (def 60000), cost_cap_usd, trace_level, model_tier (`small`/`large`, def `large`), guardrails, memory, critique, created_at, updated_at |
 | `llm_profiles` | name (PK), provider, model, api_key_secret, base_url, params (jsonb), created_at, updated_at |
 | `embedding_profiles` | name (PK), provider, model, dimension, api_key_secret, base_url, params (jsonb), created_at, updated_at |
 | `secrets` | name (PK), value, is_encrypted, created_at, updated_at |
@@ -166,6 +179,9 @@ the grant would just move audit forgery one function along. See
 | `messages` | execution_id (FK), seq, role, content, tool_call_id, tool_name, tool_input (jsonb), tool_output (jsonb), ts; PK (execution_id, seq) |
 | `traces` | execution_id (FK), seq, event, payload (jsonb), ts; PK (execution_id, seq) |
 | `row_provenance` | execution_id, table_schema, table_name, row_pk, op, written_at. Which run wrote a given row. |
+| `skills` | agent (FK), name, description (always-on trigger), body (on demand), created_at, updated_at; PK (agent, name) |
+| `tool_hints` | hint_id, agent (nullable FK), tool_name (nullable), error_pattern, hint, enabled, created_at |
+| `lessons` | lesson_id, agent (FK), cue, lesson, evidence, confidence, source_execution (nullable FK), status (active/retired), superseded_by, created_at |
 
 ### Queue
 

@@ -10,6 +10,7 @@ pub mod compression;
 pub mod context;
 pub mod diagnostics;
 pub mod embedding;
+pub mod harness;
 pub mod llm;
 pub mod memory;
 pub mod message;
@@ -22,12 +23,13 @@ pub use compression::{Compressed, CompressionBudget};
 pub use context::{ExecutionContext, InterruptCheck};
 pub use diagnostics::{DiagnosticsBundle, export_diagnostics};
 pub use embedding::EmbeddingVector;
+pub use harness::{ALWAYS_ON_MAX_CHARS, Harness, Skill, ToolHint};
 pub use llm::{
     CompletionChunk, CompletionRequest, CompletionResponse, ToolCall, ToolDefinition, Usage,
 };
 pub use memory::{MemoryEntry, MemoryId, MemoryScope, MemorySnapshot};
 pub use message::{Message, Role};
-pub use outcome::{ExecutorOutcome, OutcomeStatus};
+pub use outcome::{ExecutorOutcome, OutcomeStatus, ProgressSink};
 pub use profile::{AgentRow, EmbeddingProfileRow, LlmProfileRow};
 pub use tool::{ToolCtx, ToolOutput, ToolSchema};
 pub use trace::{EventKind, ExecutionEvent, TraceLevel};

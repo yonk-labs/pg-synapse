@@ -68,6 +68,8 @@ pub struct MockLlmProvider {
     model: String,
     capabilities: Mutex<ProviderCapabilities>,
     response_delay: Mutex<std::time::Duration>,
+    delay_after: Mutex<Option<(usize, std::time::Duration)>>,
+    calls: std::sync::atomic::AtomicUsize,
 }
 
 impl MockLlmProvider {
@@ -81,6 +83,8 @@ impl MockLlmProvider {
             model: model.into(),
             capabilities: Mutex::new(ProviderCapabilities::default()),
             response_delay: Mutex::new(std::time::Duration::ZERO),
+            delay_after: Mutex::new(None),
+            calls: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -94,6 +98,13 @@ impl MockLlmProvider {
     /// returning. Used to exercise wall-clock timeout and cancellation paths.
     pub fn set_response_delay(&self, delay: std::time::Duration) -> &Self {
         *self.response_delay.lock().unwrap() = delay;
+        self
+    }
+
+    /// Answer the first `calls` completions immediately, then sleep for
+    /// `delay` on every later one. Used to time a run out mid-trajectory.
+    pub fn set_delay_after(&self, calls: usize, delay: std::time::Duration) -> &Self {
+        *self.delay_after.lock().unwrap() = Some((calls, delay));
         self
     }
 
@@ -171,7 +182,13 @@ impl MockLlmProvider {
 #[async_trait]
 impl LlmProvider for MockLlmProvider {
     async fn complete(&self, _req: CompletionRequest) -> Result<CompletionResponse, LlmError> {
-        let delay = *self.response_delay.lock().unwrap();
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut delay = *self.response_delay.lock().unwrap();
+        if let Some((after, d)) = *self.delay_after.lock().unwrap() {
+            if n >= after {
+                delay = d;
+            }
+        }
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
