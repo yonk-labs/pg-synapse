@@ -3222,8 +3222,13 @@ const DATA_ANALYST = {
 const CORE_AGENTS = [DB_ARCHITECT, DATA_ANALYST];
 // Ensure the always-available compact agents exist once an LLM is connected,
 // so they show up in the Run / Agent pickers without loading a scenario.
+// Once per page load: /api/bootstrap hides these two as system agents, so the
+// `have` check below can never see them and, without this guard, every
+// bootstrap() re-created them and called bootstrap() again, forever.
+let CORE_AGENTS_ENSURED = false;
 async function ensureCoreAgents() {
-  if (!CONNECTED) return;
+  if (!CONNECTED || CORE_AGENTS_ENSURED) return;
+  CORE_AGENTS_ENSURED = true;
   const have = new Set(((BOOT && BOOT.agents) || []).map(a => a.name));
   let created = false;
   for (const a of CORE_AGENTS) {
