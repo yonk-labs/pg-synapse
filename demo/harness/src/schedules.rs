@@ -64,8 +64,8 @@ pub async fn schedule_add(
     let row = client
         .query_one(
             "INSERT INTO synapse.schedules (app, agent, input, every_interval, next_run_at) \
-             VALUES ($1, $2, $3, $4::interval, \
-                     COALESCE($5::timestamptz, now() + $4::interval)) \
+             VALUES ($1, $2, $3, $4::text::interval, \
+                     COALESCE($5::text::timestamptz, now() + $4::text::interval)) \
              RETURNING schedule_id::text",
             &[
                 &req.app,
@@ -107,7 +107,7 @@ pub async fn schedule_drop(
     let client = db::connect(&state.db_url).await?;
     let n = client
         .execute(
-            "DELETE FROM synapse.schedules WHERE schedule_id = $1::uuid",
+            "DELETE FROM synapse.schedules WHERE schedule_id = $1::text::uuid",
             &[&id],
         )
         .await
