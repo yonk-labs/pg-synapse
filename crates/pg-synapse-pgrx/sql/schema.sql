@@ -784,6 +784,25 @@ BEGIN
   VALUES (app_name, agent_name)
   ON CONFLICT DO NOTHING;
 
+  -- Queued and scheduled runs execute inside SECURITY DEFINER functions, so
+  -- their tool SQL runs as synapse_owner, not as whoever enqueued the job.
+  -- Without access to the app's schema those runs fail with "permission denied
+  -- for schema". Grant it here, for the tables that exist now and for ones the
+  -- caller creates later. Skipped where the role does not exist (plain-DDL
+  -- installs such as the sidecar's), and a caller who cannot grant gets a
+  -- warning instead of a failed registration.
+  IF app_schema IS NOT NULL AND to_regrole('synapse_owner') IS NOT NULL THEN
+    BEGIN
+      EXECUTE format('GRANT USAGE ON SCHEMA %I TO synapse_owner', app_schema);
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO synapse_owner', app_schema);
+      EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO synapse_owner', app_schema);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO synapse_owner', app_schema);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO synapse_owner', app_schema);
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE WARNING 'could not grant synapse_owner access to schema %: %', app_schema, SQLERRM;
+    END;
+  END IF;
+
   RETURN jsonb_build_object('app', app_name, 'agent', agent_name, 'schema', app_schema);
 END
 $app_register$;
