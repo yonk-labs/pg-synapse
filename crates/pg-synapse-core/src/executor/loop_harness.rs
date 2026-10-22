@@ -12,7 +12,7 @@
 
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use futures::future::FutureExt;
@@ -43,6 +43,11 @@ pub(crate) enum TurnResult {
     AssistantText(String),
     /// Model issued one or more tool calls.
     ToolCalls(Vec<ToolCall>),
+    /// Model issued no tool calls and no (or whitespace-only) text: neither
+    /// a step forward nor an answer. Distinct from `AssistantText("")` so
+    /// callers cannot mistake it for a deliberate empty final answer and
+    /// silently finalize the run as `Completed`.
+    Empty,
 }
 
 /// Shared loop bookkeeping for executors. Created once per executor run.
@@ -58,6 +63,40 @@ pub(crate) struct LoopHarness<'a> {
     seq: u32,
     started_at: Instant,
     prepend_system: Option<String>,
+}
+
+/// Whether this call repeats one already issued, and what to tell the model.
+///
+/// Observed in the wild: an agent made eight consecutive identical
+/// `search_news` calls hoping for different results, exhausted its iteration
+/// budget, and wrote nothing. Iteration count was the only bound, and a budget
+/// is a poor guard against a loop because it gets spent either way.
+///
+/// `prior` includes the call being dispatched. Two identical calls is a
+/// plausible retry; three is a loop, so the third is refused rather than run.
+///
+/// Compares serialized arguments rather than a hash, because an agent that
+/// varied one character is not looping and should not be stopped.
+///
+/// Free function rather than a method so the rule can be tested without
+/// standing up an execution context: the rule is the interesting part.
+pub(crate) fn repeated_call_refusal(prior: &[ToolCall], tc: &ToolCall) -> Option<String> {
+    const LIMIT: usize = 2;
+    let seen = prior
+        .iter()
+        .filter(|p| p.name == tc.name && p.args == tc.args)
+        .count();
+    if seen > LIMIT {
+        Some(format!(
+            "Refused: you have already called `{}` {} times with exactly these arguments and got \
+             the same result each time. Calling it again will not change the answer. Use what you \
+             already have, or do something different.",
+            tc.name,
+            seen - 1
+        ))
+    } else {
+        None
+    }
 }
 
 impl<'a> LoopHarness<'a> {
@@ -147,7 +186,36 @@ impl<'a> LoopHarness<'a> {
             req_payload["raw_messages"] = serde_json::to_value(&req.messages).unwrap_or_default();
         }
         self.record_event(EventKind::LlmRequest, req_payload);
-        let resp = provider.complete(req).await?;
+        // Bound the provider call by whatever is left of the run's budget.
+        //
+        // The loop-top `check_deadline` only sees turn boundaries, and a model
+        // call takes seconds, so a run whose budget expires mid-call would sail
+        // past it and be cancelled from outside instead: measured on the live
+        // stack, a 20s agent came back at 22s having lost everything. Timing
+        // out here cancels only this one call. The harness holds the messages
+        // and is still alive afterwards, so the executor can finalize with the
+        // transcript intact, which is the whole point.
+        let resp = match self.remaining_budget() {
+            Some(remaining) => {
+                match tokio::time::timeout(remaining, provider.complete(req)).await {
+                    Ok(r) => r?,
+                    Err(_elapsed) => {
+                        let spent = self.started_at.elapsed();
+                        self.record_event(
+                            EventKind::TimeoutCheck,
+                            serde_json::json!({
+                                "elapsed_ms": spent.as_millis() as u64,
+                                "budget_ms": self.ctx.timeout.as_millis() as u64,
+                                "tripped": true,
+                                "during": "llm_call",
+                            }),
+                        );
+                        return Err(ExecutorError::Timeout(spent.as_millis() as u64));
+                    }
+                }
+            }
+            None => provider.complete(req).await?,
+        };
         let mut resp_payload = serde_json::json!({
             "iteration": self.iteration,
             "tokens_in": resp.usage.tokens_in,
@@ -170,6 +238,9 @@ impl<'a> LoopHarness<'a> {
             return Ok(TurnResult::ToolCalls(resp.tool_calls));
         }
         let text = resp.content.unwrap_or_default();
+        if text.trim().is_empty() {
+            return Ok(TurnResult::Empty);
+        }
         Ok(TurnResult::AssistantText(text))
     }
 
@@ -183,6 +254,25 @@ impl<'a> LoopHarness<'a> {
         &mut self,
         tc: &ToolCall,
     ) -> Result<Message, ExecutorError> {
+        // Refuse a call the model has already made identically. Observed in
+        // the wild: an agent made eight consecutive identical `search_news`
+        // calls hoping for different results, exhausted its iteration budget,
+        // and wrote nothing. Iteration count was the only bound, and a budget
+        // is a poor guard against a loop because it is spent either way.
+        //
+        // The third identical call is answered with a refusal instead of being
+        // executed. Two is a plausible retry; three is a loop. The refusal goes
+        // back as an ordinary tool result so the model can read it and change
+        // course, which is cheaper and kinder than aborting the run.
+        if let Some(refusal) = repeated_call_refusal(&self.issued_tool_calls, tc) {
+            self.record_event(
+                EventKind::RepeatedToolCall,
+                serde_json::json!({ "tool": tc.name, "call_id": tc.id }),
+            );
+            let refusal_output = ToolOutput::Text(refusal);
+            return Ok(self.push_tool_result(tc, &refusal_output));
+        }
+
         let tool: Arc<dyn Tool> = match self.ctx.tools.get(&tc.name) {
             Some(t) => t,
             None => {
@@ -276,6 +366,60 @@ impl<'a> LoopHarness<'a> {
                 }),
             );
             return Err(ExecutorError::MaxIterationsReached(self.ctx.max_iterations));
+        }
+        Ok(())
+    }
+
+    /// Budget left before the run's wall-clock deadline, or `None` when the
+    /// agent has no budget (`ctx.timeout` of zero means no limit).
+    ///
+    /// `Some(ZERO)` is never returned: an already-expired budget is reported
+    /// as a tiny remainder so the caller still times out through the normal
+    /// path rather than being handed a `timeout(ZERO)` that elapses instantly
+    /// before the request is even sent.
+    fn remaining_budget(&self) -> Option<Duration> {
+        let budget = self.ctx.timeout;
+        if budget.is_zero() {
+            return None;
+        }
+        Some(
+            budget
+                .saturating_sub(self.started_at.elapsed())
+                .max(Duration::from_millis(1)),
+        )
+    }
+
+    /// Check the wall-clock budget. Returns [`ExecutorError::Timeout`] once
+    /// `ctx.timeout` has elapsed since the harness was constructed.
+    ///
+    /// The budget is also enforced by the runtime, which wraps the whole
+    /// execution in `tokio::time::timeout`. That wrapper cancels the executor
+    /// future, and a cancelled future takes its accumulated messages, events
+    /// and token counts down with it: the run was recorded with an empty
+    /// transcript, so the one run an operator most wants to read was the one
+    /// with nothing in it. Verified on a 120s app build that persisted a
+    /// `timed_out` row and zero `synapse.messages` rows, against 23 for a
+    /// completed run of the same agent.
+    ///
+    /// Checking here instead lets the executor return through `finalize` the
+    /// way the iteration cap already does, so a timed-out run keeps everything
+    /// it did before it ran out. A zero budget means no limit.
+    pub(crate) fn check_deadline(&mut self) -> Result<(), ExecutorError> {
+        let budget = self.ctx.timeout;
+        if budget.is_zero() {
+            return Ok(());
+        }
+        let elapsed = self.started_at.elapsed();
+        if elapsed >= budget {
+            self.record_event(
+                EventKind::TimeoutCheck,
+                serde_json::json!({
+                    "elapsed_ms": elapsed.as_millis() as u64,
+                    "budget_ms": budget.as_millis() as u64,
+                    "tripped": true,
+                }),
+            );
+            return Err(ExecutorError::Timeout(elapsed.as_millis() as u64));
         }
         Ok(())
     }
@@ -454,6 +598,21 @@ impl<'a> LoopHarness<'a> {
         );
     }
 
+    /// Append a corrective user-role message after an [`TurnResult::Empty`]
+    /// turn (no tool call, no text): tells the model to either act or answer,
+    /// and records a trace event so the empty turn is visible after the run.
+    /// Consumes one iteration via the normal loop path, so a model that
+    /// keeps going empty resolves to `MaxIterations`, never a false
+    /// `Completed`.
+    pub(crate) fn push_empty_turn_nudge(&mut self) {
+        self.push_user_message(
+            "Your last response had no tool call and no text. If you are \
+             finished, reply with your final answer as plain text. \
+             Otherwise, call a tool to continue.",
+        );
+        self.record_event(EventKind::EmptyTurn, serde_json::json!({}));
+    }
+
     fn push_message(
         &mut self,
         role: Role,
@@ -489,6 +648,55 @@ impl<'a> LoopHarness<'a> {
 
 #[cfg(test)]
 mod tests {
+    fn call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "c1".into(),
+            name: name.into(),
+            args,
+        }
+    }
+
+    /// The failure this guard exists for: an agent made eight consecutive
+    /// identical search_news calls and burned its whole budget.
+    #[test]
+    fn third_identical_call_is_refused() {
+        let tc = call("search_news", serde_json::json!({"q": "postgres"}));
+        let mut prior = vec![tc.clone()];
+        assert!(
+            repeated_call_refusal(&prior, &tc).is_none(),
+            "first is fine"
+        );
+
+        prior.push(tc.clone());
+        assert!(
+            repeated_call_refusal(&prior, &tc).is_none(),
+            "a retry is plausible"
+        );
+
+        prior.push(tc.clone());
+        let refusal = repeated_call_refusal(&prior, &tc).expect("third is a loop");
+        assert!(refusal.contains("search_news"));
+        assert!(refusal.contains("already called"));
+    }
+
+    /// Different arguments are different work, however many times the same
+    /// tool is used.
+    #[test]
+    fn different_arguments_are_never_refused() {
+        let mut prior: Vec<ToolCall> = Vec::new();
+        for i in 0..6 {
+            let tc = call(
+                "sql_exec",
+                serde_json::json!({"query": format!("INSERT {i}")}),
+            );
+            prior.push(tc.clone());
+            assert!(
+                repeated_call_refusal(&prior, &tc).is_none(),
+                "call {i} does the same kind of work on different data"
+            );
+        }
+    }
+
     use super::*;
     use crate::testing::{MockLlmProvider, MockTool};
     use crate::tool::ToolRegistry;
@@ -570,6 +778,30 @@ mod tests {
         }
         // assistant message recorded
         assert_eq!(h.messages().last().unwrap().role, Role::Assistant);
+    }
+
+    #[tokio::test]
+    async fn one_llm_turn_returns_empty_on_no_text_no_tool_calls() {
+        let mock = MockLlmProvider::new("m");
+        mock.push_text(""); // no tool calls, empty content: not a valid answer
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let res = h.one_llm_turn().await.unwrap();
+        assert!(matches!(res, TurnResult::Empty));
+    }
+
+    #[tokio::test]
+    async fn one_llm_turn_returns_empty_on_whitespace_only_text() {
+        let mock = MockLlmProvider::new("m");
+        mock.push_text("   \n  ");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 5, None);
+        let mut h = LoopHarness::new(&ctx);
+        h.seed_messages();
+        let res = h.one_llm_turn().await.unwrap();
+        assert!(matches!(res, TurnResult::Empty));
     }
 
     #[tokio::test]

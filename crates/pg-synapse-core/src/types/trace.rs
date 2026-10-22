@@ -100,12 +100,21 @@ pub enum EventKind {
     ToolEnd,
     /// A tool invocation returned an error.
     ToolError,
+    /// A turn had no tool call and no text content; the loop nudged the
+    /// model to act or answer instead of finalizing the run.
+    EmptyTurn,
+    /// The model issued a tool call identical to one it already made, and the
+    /// harness refused to run it again. Traced rather than silent, because a
+    /// loop the operator cannot see is a loop nobody fixes.
+    RepeatedToolCall,
     /// A provider call was retried.
     RetryAttempt,
     /// The per-run cost cap was evaluated.
     CostCapCheck,
     /// The per-run iteration cap was evaluated.
     IterationCapCheck,
+    /// The per-run wall-clock budget was evaluated between turns.
+    TimeoutCheck,
 }
 
 impl EventKind {
@@ -118,9 +127,12 @@ impl EventKind {
             Self::ToolStart => "tool_start",
             Self::ToolEnd => "tool_end",
             Self::ToolError => "tool_error",
+            Self::EmptyTurn => "empty_turn",
+            Self::RepeatedToolCall => "repeated_tool_call",
             Self::RetryAttempt => "retry_attempt",
             Self::CostCapCheck => "cost_cap_check",
             Self::IterationCapCheck => "iteration_cap_check",
+            Self::TimeoutCheck => "timeout_check",
         }
     }
 }
@@ -187,6 +199,7 @@ mod tests {
         assert_eq!(EventKind::ToolStart.as_str(), "tool_start");
         assert_eq!(EventKind::ToolEnd.as_str(), "tool_end");
         assert_eq!(EventKind::ToolError.as_str(), "tool_error");
+        assert_eq!(EventKind::EmptyTurn.as_str(), "empty_turn");
         assert_eq!(EventKind::RetryAttempt.as_str(), "retry_attempt");
         assert_eq!(EventKind::CostCapCheck.as_str(), "cost_cap_check");
         assert_eq!(EventKind::IterationCapCheck.as_str(), "iteration_cap_check");
@@ -196,6 +209,7 @@ mod tests {
             EventKind::ToolStart,
             EventKind::ToolEnd,
             EventKind::ToolError,
+            EventKind::EmptyTurn,
             EventKind::RetryAttempt,
             EventKind::CostCapCheck,
             EventKind::IterationCapCheck,
