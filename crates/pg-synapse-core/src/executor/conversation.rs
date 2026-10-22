@@ -163,6 +163,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncated_reply_fails_instead_of_completing() {
+        // Regression test: a server that cuts the reply at its output-token
+        // limit (finish_reason "length") loses the tool call it was writing.
+        // That used to read as an empty or short turn and the run finished
+        // "completed" having done nothing. It must fail with the cause.
+        let mock = MockLlmProvider::new("m");
+        mock.push_truncated("Now let me register the agent...");
+        let llm: Arc<dyn LlmProvider> = Arc::new(mock);
+        let ctx = ctx_with(llm, ToolRegistry::new(), 10, None);
+
+        let err = ConversationExecutor.execute(ctx).await.unwrap_err();
+        assert!(
+            matches!(err, ExecutorError::Llm(LlmError::ResponseTruncated { .. })),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn empty_final_turn_does_not_falsely_complete() {
         // Regression test: a model that goes quiet (no tool call, no text)
         // partway through a task must never read as a successful Completed

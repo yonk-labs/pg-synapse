@@ -15,6 +15,9 @@ pub enum MockResponse {
     Text(String),
     /// Return a text completion with a specific `Usage`.
     TextWithUsage(String, Usage),
+    /// Return a reply cut off by the output-token limit (`finish_reason`
+    /// `"length"`), as a server with a small default `max_tokens` does.
+    Truncated(String),
     /// Return a tool-call completion.
     ToolCall {
         /// Provider-issued call ID.
@@ -117,6 +120,16 @@ impl MockLlmProvider {
         self
     }
 
+    /// Enqueue a reply cut off by the output-token limit (`finish_reason`
+    /// `"length"`).
+    pub fn push_truncated(&self, text: impl Into<String>) -> &Self {
+        self.queue
+            .lock()
+            .unwrap()
+            .push_back(MockResponse::Truncated(text.into()));
+        self
+    }
+
     /// Enqueue a text response with a specific [`Usage`] attached.
     pub fn push_text_with_usage(&self, text: impl Into<String>, usage: Usage) -> &Self {
         self.queue
@@ -198,6 +211,12 @@ impl LlmProvider for MockLlmProvider {
                 content: Some(text),
                 tool_calls: vec![],
                 finish_reason: "stop".into(),
+                usage: Usage::default(),
+            }),
+            Some(MockResponse::Truncated(text)) => Ok(CompletionResponse {
+                content: Some(text),
+                tool_calls: vec![],
+                finish_reason: "length".into(),
                 usage: Usage::default(),
             }),
             Some(MockResponse::TextWithUsage(text, usage)) => Ok(CompletionResponse {
