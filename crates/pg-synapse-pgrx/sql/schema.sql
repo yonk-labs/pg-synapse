@@ -747,6 +747,47 @@ BEGIN
 END
 $app_drop$;
 
+-- Register an app: the row that ties a schema to its agent(s). The pg-one
+-- builder calls this once it has created the agent, so synapse.apps and
+-- synapse.app_agents are populated for every surface (dashboard, schedules,
+-- MCP list_apps). Idempotent: calling it again for the same app updates the
+-- title/description/schema and adds the agent binding if missing.
+CREATE OR REPLACE FUNCTION synapse.app_register(
+  app_name    text,
+  agent_name  text,
+  app_title   text DEFAULT NULL,
+  app_desc    text DEFAULT NULL,
+  app_schema  text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $app_register$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM synapse.agents WHERE name = agent_name) THEN
+    RAISE EXCEPTION 'no agent named "%"', agent_name;
+  END IF;
+  IF app_schema IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM pg_namespace WHERE nspname = app_schema
+  ) THEN
+    RAISE EXCEPTION 'no schema named "%"', app_schema;
+  END IF;
+
+  INSERT INTO synapse.apps (name, title, description, schema_name)
+  VALUES (app_name, app_title, app_desc, app_schema)
+  ON CONFLICT (name) DO UPDATE
+    SET title       = COALESCE(EXCLUDED.title, synapse.apps.title),
+        description = COALESCE(EXCLUDED.description, synapse.apps.description),
+        schema_name = COALESCE(EXCLUDED.schema_name, synapse.apps.schema_name),
+        updated_at  = now();
+
+  INSERT INTO synapse.app_agents (app, agent)
+  VALUES (app_name, agent_name)
+  ON CONFLICT DO NOTHING;
+
+  RETURN jsonb_build_object('app', app_name, 'agent', agent_name, 'schema', app_schema);
+END
+$app_register$;
+
 -- Operator-driven drain (pg_cron or a sidecar poller) runs synapse.drain_queue().
 -- A true background worker drain is the v0.2 upgrade (design spec D8).
 CREATE TABLE IF NOT EXISTS synapse.agent_queue (
