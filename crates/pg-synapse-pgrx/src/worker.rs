@@ -96,9 +96,9 @@ pub extern "C-unwind" fn pg_synapse_worker_main(_arg: pg_sys::Datum) {
         // point: what it records does not depend on any caller's session
         // still existing, or on that session having committed.
         //
-        // A tick that fails is logged and the loop continues. Draining a queue
-        // is inherently retryable, and a worker that dies on one bad job stops
-        // draining every good one behind it.
+        // A tick that fails ends the worker (see the `Err` arm) and Postgres
+        // restarts it. Draining a queue is inherently retryable: the claim
+        // rolls back with the transaction, so no job is lost.
         let result = std::panic::catch_unwind(|| {
             BackgroundWorker::transaction(|| {
                 // The kernel is cached per process and `rebuild_kernel` only
@@ -122,8 +122,16 @@ pub extern "C-unwind" fn pg_synapse_worker_main(_arg: pg_sys::Datum) {
         match result {
             Ok(Some(n)) if n > 0 => log!("pg_synapse queue worker ran {n} job(s)"),
             Ok(_) => {}
-            Err(_) => {
-                log!("pg_synapse queue worker: a tick failed, continuing");
+            Err(payload) => {
+                // Do not swallow this and carry on. pgrx's `transaction` has
+                // no abort path: the error unwinds past its commit, so the
+                // tick's transaction is left open, holding its locks, and
+                // every later tick runs inside that dead transaction. Exiting
+                // lets Postgres roll the transaction back and restart the
+                // worker after `set_restart_time` (a claimed job rolls back to
+                // 'queued' with it).
+                log!("pg_synapse queue worker: a tick failed, exiting so Postgres restarts it");
+                std::panic::resume_unwind(payload);
             }
         }
     }
