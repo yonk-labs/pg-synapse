@@ -31,7 +31,10 @@ services:
               # so an agent's result no longer depends on the session that
               # asked for it still being there. Names a database because a
               # worker connects to exactly one.
-              "-c", "pg_synapse.worker_database=synapse_demo"]
+              "-c", "pg_synapse.worker_database=synapse_demo",
+              # Inline mode aborts the INSERT when the agent exceeds this budget.
+              # The 2000 ms default is too tight for a slow local model.
+              "-c", "pg_synapse.inline_timeout_ms=20000"]
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: synapse_demo
