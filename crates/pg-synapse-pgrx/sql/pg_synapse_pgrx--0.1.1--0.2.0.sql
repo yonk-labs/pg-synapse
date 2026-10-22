@@ -7,10 +7,12 @@
 --
 -- Apply with: ALTER EXTENSION pg_synapse_pgrx UPDATE TO '0.2.0';
 --
--- A database that took the pg-one changes at 0.1.1 ran migrate-f2.sql and
--- migrate-model-tiers.sql by hand. Where that happened, config_agents() is
--- re-created below so it also carries the harness components; where it did
--- not, the block is skipped and CREATE EXTENSION's schema.sql is the source.
+-- This script carries the harness2 objects only. A database that took the
+-- pg-one changes at 0.1.1 ran migrate-f2.sql and migrate-model-tiers.sql by
+-- hand; those objects are not extension members, so this script must not
+-- touch them (an extension may not replace an object it does not own).
+-- migrate-model-tiers.sql defines config_agents() with the harness
+-- components itself, in either order relative to this upgrade.
 
 -- Always-on harness components.
 ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS guardrails TEXT;
@@ -211,34 +213,6 @@ RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
       FROM synapse.lessons l
       WHERE l.agent = p_agent AND l.status = 'active'), '[]'::jsonb))
 $$;
-
--- config_agents() gains the always-on components, but only where the pg-one
--- shape (model_tier, agent_llm_profile) is already in place; the body is
--- checked at creation and would fail against a plain 0.1.1 agents table.
-DO $cfg$ BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_schema = 'synapse' AND table_name = 'agents'
-               AND column_name = 'model_tier') THEN
-    EXECUTE $fn$
-      CREATE OR REPLACE FUNCTION synapse.config_agents()
-      RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $body$
-        SELECT COALESCE(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM (
-          SELECT name, system_prompt, soul, executor_name,
-                 synapse.agent_llm_profile(name) AS llm_profile_main,
-                 COALESCE(
-                   llm_profile_small,
-                   NULLIF(current_setting('pg_synapse.default_llm_profile_small', true), '')
-                 ) AS llm_profile_small,
-                 llm_profile_judge, embedding_profile, tools,
-                 max_iterations, timeout_ms, cost_cap_usd, trace_level, model_tier,
-                 jsonb_build_object('guardrails', guardrails,
-                                    'memory',     memory,
-                                    'critique',   critique) AS components
-          FROM synapse.agents) a
-      $body$;
-    $fn$;
-  END IF;
-END $cfg$;
 
 -- Grants, mirroring grants.sql. New functions start with PUBLIC EXECUTE, so
 -- strip it first, as the fresh-install finalize step does.

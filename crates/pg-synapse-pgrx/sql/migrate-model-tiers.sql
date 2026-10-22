@@ -21,6 +21,13 @@ RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$
   FROM synapse.agents a WHERE a.name = p_agent
 $$;
 
+-- config_agents() below carries the harness components, so a database that
+-- runs this before the 0.2.0 extension upgrade needs the columns first. Same
+-- idempotent adds as schema.sql and the upgrade script.
+ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS guardrails TEXT;
+ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS memory     TEXT;
+ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS critique   TEXT;
+
 CREATE OR REPLACE FUNCTION synapse.config_agents()
 RETURNS jsonb LANGUAGE sql SECURITY DEFINER STABLE AS $$
   SELECT COALESCE(jsonb_agg(to_jsonb(a)), '[]'::jsonb) FROM (
