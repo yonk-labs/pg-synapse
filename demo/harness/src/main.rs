@@ -42,6 +42,7 @@ pub struct AppState {
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const SIDECAR_HTML: &str = include_str!("../static/sidecar.html");
 const PGONE_HTML: &str = include_str!("../static/pgone.html");
+const SLIDES_HTML: &str = include_str!("../static/slides.html");
 /// Pre-written, not agent-generated: realistic messy product-review data for
 /// pg-one's "use sample data" button, so the file-upload -> normalize flow
 /// has something real to work with without the builder agent having to
@@ -60,6 +61,10 @@ async fn sidecar_page() -> Html<&'static str> {
 
 async fn pgone_page() -> Html<&'static str> {
     Html(PGONE_HTML)
+}
+
+async fn slides_page() -> Html<&'static str> {
+    Html(SLIDES_HTML)
 }
 
 #[tokio::main]
@@ -123,6 +128,7 @@ async fn main() {
         .route("/", get(index))
         .route("/sidecar", get(sidecar_page))
         .route("/pgone", get(pgone_page))
+        .route("/slides", get(slides_page))
         .route("/api/sidecar/probe", post(api::sidecar_probe))
         .route("/api/sidecar/execute", post(api::sidecar_execute))
         .route("/api/workload/seed", post(api::workload_seed))

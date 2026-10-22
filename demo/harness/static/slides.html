@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Postgres Needs an Agent Loop | pg_synapse talk</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #2d3646;
+    --text: #d7dee8; --muted: #8b98a9; --accent: #4ea1ff; --green: #3fb950;
+    --red: #f85149; --orange: #d29922; --yellow: #e3b341;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: #05080c; color: var(--text); overflow: hidden;
+               font: 22px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  /* 1280x720 stage, scaled to fit the window. */
+  #stage { position: absolute; left: 50%; top: 50%; width: 1280px; height: 720px; background: var(--bg);
+           transform-origin: center center; overflow: hidden; border-radius: 6px; }
+  .slide { position: absolute; inset: 0; padding: 56px 72px 64px; display: none; flex-direction: column; }
+  .slide.on { display: flex; }
+  h1 { font-size: 56px; line-height: 1.12; margin: 0 0 18px; letter-spacing: -0.5px; }
+  h2 { font-size: 40px; line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.3px; }
+  h2 em, h1 em { color: var(--accent); font-style: normal; }
+  .kicker { font: 600 15px var(--mono); color: var(--accent); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 10px; }
+  .sub { color: var(--muted); font-size: 22px; margin: 0 0 22px; }
+  code, .mono { font-family: var(--mono); }
+  .code { background: #0a0e14; border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px;
+          font: 17px/1.55 var(--mono); color: #cdd9e5; white-space: pre; overflow: hidden; }
+  .code .k { color: #ff7b72; } .code .s { color: #a5d6ff; } .code .c { color: #8b98a9; } .code .f { color: #d2a8ff; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: 1fr 1fr 1fr; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; }
+  .card h3 { margin: 0 0 6px; font-size: 22px; color: #fff; }
+  .card p { margin: 0; color: var(--muted); font-size: 18px; line-height: 1.4; }
+  .card .tag { font: 600 13px var(--mono); color: var(--accent); letter-spacing: 1px; text-transform: uppercase; display: block; margin-bottom: 6px; }
+  .card.good { border-color: #25502f; } .card.bad { border-color: #5a2a2a; }
+  ul { margin: 0; padding-left: 26px; } li { margin: 0 0 10px; } li b { color: #fff; }
+  .muted { color: var(--muted); } .acc { color: var(--accent); } .grn { color: var(--green); } .org { color: var(--orange); } .red { color: var(--red); }
+  .foot { position: absolute; left: 72px; right: 72px; bottom: 20px; display: flex; justify-content: space-between;
+          font: 13px var(--mono); color: #5d6b7c; }
+  .row { display: flex; gap: 16px; align-items: stretch; }
+  .chip { background: var(--panel2); border: 1px solid var(--border); border-radius: 999px; padding: 6px 16px; font: 16px var(--mono); }
+  .btn { display: inline-block; background: var(--accent); color: #04121f; font-weight: 700; text-decoration: none;
+         padding: 14px 26px; border-radius: 10px; font-size: 22px; }
+  .btn.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  svg .m { font-family: var(--mono); }
+  /* chrome outside the stage */
+  #bar { position: fixed; left: 0; right: 0; top: 0; height: 36px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+         background: rgba(13,17,23,.92); border-bottom: 1px solid var(--border); font: 13px var(--mono); z-index: 5; transition: opacity .25s; }
+  #bar a, #bar button { color: var(--accent); background: none; border: 1px solid var(--border); border-radius: 5px; padding: 3px 10px;
+                        font: inherit; text-decoration: none; cursor: pointer; }
+  #bar a:hover, #bar button:hover { border-color: var(--accent); }
+  #bar .sp { flex: 1; } #bar .muted { color: var(--muted); }
+  #prog { position: fixed; left: 0; bottom: 0; height: 3px; background: var(--accent); z-index: 5; transition: width .25s; }
+  body.hide-bar #bar { opacity: 0; pointer-events: none; }
+  .nav { position: fixed; top: 36px; bottom: 0; width: 12%; z-index: 4; cursor: pointer; }
+  .nav.l { left: 0; } .nav.r { right: 0; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <a href="/" title="Back to the live demo">&larr; Demo home</a>
+  <span class="muted">pg_synapse talk</span>
+  <span class="sp"></span>
+  <span id="count" class="muted"></span>
+  <button id="play" title="Auto-advance (P)">&#9654; Play</button>
+  <button id="fs" title="Fullscreen (F)">Fullscreen</button>
+</div>
+<div class="nav l" id="prev"></div><div class="nav r" id="next"></div>
+<div id="prog"></div>
+
+<div id="stage">
+
+<!-- 1. Title -->
+<section class="slide on" style="justify-content:center">
+  <div class="kicker">10:05 &middot; Talk</div>
+  <h1>Postgres Needs an <em>Agent Loop</em></h1>
+  <p class="sub" style="font-size:30px;margin-bottom:40px">What autonomous database operations actually require</p>
+  <div style="font-size:26px;color:#fff">Matt &ldquo;The Yonk&rdquo; Yonkovit</div>
+  <div class="muted" style="margin-top:34px;font-family:var(--mono);font-size:19px">pg_synapse &middot; an agent-loop runtime that lives inside Postgres</div>
+</section>
+
+<!-- 2. What this is -->
+<section class="slide">
+  <div class="kicker">A &middot; What this is</div>
+  <h2>An agent loop you call from <em>SQL</em></h2>
+  <p class="sub">pg_synapse is a Postgres extension, written in Rust, that runs the tool-calling loop where the data already is.</p>
+  <div class="code" style="margin-bottom:22px"><span class="k">SELECT</span> synapse.<span class="f">execute</span>(<span class="s">'triage_agent'</span>, <span class="s">'Triage ticket 1'</span>);
+<span class="c">-- the agent reads rows, calls the model, writes rows back, and returns an outcome envelope:</span>
+<span class="c">-- status, tokens, cost, duration, tool calls, and the full message trace</span></div>
+  <div class="grid g3">
+    <div class="card"><span class="tag">Inside</span><h3>The loop runs in the backend</h3><p>Tools are SQL. Tool calls run over SPI, in the same database that holds the data.</p></div>
+    <div class="card"><span class="tag">Bring your own model</span><h3>Any OpenAI-compatible endpoint</h3><p>vLLM, llama.cpp, LM Studio, OpenAI. Anthropic and llama.cpp provider plugins too.</p></div>
+    <div class="card"><span class="tag">Open</span><h3>Apache-2.0 / MIT</h3><p>Built clean-room from public sources. Kernel has no I/O and no <code>unsafe</code>.</p></div>
+  </div>
+</section>
+
+<!-- 3. What I'll show -->
+<section class="slide">
+  <div class="kicker">A &middot; What I am going to show</div>
+  <h2>Agents that take action <em>on the database itself</em></h2>
+  <p class="sub">Live, against a real Postgres 17, with a local model.</p>
+  <div class="grid g3" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="card"><span class="tag">Demo 1</span><h3>Autonomous index tuner</h3><p>100k rows, no index. The agent runs EXPLAIN, creates the index, proves the plan flipped from Seq Scan to Index Scan.</p></div>
+    <div class="card"><span class="tag">Demo 2</span><h3>The DBA that opens tickets</h3><p>Four health signals. It fixes the one that is transaction-safe and files tickets for the three that need a human.</p></div>
+    <div class="card"><span class="tag">Demo 3</span><h3>LLM-powered ETL</h3><p>Messy free-text notes become clean, ISO-coded rows. No glue code, no pipeline service.</p></div>
+    <div class="card"><span class="tag">Demo 4</span><h3>Transaction bouncer</h3><p>An agent gates an INSERT inside the transaction. A bad order rolls back with the agent's reason.</p></div>
+    <div class="card"><span class="tag">Demo 5</span><h3>Guardrails</h3><p>Cost cap, timeout and cancel. What &ldquo;bounded&rdquo; looks like in practice.</p></div>
+    <div class="card"><span class="tag">Demo 6</span><h3>pg-one</h3><p>Type a sentence, get a working database app: schema, agent and sample data, all inside Postgres.</p></div>
+  </div>
+</section>
+
+<!-- 4. Status quo -->
+<section class="slide">
+  <div class="kicker">B &middot; Why a loop in the database</div>
+  <h2>Today the agent lives <em>next to</em> the database</h2>
+  <p class="sub">An app-layer agent framework talks to Postgres like any other client, and that is where the trouble starts.</p>
+  <div class="grid g2">
+    <div class="card bad"><span class="tag red">Credentials</span><h3>A second set of keys</h3><p>The agent service needs its own connection string, its own role, its own idea of what it may touch. Governance gets copied, then drifts.</p></div>
+    <div class="card bad"><span class="tag red">Audit</span><h3>The record lives elsewhere</h3><p>What the agent did is in an app log or a vendor dashboard. What the database did is in Postgres. Joining them is a project.</p></div>
+    <div class="card bad"><span class="tag red">Atomicity</span><h3>The decision is outside the transaction</h3><p>An agent that approves or rejects a write cannot roll that write back. It can only react afterwards.</p></div>
+    <div class="card bad"><span class="tag red">Hops</span><h3>A round trip per step</h3><p>Every query the agent runs is a network hop, plus a service to deploy, scale and keep alive.</p></div>
+  </div>
+</section>
+
+<!-- 5. Why inside -->
+<section class="slide">
+  <div class="kicker">B &middot; Why a loop in the database</div>
+  <h2>Put the loop <em>where the decisions are</em></h2>
+  <div class="grid g3" style="margin-top:14px">
+    <div class="card good"><span class="tag grn">1 &middot; Governance</span><h3>Inherits the database's</h3><p>Tool SQL runs under Postgres privileges. GRANT, roles and ownership apply. &ldquo;Permission denied&rdquo; is the database doing its job.</p></div>
+    <div class="card good"><span class="tag grn">2 &middot; Decisions</span><h3>Stay in the database</h3><p>Inline mode runs the agent inside the writing transaction. Reject, and the INSERT rolls back with a reason.</p></div>
+    <div class="card good"><span class="tag grn">3 &middot; Hops</span><h3>Fewer of them</h3><p>Tool calls are in-process SPI, not client round trips. The model call is the one external hop.</p></div>
+    <div class="card good"><span class="tag grn">4 &middot; Evolution</span><h3>Agents are rows</h3><p>Prompt, tools and limits live in <code>synapse.agents</code>. Change them with SQL, version them in migrations, <code>pg_dump</code> takes them along.</p></div>
+    <div class="card good"><span class="tag grn">5 &middot; Audit</span><h3>Just tables</h3><p>Every run lands in <code>synapse.executions</code>, <code>messages</code> and <code>traces</code>. Query the agent's behaviour with the SQL you already know.</p></div>
+    <div class="card good"><span class="tag grn">6 &middot; Safety</span><h3>Rails are settings</h3><p>Max iterations, timeout and cost cap per agent. A savepoint per tool call. Cancel with <code>pg_cancel_backend</code>.</p></div>
+  </div>
+</section>
+
+<!-- 6. The loop -->
+<section class="slide">
+  <div class="kicker">B &middot; How it works</div>
+  <h2>One loop, <em>inside</em> the transaction</h2>
+  <p class="sub">Bounded by construction: every exit is a named status in the result envelope.</p>
+  <svg viewBox="0 0 1136 330" width="1136" height="330" style="margin-top:6px">
+    <defs><marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8z" fill="#8b98a9"/></marker></defs>
+    <g fill="#161b22" stroke="#2d3646" stroke-width="1.5">
+      <rect x="10" y="40" width="190" height="86" rx="10"/><rect x="262" y="40" width="190" height="86" rx="10"/>
+      <rect x="514" y="40" width="210" height="86" rx="10" stroke="#4ea1ff"/><rect x="786" y="40" width="210" height="86" rx="10"/>
+    </g>
+    <g fill="#fff" font-size="22" font-weight="600" text-anchor="middle">
+      <text x="105" y="76">Build context</text><text x="357" y="76">Ask the model</text>
+      <text x="619" y="76">Tool calls</text><text x="891" y="76">Run in a savepoint</text>
+    </g>
+    <g fill="#8b98a9" font-size="16" text-anchor="middle">
+      <text x="105" y="100">prompt, skills, memory</text><text x="357" y="100">any OpenAI-compatible</text>
+      <text x="619" y="100">sql_query, sql_exec, ...</text><text x="891" y="100">SPI, Postgres privileges</text>
+    </g>
+    <g stroke="#8b98a9" stroke-width="2" fill="none" marker-end="url(#ar)">
+      <path d="M200 83H258"/><path d="M452 83H510"/><path d="M724 83H782"/>
+      <path d="M891 126V190H105V130" stroke-dasharray="6 5"/>
+    </g>
+    <text x="498" y="182" fill="#8b98a9" font-size="16" text-anchor="middle">results go back to the model, loop again</text>
+    <text x="568" y="246" fill="#8b98a9" font-size="17" text-anchor="middle">The loop ends when it ends:</text>
+    <g font-size="17" text-anchor="middle" class="m">
+      <rect x="40" y="262" width="150" height="40" rx="20" fill="#0f2a17" stroke="#25502f"/><text x="115" y="288" fill="#3fb950">completed</text>
+      <rect x="210" y="262" width="180" height="40" rx="20" fill="#2a2411" stroke="#5a4a1c"/><text x="300" y="288" fill="#e3b341">max_iterations</text>
+      <rect x="410" y="262" width="150" height="40" rx="20" fill="#2a2411" stroke="#5a4a1c"/><text x="485" y="288" fill="#e3b341">timed_out</text>
+      <rect x="580" y="262" width="190" height="40" rx="20" fill="#2a1414" stroke="#5a2a2a"/><text x="675" y="288" fill="#f85149">cost cap exceeded</text>
+      <rect x="790" y="262" width="150" height="40" rx="20" fill="#2a1414" stroke="#5a2a2a"/><text x="865" y="288" fill="#f85149">cancelled</text>
+    </g>
+  </svg>
+</section>
+
+<!-- 7. Architecture -->
+<section class="slide">
+  <div class="kicker">C &middot; Architecture</div>
+  <h2>Three tiers: <em>SQL, host, kernel</em></h2>
+  <svg viewBox="0 0 1136 470" width="1136" height="470" style="margin-top:2px">
+    <defs><marker id="ar2" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8z" fill="#8b98a9"/></marker></defs>
+    <!-- client -->
+    <rect x="10" y="10" width="300" height="56" rx="10" fill="#161b22" stroke="#2d3646" stroke-width="1.5"/>
+    <text x="160" y="36" fill="#fff" font-size="20" font-weight="600" text-anchor="middle">Your SQL, trigger or schedule</text>
+    <text x="160" y="56" fill="#8b98a9" font-size="15" text-anchor="middle" class="m">synapse.execute(agent, input)</text>
+    <!-- postgres backend -->
+    <rect x="10" y="100" width="780" height="360" rx="14" fill="#101722" stroke="#4ea1ff" stroke-width="1.5" stroke-dasharray="7 5"/>
+    <text x="28" y="126" fill="#4ea1ff" font-size="15" font-weight="700" class="m">POSTGRES 17 BACKEND</text>
+    <rect x="30" y="140" width="740" height="64" rx="10" fill="#161b22" stroke="#2d3646" stroke-width="1.5"/>
+    <text x="400" y="166" fill="#fff" font-size="20" font-weight="600" text-anchor="middle">Host: pgrx extension</text>
+    <text x="400" y="190" fill="#8b98a9" font-size="15" text-anchor="middle">SQL functions &middot; SPI bridge &middot; GUCs &middot; roles and grants &middot; background worker</text>
+    <rect x="30" y="222" width="740" height="130" rx="10" fill="#161b22" stroke="#2d3646" stroke-width="1.5"/>
+    <text x="400" y="248" fill="#fff" font-size="20" font-weight="600" text-anchor="middle">Kernel: pg-synapse-core (no I/O)</text>
+    <g fill="#1c2330" stroke="#2d3646"><rect x="48" y="264" width="150" height="70" rx="8"/><rect x="214" y="264" width="150" height="70" rx="8"/><rect x="380" y="264" width="150" height="70" rx="8"/><rect x="546" y="264" width="206" height="70" rx="8"/></g>
+    <g fill="#d7dee8" font-size="16" text-anchor="middle" font-weight="600">
+      <text x="123" y="290">Executors</text><text x="289" y="290">Tool registry</text><text x="455" y="290">Providers</text><text x="649" y="290">Memory, compression</text></g>
+    <g fill="#8b98a9" font-size="13" text-anchor="middle">
+      <text x="123" y="310">conversation</text><text x="123" y="326">react, reflection</text>
+      <text x="289" y="310">SQL, HTTP, fs, calc</text><text x="289" y="326">MCP client</text>
+      <text x="455" y="310">OpenAI-compatible</text><text x="455" y="326">Anthropic, llama.cpp</text>
+      <text x="649" y="310">plugin concerns,</text><text x="649" y="326">not in the kernel</text></g>
+    <rect x="30" y="370" width="740" height="76" rx="10" fill="#0f2a17" stroke="#25502f" stroke-width="1.5"/>
+    <text x="400" y="396" fill="#3fb950" font-size="18" font-weight="600" text-anchor="middle">Your data and the synapse schema, in the same database</text>
+    <text x="400" y="420" fill="#8b98a9" font-size="14" text-anchor="middle" class="m">agents &middot; llm_profiles &middot; secrets &middot; executions &middot; messages &middot; traces &middot; agent_queue &middot; apps</text>
+    <text x="400" y="438" fill="#8b98a9" font-size="13" text-anchor="middle">plus every table the agent is allowed to touch</text>
+    <!-- external -->
+    <rect x="850" y="150" width="276" height="110" rx="12" fill="#2a2411" stroke="#5a4a1c" stroke-width="1.5"/>
+    <text x="988" y="190" fill="#e3b341" font-size="20" font-weight="600" text-anchor="middle">Your LLM endpoint</text>
+    <text x="988" y="214" fill="#8b98a9" font-size="15" text-anchor="middle">the only network hop</text>
+    <text x="988" y="236" fill="#8b98a9" font-size="14" text-anchor="middle" class="m">vLLM, llama.cpp, OpenAI ...</text>
+    <rect x="850" y="300" width="276" height="90" rx="12" fill="#161b22" stroke="#2d3646" stroke-width="1.5"/>
+    <text x="988" y="336" fill="#fff" font-size="19" font-weight="600" text-anchor="middle">Web UI and MCP</text>
+    <text x="988" y="360" fill="#8b98a9" font-size="14" text-anchor="middle">demo harness, pg-one</text>
+    <g stroke="#8b98a9" stroke-width="2" fill="none" marker-end="url(#ar2)">
+      <path d="M290 66V136"/><path d="M770 230H846" stroke="#e3b341"/><path d="M850 345H794" />
+    </g>
+  </svg>
+</section>
+
+<!-- 8. Sidecar -->
+<section class="slide">
+  <div class="kicker">C &middot; Architecture</div>
+  <h2>Can't load extensions? <em>Run the kernel beside it</em></h2>
+  <p class="sub">Managed Postgres (RDS, Cloud SQL, Neon, Supabase) will not load a custom .so. Same kernel, out of process.</p>
+  <svg viewBox="0 0 1136 250" width="1136" height="250">
+    <defs><marker id="ar3" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8z" fill="#8b98a9"/></marker></defs>
+    <g fill="#161b22" stroke="#2d3646" stroke-width="1.5">
+      <rect x="10" y="60" width="220" height="100" rx="10"/><rect x="316" y="60" width="270" height="100" rx="10" stroke="#4ea1ff"/>
+      <rect x="672" y="60" width="240" height="100" rx="10" stroke="#25502f"/><rect x="990" y="60" width="140" height="100" rx="10" stroke="#5a4a1c"/></g>
+    <g fill="#fff" font-size="20" font-weight="600" text-anchor="middle">
+      <text x="120" y="102">Your app</text><text x="451" y="102">pg-synapse-sidecar</text><text x="792" y="102">Managed Postgres</text><text x="1060" y="102">LLM</text></g>
+    <g fill="#8b98a9" font-size="15" text-anchor="middle">
+      <text x="120" y="128">HTTP /v1/execute</text><text x="451" y="128">same kernel, sqlx over the wire</text><text x="792" y="128">stock image, plain DDL schema</text><text x="1060" y="128">any endpoint</text></g>
+    <g stroke="#8b98a9" stroke-width="2" fill="none" marker-end="url(#ar3)"><path d="M230 110H312"/><path d="M586 110H668"/><path d="M586 142H600V200H1060V164" stroke-dasharray="6 5"/></g>
+  </svg>
+  <ul style="margin-top:6px;font-size:20px">
+    <li><b>Same agents, same synapse tables</b>, seeded with plain DDL. No extension on the database.</li>
+    <li><b>The trade:</b> tool calls cross the wire again, and the sidecar needs its own admin token and network path.</li>
+  </ul>
+</section>
+
+<!-- 9. What it requires -->
+<section class="slide">
+  <div class="kicker">D &middot; The thesis</div>
+  <h2>What autonomous DB operations <em>actually require</em></h2>
+  <p class="sub">A model that can call tools is the easy part. These are the parts that make it safe to let it near production.</p>
+  <div class="grid g2" style="gap:12px 24px;font-size:19px">
+    <div><b class="acc">Bounded.</b> <span class="muted">Iteration, time and spend caps, enforced by the runtime, not the prompt.</span></div>
+    <div><b class="acc">Privilege-scoped.</b> <span class="muted">It can only do what its role can do. Same GRANTs as everyone else; queued runs use a dedicated role you grant.</span></div>
+    <div><b class="acc">Transactional.</b> <span class="muted">Writes roll back with a failing tool call. Inline agents can veto a commit.</span></div>
+    <div><b class="acc">Auditable.</b> <span class="muted">Every message, tool call and cost is a row you can query later.</span></div>
+    <div><b class="acc">Cancellable.</b> <span class="muted">An operator can stop a run mid-loop with a normal Postgres cancel.</span></div>
+    <div><b class="acc">Human-gated where it must be.</b> <span class="muted">What is not transaction-safe becomes a ticket, not an action.</span></div>
+    <div><b class="acc">Asynchronous when it should be.</b> <span class="muted">Queue mode commits instantly; a background worker runs the agent.</span></div>
+    <div><b class="acc">Testable.</b> <span class="muted">Each scenario ships a probe that goes FAIL then PASS. Behaviour you can assert.</span></div>
+  </div>
+</section>
+
+<!-- 10. Evolving agents -->
+<section class="slide">
+  <div class="kicker">D &middot; Agents evolve like procedures</div>
+  <h2>Agents are <em>data</em>, triggers are <em>wiring</em></h2>
+  <p class="sub">Define an agent with a function call. Attach it to a table. Change either with SQL.</p>
+  <div class="code" style="font-size:16px"><span class="c">-- an agent is a row: prompt, executor, model profile, tool allow-list, limits</span>
+<span class="k">SELECT</span> synapse.<span class="f">agent_create</span>(<span class="s">'policy_agent'</span>, <span class="s">'Reject orders with a non-positive amount...'</span>,
+       <span class="s">'conversation'</span>, <span class="s">'vllm-default'</span>, <span class="k">ARRAY</span>[<span class="s">'sql_query'</span>], <span class="s">15</span>, <span class="s">90000</span>);
+
+<span class="c">-- inline mode: the agent runs inside the INSERT's transaction and can veto it</span>
+<span class="k">SELECT</span> synapse.<span class="f">attach_agent_trigger</span>(<span class="s">'demo.orders'</span>, <span class="s">'policy_agent'</span>, <span class="s">'inline'</span>, <span class="s">'INSERT'</span>, <span class="k">NULL</span>, <span class="s">'NEW::text'</span>);
+
+<span class="c">-- queue mode: the INSERT commits instantly, a background worker runs the agent</span>
+<span class="k">SELECT</span> synapse.<span class="f">attach_agent_trigger</span>(<span class="s">'demo.tickets'</span>, <span class="s">'enrich_agent'</span>, <span class="s">'queue'</span>, <span class="s">'INSERT'</span>, <span class="k">NULL</span>, <span class="s">'NEW::text'</span>);</div>
+  <p class="muted" style="margin-top:16px;font-size:19px">Stored in Postgres means it gets backups, replication, <code>pg_dump</code>, migrations and code review like everything else you ship.</p>
+</section>
+
+<!-- 11. pg-one -->
+<section class="slide">
+  <div class="kicker">D &middot; pg-one</div>
+  <h2>From a sentence to an app, <em>inside Postgres</em></h2>
+  <div class="code" style="margin:10px 0 18px;font-size:19px"><span class="s">"An app that tracks gym visits, with a note per session."</span></div>
+  <div class="grid g3">
+    <div class="card"><span class="tag">A schema</span><h3>gym_tracker</h3><p>Real tables with sample rows, so it is not empty.</p></div>
+    <div class="card"><span class="tag">An agent</span><h3>gym_tracker</h3><p>A prompt about that schema and only the tools it needs.</p></div>
+    <div class="card"><span class="tag">An app record</span><h3>synapse.apps</h3><p>Ties schema and agent together for the dashboard.</p></div>
+  </div>
+  <p style="margin-top:20px;font-size:20px">No deploy, no service, no config file. <b>The app is just database objects</b>, so <code>pg_dump</code> takes it with it. Talk to it, save questions, put it on a schedule, or drop it.</p>
+</section>
+
+<!-- 12. Limits -->
+<section class="slide">
+  <div class="kicker">D &middot; Honest limits</div>
+  <h2>What this <em>does not</em> do for you</h2>
+  <ul style="margin-top:14px;font-size:21px">
+    <li><b>It runs inside a transaction.</b> <span class="muted">So plain CREATE INDEX and DML are auto-appliable. <code>CREATE INDEX CONCURRENTLY</code>, VACUUM and ALTER SYSTEM are not, and become tickets for a human.</span></li>
+    <li><b>Models are the weak link.</b> <span class="muted">pg-one builds take 21 to 81 seconds on the reference stack, and not every build finishes: 4 of 6 observed builds completed. Small local models stumble on long tool calls.</span></li>
+    <li><b>An inline agent holds a backend.</b> <span class="muted">Inline mode is bounded by a timeout setting, and a slow model needs a bigger budget than the 2 second default.</span></li>
+    <li><b>The demo is single-user.</b> <span class="muted">No auth and no TLS on the demo UI. Do not expose it to a network you do not trust.</span></li>
+    <li><b>Out of scope on purpose:</b> <span class="muted">RAG and chunking, vector storage, multi-agent crews, NL2SQL, streaming over SQL. Those are plugins or later.</span></li>
+  </ul>
+</section>
+
+<!-- 13. Close -->
+<section class="slide" style="justify-content:center">
+  <div class="row" style="align-items:center;gap:64px">
+    <div style="flex:1">
+      <div class="kicker">E &middot; Try it</div>
+      <h1 style="font-size:52px">Run the loop <em>where the data is</em></h1>
+      <p class="sub" style="font-size:24px">Scan to get the code. <code>docker compose up</code> gives you everything you just saw.</p>
+      <div class="mono acc" style="font-size:26px;margin:6px 0 30px">github.com/yonk-labs/pg-synapse</div>
+      <div class="row" style="gap:14px;align-items:center">
+        <a class="btn" href="/">Back to the live demo &rarr;</a>
+        <a class="btn alt" href="/pgone">Open pg-one</a>
+      </div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:18px;width:360px;height:360px;flex:none"><svg role="img" aria-label="QR code for github.com/yonk-labs/pg-synapse" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 31 31" shape-rendering="crispEdges"><path fill="#ffffff" d="M0 0h31v31H0z"/><path stroke="#000000" d="M1 1.5h7m2 0h1m4 0h1m1 0h5m1 0h7M1 2.5h1m5 0h1m3 0h2m3 0h4m3 0h1m5 0h1M1 3.5h1m1 0h3m1 0h1m1 0h1m2 0h1m3 0h1m3 0h2m1 0h1m1 0h3m1 0h1M1 4.5h1m1 0h3m1 0h1m1 0h1m4 0h3m1 0h3m2 0h1m1 0h3m1 0h1M1 5.5h1m1 0h3m1 0h1m1 0h5m1 0h1m1 0h5m1 0h1m1 0h3m1 0h1M1 6.5h1m5 0h1m1 0h1m1 0h2m1 0h1m1 0h1m4 0h1m1 0h1m5 0h1M1 7.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M9 8.5h3m3 0h1m1 0h1m2 0h2M1 9.5h1m1 0h5m4 0h1m1 0h2m2 0h1m1 0h1m2 0h5M1 10.5h4m1 0h1m3 0h4m3 0h5m1 0h3m3 0h1M1 11.5h1m1 0h1m2 0h2m1 0h3m3 0h3m3 0h1m3 0h1M3 12.5h2m1 0h1m4 0h1m1 0h1m1 0h2m2 0h1m6 0h1m1 0h1M1 13.5h2m1 0h1m1 0h4m1 0h1m5 0h2m1 0h2m4 0h2M3 14.5h2m3 0h4m2 0h1m2 0h1m1 0h7m3 0h1M2 15.5h1m1 0h4m1 0h1m3 0h5m1 0h1m1 0h2m2 0h3M11 16.5h1m2 0h1m5 0h6m2 0h1M3 17.5h1m1 0h3m1 0h3m3 0h4m1 0h1m1 0h1m1 0h1m1 0h2M1 18.5h1m1 0h1m1 0h2m1 0h1m8 0h1m1 0h2m1 0h4m1 0h1m1 0h1M1 19.5h1m2 0h7m1 0h1m3 0h4m1 0h1m1 0h3m1 0h1M1 20.5h1m2 0h1m3 0h1m1 0h2m1 0h1m1 0h3m1 0h1m1 0h3m4 0h1M1 21.5h1m4 0h2m1 0h2m7 0h1m1 0h6m1 0h3M9 22.5h2m3 0h2m5 0h1m3 0h5M1 23.5h7m2 0h3m1 0h8m1 0h1m1 0h3M1 24.5h1m5 0h1m1 0h3m1 0h2m2 0h1m2 0h2m3 0h1m3 0h1M1 25.5h1m1 0h3m1 0h1m1 0h1m5 0h2m1 0h2m1 0h5m1 0h1M1 26.5h1m1 0h3m1 0h1m1 0h2m3 0h1m2 0h5m4 0h4M1 27.5h1m1 0h3m1 0h1m1 0h2m1 0h3m1 0h1m1 0h1m1 0h9M1 28.5h1m5 0h1m4 0h5m4 0h2m1 0h1m1 0h1m1 0h1M1 29.5h7m1 0h1m1 0h3m1 0h4m1 0h1m2 0h3m1 0h1"/></svg>
+</div>
+  </div>
+</section>
+
+</div><!-- /stage -->
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var stage = document.getElementById('stage'), cur = 0, timer = null, PLAY_MS = 25000;
+  var lastIdx = slides.length - 1;
+  slides.forEach(function (s, i) {
+    var f = document.createElement('div'); f.className = 'foot';
+    f.innerHTML = '<span>pg_synapse &middot; Postgres Needs an Agent Loop</span><span>' + (i + 1) + ' / ' + slides.length + '</span>';
+    if (i > 0) s.appendChild(f);
+  });
+  function fit() {
+    var k = Math.min(window.innerWidth / 1280, (window.innerHeight - 36) / 720);
+    stage.style.transform = 'translate(-50%,-50%) scale(' + k + ')';
+    stage.style.top = 'calc(50% + 18px)';
+  }
+  function show(i) {
+    cur = Math.max(0, Math.min(lastIdx, i));
+    slides.forEach(function (s, j) { s.classList.toggle('on', j === cur); });
+    document.getElementById('count').textContent = (cur + 1) + ' / ' + slides.length;
+    document.getElementById('prog').style.width = ((cur + 1) / slides.length * 100) + '%';
+    try { history.replaceState(null, '', '#' + (cur + 1)); } catch (e) {}
+  }
+  function stop() { if (timer) { clearInterval(timer); timer = null; } document.getElementById('play').innerHTML = '&#9654; Play'; }
+  function play() {
+    if (timer) { stop(); return; }
+    document.getElementById('play').innerHTML = '&#10074;&#10074; Pause';
+    timer = setInterval(function () { if (cur >= lastIdx) stop(); else show(cur + 1); }, PLAY_MS);
+  }
+  document.getElementById('next').onclick = function () { stop(); show(cur + 1); };
+  document.getElementById('prev').onclick = function () { stop(); show(cur - 1); };
+  document.getElementById('play').onclick = play;
+  document.getElementById('fs').onclick = function () {
+    if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen();
+  };
+  document.addEventListener('keydown', function (e) {
+    var k = e.key;
+    if (k === 'ArrowRight' || k === 'PageDown' || k === ' ' || k === 'Enter') { e.preventDefault(); stop(); show(cur + 1); }
+    else if (k === 'ArrowLeft' || k === 'PageUp' || k === 'Backspace') { e.preventDefault(); stop(); show(cur - 1); }
+    else if (k === 'Home') show(0); else if (k === 'End') show(lastIdx);
+    else if (k === 'p' || k === 'P') play();
+    else if (k === 'f' || k === 'F') document.getElementById('fs').click();
+    else if (k === 'h' || k === 'H') document.body.classList.toggle('hide-bar');
+  });
+  window.addEventListener('resize', fit);
+  fit();
+  var n = parseInt((location.hash || '').slice(1), 10);
+  show(isNaN(n) ? 0 : n - 1);
+  if (location.search.indexOf('autoplay') >= 0) play();
+})();
+</script>
+</body>
+</html>

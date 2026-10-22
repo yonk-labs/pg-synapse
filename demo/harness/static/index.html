@@ -20,6 +20,9 @@
   header h1 { font-size: 16px; margin: 0; }
   header h1 span { color: var(--accent); }
   header .ver { color: var(--muted); font-family: var(--mono); font-size: 12px; }
+  header .hdr-link { color: var(--accent); font-size: 12px; text-decoration: none; border: 1px solid var(--border);
+                     border-radius: 5px; padding: 3px 10px; }
+  header .hdr-link:hover { border-color: var(--accent); }
   header .conn { margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--mono); }
   #adv-switch { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted);
                 cursor: pointer; user-select: none; }
@@ -403,6 +406,7 @@
   <h1><span>pg_synapse</span> live demo</h1>
   <span class="ver" id="ver"></span>
   <span class="conn" id="conn">connecting...</span>
+  <a href="/slides" class="hdr-link" title="The talk deck: Postgres Needs an Agent Loop">Talk slides</a>
   <label id="adv-switch" title="Reveal the advanced tabs (agent editor, triggers, tables, probes)">
     <input type="checkbox" id="adv-toggle"> <span>Advanced</span>
   </label>
