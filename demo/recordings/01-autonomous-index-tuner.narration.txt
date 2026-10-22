@@ -1,0 +1,31 @@
+This is the pg_synapse live demo, and this is the first of three database administrator scenarios: the autonomous index tuner. An agent that finds a slow query, fixes it, and proves the fix, all from inside Postgres.
+
+Here is the scenario card. A table called perf dot orders holds one hundred thousand rows, and nothing indexes customer id, so the usual lookup scans the whole table.
+
+First we seed it. One click on Set up creates the schema, loads the data, and registers the index tuner agent. Clicking it again later resets the scenario, so you can repeat the demo any time.
+
+The card says ready. Before we run anything, let's look at the problem. I'll run the EXPLAIN probe on the slow query.
+
+There it is. A sequential scan on orders. Postgres read all one hundred thousand rows, and threw away almost ninety nine thousand nine hundred ninety three of them, just to find seven.
+
+Now the check for the expected end state. As you'd hope, it starts out failing twice: there is no index on customer id, and the planner still seq scans.
+
+Now let's hand the problem to the agent. The suggested run says: this query is slow, diagnose it and fix it if you can. I click run, and the agent loop starts inside Postgres.
+
+The loop is now running inside the Postgres backend. Each turn, the kernel sends the conversation to the language model, which lives outside, on your own endpoint, and the model answers with a tool call.
+
+The run is complete. The interface now replays what happened on the diagram. Each pulse to the model is a prompt, and each green dot is rows coming back from your tables.
+
+Watch the token counter in the corner fill in, turn by turn. Cost shows n a here, because a local model has no price attached.
+
+The run finished. Here is the outcome: the status, token counts, cost, and duration for this execution.
+
+And below is the full trace, every message, every tool call, and its result. You can see the agent explaining the plan, creating the index, and checking again.
+
+Now back to the scenario card to verify, with the database itself, rather than trusting the agent's word. I'll run EXPLAIN again.
+
+The plan has changed. Instead of scanning the entire table, Postgres now uses the new index on customer id, and execution time drops accordingly.
+
+Finally, the expected end state check again. The index exists, and the planner uses it: PASS, PASS. A slow query diagnosed and fixed by an agent, with the evidence on screen.
+
+That is the autonomous index tuner. Next, the DBA that knows when not to act.
