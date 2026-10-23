@@ -6,7 +6,7 @@
   --syn: #5fb3ff; --rag: #a371f7; --stele: #f0883e; --chunk: #3fb950; --h2: #d29922;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
-  --w: 1080px;
+  --w: 1280px;
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
@@ -17,14 +17,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outlin
 code, pre { font-family: var(--mono); font-size: .88em; }
 code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
 
-.top, main > section, ol.steps { color: #c9d4df; max-width: 72ch; padding-left: 22px; }
+ol.steps { color: #c9d4df; max-width: 72ch; padding-left: 22px; }
 ol.steps li { margin: 6px 0; }
 .plexus { padding-top: 56px; padding-bottom: 40px; }
 .plexus .card { display: grid; grid-template-columns: 300px 1fr; gap: 24px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--rag); border-radius: 10px; padding: 20px; }
 .plexus .card img { width: 100%; border-radius: 6px; display: block; }
 .plexus .card p { margin: 0 0 10px; color: #c9d4df; }
 
-footer { max-width: var(--w); margin: 0 auto; padding-left: 24px; padding-right: 24px; }
+.top, main > section, footer { max-width: var(--w); margin: 0 auto; padding-left: 24px; padding-right: 24px; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 22px; padding-bottom: 22px; flex-wrap: wrap; }
 .brand { font-weight: 700; font-size: 20px; color: var(--fg); text-decoration: none; }
 .top nav { display: flex; gap: 22px; flex-wrap: wrap; }
