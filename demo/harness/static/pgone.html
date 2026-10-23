@@ -680,7 +680,7 @@ const APP_BUILDER = {
     "ARRAY['sql_query','sql_exec'<list any of describe_schema/load_csv/load_json/load_url/export_csv/" +
     "read_file/remote_query/remote_exec/search_news/fetch_feed/" +
     "read_article/lede_compress the new agent actually needs, comma-separated, each single-" +
-    "quoted>], 15, 90000);\n" +
+    "quoted>], 15, 300000);\n" +
     "4. Register the app so it shows up on the dashboard: SELECT synapse.app_register('<name>', " +
     "'<name>', '<a short human title>', '<one sentence description>', '<name>'). Then verify: " +
     "SELECT 1 FROM synapse.apps WHERE name = '<name>'. The app is now usable even if you run out " +
@@ -706,7 +706,7 @@ const APP_BUILDER = {
   llm_profile: "vllm-default",
   tools: ["sql_query", "sql_exec", "describe_schema", "read_file", "remote_query", "remote_exec", "search_news", "read_article", "lede_compress"],
   max_iterations: 24,
-  timeout_ms: 120000,
+  timeout_ms: 300000,
   cost_cap_usd: 0,
 };
 
