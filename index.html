@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pg_synapse</title>
+<meta name="description" content="A Postgres extension, written in Rust, that runs an LLM agent loop inside the database. Call an agent from SQL; its tools read and write your tables under Postgres privileges.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./">pg_synapse</a>
+  <nav>
+    <a href="#watch">Watch</a>
+    <a href="#deck">Slides</a>
+    <a href="#run">Try it</a>
+    <a href="#plexus">Plexus</a>
+    <a href="https://github.com/yonk-labs/pg-synapse">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>Postgres needs an agent loop. This one runs where the data is.</h1>
+    <p class="lede">pg_synapse is a Postgres extension, written in Rust, that runs the LLM tool-calling loop inside the database backend. You call an agent from plain SQL, its tools are SQL running under Postgres privileges, and every message, tool call and cent lands in a table you can query. Bring any OpenAI-compatible model.</p>
+<pre class="hero-sql"><code>SELECT synapse.execute('triage_agent', 'Categorize ticket 42');</code></pre>
+  </section>
+
+  <section id="watch" class="watch">
+    <div class="player">
+      <video id="video" controls preload="metadata" playsinline poster="media/walkthrough.jpg">
+        <source id="video-src" src="media/walkthrough.mp4" type="video/mp4">
+      </video>
+    </div>
+    <ol class="cuts" id="cuts">
+      <li><button class="cut on" data-src="walkthrough">
+        <b>The talk, narrated</b><span>7:56. All 13 slides: why the loop belongs in Postgres, how it stays bounded, and the honest limits.</span></button></li>
+      <li><button class="cut" data-src="overview">
+        <b>Overview</b><span>4:11. What it is, how you call it, what comes back.</span></button></li>
+      <li><button class="cut" data-src="index-tuner">
+        <b>Autonomous index tuner</b><span>3:02. 100k rows, no index. The agent runs EXPLAIN, adds one, and proves the plan flipped.</span></button></li>
+      <li><button class="cut" data-src="dba-tickets">
+        <b>A DBA that opens tickets</b><span>3:21. Fixes the one transaction-safe problem, files tickets for the rest.</span></button></li>
+      <li><button class="cut" data-src="etl">
+        <b>LLM-powered ETL</b><span>3:06. Messy free-text notes in, clean ISO-coded rows out.</span></button></li>
+    </ol>
+    <p class="note">The demo runs are real: Postgres 17, the extension, and a local Qwen3.6-35B-A3B on vLLM.</p>
+  </section>
+
+  <section id="deck" class="deck">
+    <div class="sec-head">
+      <h2>The slides</h2>
+      <p>Click through with the arrow keys. This is the same deck the narrated video walks through.</p>
+    </div>
+    <div class="frame"><iframe src="deck/#1" title="pg_synapse slides" allow="fullscreen"></iframe></div>
+    <p class="links"><a href="deck/">Open it full screen</a></p>
+  </section>
+
+  <section class="inside">
+    <h2>Why put the loop in the database</h2>
+    <dl class="parts">
+      <div class="p-syn"><dt>Governance for free</dt><dd>Tool SQL runs under the caller's role. Permission denied is just Postgres doing its job. No new service account.</dd></div>
+      <div class="p-rag"><dt>Decisions inside the transaction</dt><dd>An inline trigger agent can veto an INSERT; the write rolls back with the agent's reason as the error.</dd></div>
+      <div class="p-stele"><dt>Bounded by construction</dt><dd>Max iterations, timeouts and cost caps are settings the runtime enforces. Every exit has a name: completed, timed out, cost cap exceeded, cancelled.</dd></div>
+      <div class="p-chunk"><dt>Agents are rows</dt><dd>Change them with SQL, review them like code, and <code>pg_dump</code> takes them along. Runs land in <code>synapse.messages</code> for auditing.</dd></div>
+      <div class="p-h2"><dt>On RDS or another managed Postgres?</dt><dd>Run the same kernel beside it as the sidecar. No extension on the database; the schema is plain DDL.</dd></div>
+    </dl>
+    <p class="limits">The honest limits: it runs inside a transaction, so CREATE INDEX CONCURRENTLY, VACUUM and ALTER SYSTEM become tickets for a human. Small local models stumble on long tool calls. An inline agent holds a backend while the model thinks. The demo has no auth and no TLS, so keep it off networks you don't trust.</p>
+  </section>
+
+  <section id="run" class="run">
+    <h2>Try it</h2>
+    <p>The containerized demo needs Docker and an OpenAI-compatible endpoint whose model supports function calling (vLLM, llama.cpp server, LM Studio, Ollama, or real OpenAI). The first build compiles the extension inside the image, which takes 10 to 25 minutes cold.</p>
+<pre><code>git clone https://github.com/yonk-labs/pg-synapse &amp;&amp; cd pg-synapse
+
+# optional: skip retyping your endpoint in the UI
+echo 'DEFAULT_LLM_BASE_URL=http://your-llm-host:8000/v1' &gt;  .env
+echo 'DEFAULT_LLM_MODEL=your-model-name'               &gt;&gt; .env
+
+docker compose up --build        # UI at http://localhost:8080, slides at /slides</code></pre>
+    <ol class="steps">
+      <li>Open <code>http://localhost:8080</code>, check the LLM endpoint panel, hit <b>Test</b>, then <b>Save</b>.</li>
+      <li>Pick a scenario (index tuner, DBA tickets, ETL, transaction bouncer, guardrails, triage and more) and click <b>Load</b>.</li>
+      <li>Run an agent and watch its messages, tool calls and cost appear. A probe tells you whether it passed.</li>
+      <li>Want a SQL side channel? <code>psql "host=localhost port=55432 user=postgres password=postgres dbname=synapse_demo"</code></li>
+    </ol>
+    <p>To install the extension into your own Postgres 15, 16 or 17 instead, use <code>cargo-pgrx</code> 0.18 and follow the <a href="https://github.com/yonk-labs/pg-synapse/blob/main/docs/extension-quickstart.md">extension quickstart</a>. For managed Postgres, see the <a href="https://github.com/yonk-labs/pg-synapse/blob/main/docs/sidecar-quickstart.md">sidecar quickstart</a>. The <a href="https://github.com/yonk-labs/pg-synapse#readme">README</a> covers the rest.</p>
+  </section>
+
+  <section id="plexus" class="plexus">
+    <h2>See it in a bigger system: Plexus</h2>
+    <div class="card">
+      <a href="https://theyonk.github.io/plexus/"><img src="media/plexus.jpg" alt="The Plexus presentation title slide"></a>
+      <div>
+        <p>Plexus wires pg_synapse together with pg-raggraph, stele and chunkshop in one Postgres. A support-triage agent reads the refund policy that was in force on each ticket's date, vetoes a bad refund inside the transaction, cites evidence for every decision, and tunes its own harness from its past runs.</p>
+        <p class="links"><a href="https://theyonk.github.io/plexus/">Watch Plexus</a> <span class="sep">or</span> <a href="https://github.com/TheYonk/plexus">read the code</a></p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>pg_synapse is dual-licensed Apache-2.0 and MIT. <a href="https://github.com/yonk-labs/pg-synapse">github.com/yonk-labs/pg-synapse</a></p>
+</footer>
+<script>
+const v = document.getElementById("video");
+document.getElementById("cuts").addEventListener("click", (e) => {
+  const b = e.target.closest(".cut");
+  if (!b) return;
+  document.querySelectorAll(".cut").forEach((c) => c.classList.toggle("on", c === b));
+  v.poster = `media/${b.dataset.src}.jpg`;
+  document.getElementById("video-src").src = `media/${b.dataset.src}.mp4`;
+  v.load();
+  v.play().catch(() => {});
+});
+</script>
+</body>
+</html>

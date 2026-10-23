@@ -1,0 +1,82 @@
+/* pg_synapse project site. Palette and type borrowed from the Plexus site
+   (theyonk.github.io/plexus) so the two read as siblings. */
+:root {
+  --bg: #0d1117; --panel: #151b23; --panel2: #1b2330; --line: #2a3442;
+  --fg: #e6edf3; --muted: #8b98a8; --accent: #5fb3ff;
+  --syn: #5fb3ff; --rag: #a371f7; --stele: #f0883e; --chunk: #3fb950; --h2: #d29922;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --w: 1080px;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.6 var(--sans); }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+code, pre { font-family: var(--mono); font-size: .88em; }
+code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; }
+
+.top, main > section, ol.steps { color: #c9d4df; max-width: 72ch; padding-left: 22px; }
+ol.steps li { margin: 6px 0; }
+.plexus { padding-top: 56px; padding-bottom: 40px; }
+.plexus .card { display: grid; grid-template-columns: 300px 1fr; gap: 24px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--rag); border-radius: 10px; padding: 20px; }
+.plexus .card img { width: 100%; border-radius: 6px; display: block; }
+.plexus .card p { margin: 0 0 10px; color: #c9d4df; }
+
+footer { max-width: var(--w); margin: 0 auto; padding-left: 24px; padding-right: 24px; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 22px; padding-bottom: 22px; flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 20px; color: var(--fg); text-decoration: none; }
+.top nav { display: flex; gap: 22px; flex-wrap: wrap; }
+.top nav a { color: var(--muted); text-decoration: none; font-size: 15px; }
+.top nav a:hover { color: var(--fg); }
+
+.hero { padding-top: 48px; padding-bottom: 36px; }
+.hero h1 { font-size: clamp(30px, 5vw, 52px); line-height: 1.12; letter-spacing: -0.015em; font-weight: 700; margin: 0 0 22px; max-width: 20ch; }
+.lede { font-size: 19px; color: #c9d4df; max-width: 64ch; margin: 0; }
+
+.watch { padding-top: 28px; border-top: 4px solid var(--accent); }
+.player { background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 16 / 9; }
+.player video { width: 100%; height: 100%; display: block; }
+.cuts { list-style: none; padding: 0; margin: 14px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.cut { width: 100%; height: 100%; text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; color: var(--fg); font: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.cut b { font-size: 16px; }
+.cut span { font-size: 14px; color: var(--muted); line-height: 1.45; }
+.cut:hover { border-color: #3d4a5c; }
+.cut.on { border-color: var(--accent); background: var(--panel2); }
+.note { color: var(--muted); font-size: 14px; margin: 12px 0 0; }
+
+.deck { padding-top: 72px; }
+.sec-head h2, .inside h2, .run h2, .plexus h2 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+.sec-head p { color: var(--muted); margin: 0 0 18px; max-width: 68ch; }
+.frame { aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+.frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+.links { margin: 12px 0 0; font-size: 15px; }
+.links .sep { color: var(--muted); }
+
+.inside { padding-top: 72px; }
+.parts { margin: 18px 0 0; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; }
+.parts > div { border-left: 3px solid var(--c); padding: 2px 0 2px 16px; }
+.parts dt { font-weight: 600; }
+.parts dt a { color: var(--fg); }
+.parts dd { margin: 4px 0 0; color: #c9d4df; font-size: 16px; }
+.p-syn { --c: var(--syn); } .p-rag { --c: var(--rag); } .p-stele { --c: var(--stele); } .p-chunk { --c: var(--chunk); } .p-h2 { --c: var(--h2); }
+.limits { color: var(--muted); font-size: 15px; max-width: 72ch; margin: 26px 0 0; }
+
+.run { padding-top: 72px; padding-bottom: 40px; }
+.run p { max-width: 72ch; color: #c9d4df; }
+.run pre { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px 20px; overflow-x: auto; line-height: 1.6; }
+.run pre code { background: none; padding: 0; font-size: 14.5px; }
+
+footer { border-top: 1px solid var(--line); padding-top: 20px; padding-bottom: 40px; color: var(--muted); font-size: 14px; }
+
+@media (max-width: 760px) {
+  body { font-size: 16px; }
+  .top, main > section, footer { padding-left: 16px; padding-right: 16px; }
+  .hero { padding-top: 24px; }
+  .lede { font-size: 17px; }
+  .cuts, .parts, .plexus .card { grid-template-columns: 1fr; }
+}
+.hero-sql { margin: 26px 0 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; overflow-x: auto; max-width: 64ch; }
+.hero-sql code { background: none; padding: 0; color: var(--accent); }
+.plexus .card img { border: 1px solid var(--line); }
