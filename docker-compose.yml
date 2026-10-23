@@ -1,11 +1,17 @@
 # pg_synapse containerized demo: Postgres 17 with the extension baked in,
-# plus the axum harness serving the web UI on http://localhost:8080.
+# plus the axum harness serving the web UI on http://localhost:8080, plus the
+# sidecar demo (stock Postgres "rds" on :55433 + pg-synapse-sidecar on :8088)
+# pulled in from docker-compose.sidecar.yml (needs Compose 2.20+).
 #
-#   docker compose up --build
+#   docker compose up --build                  # everything
+#   docker compose up --build db harness       # extension demo only
 #
 # The LLM endpoint is NOT part of this stack: point the UI's endpoint form at
 # any reachable OpenAI-compatible server (vLLM, llama.cpp, OpenAI) that
 # supports tool calls.
+
+include:
+  - docker-compose.sidecar.yml
 
 services:
   db:
@@ -25,7 +31,10 @@ services:
               # so an agent's result no longer depends on the session that
               # asked for it still being there. Names a database because a
               # worker connects to exactly one.
-              "-c", "pg_synapse.worker_database=synapse_demo"]
+              "-c", "pg_synapse.worker_database=synapse_demo",
+              # Inline mode aborts the INSERT when the agent exceeds this budget.
+              # The 2000 ms default is too tight for a slow local model.
+              "-c", "pg_synapse.inline_timeout_ms=20000"]
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: synapse_demo

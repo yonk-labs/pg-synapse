@@ -1,0 +1,35 @@
+This is the second scenario: the DBA that opens tickets. This one is about judgment. The agent has to decide what it can safely fix by itself, and what it must hand to a human.
+
+The card explains the setup. A monitoring system has raised four health signals. One of them is safe to fix inside a transaction: a missing index. The other three are not: work mem, a concurrent reindex, and shared buffers.
+
+Set up seeds the dba schema, the four signals, an audit log table, and registers the dba advisor agent. Like every scenario, it is reload safe, so you can reset it live.
+
+Let's look at the four signals with plain SQL, in the SQL tab. Sort spills, index bloat, a low cache hit ratio, and an unindexed scan on the audit log. All four are unresolved.
+
+Back on the card, the expected end state check starts out failing, three ways: unresolved signals remain, no tickets exist for a human, and the audit log index is missing.
+
+Now the run. The suggested prompt is simply: review the pending health signals and act on each one. I click run.
+
+The loop is running inside the Postgres backend. The agent's instructions give it one rule: only transaction safe changes may be applied directly. Anything that needs a concurrent build, a vacuum, or a server setting must become a ticket.
+
+Each turn, the model reads a signal with a SQL query and decides. For the audit log, the right decision is a plain CREATE INDEX, which it is allowed to run itself.
+
+For the other three, the right move is to write a row into dba dot recommendations, with a severity and a rationale, and mark the signal as handled. That is a ticket for a human.
+
+The run is complete, and the interface replays the loop on the diagram. Each pulse to the model is a prompt, and each green dot is rows coming back from the database.
+
+The token counter fills in turn by turn. Cost shows n a, because a local model has no price attached.
+
+Here is the outcome of the run: status, tokens, duration, and the number of tool calls. This was a longer loop than the index tuner.
+
+And below is the full trace: the instructions, the agent reading each signal, the SQL it ran, and the tickets it filed.
+
+Now let's check the result ourselves, with SQL. Every signal now shows as resolved.
+
+And here are the tickets the agent opened in dba dot recommendations. Each one has a severity, a recommendation, and a rationale, and is flagged as requiring a human.
+
+And the one safe fix was applied directly: an index on the audit log actor id column now exists.
+
+Back on the card, the expected end state check agrees: all signals resolved, three or more tickets, and the index created. PASS, PASS, PASS.
+
+That is the DBA that opens tickets. The agent knew the difference between a change it could make and a change it should escalate.

@@ -431,7 +431,7 @@ pub async fn sidecar_probe(Json(req): Json<SidecarProbeReq>) -> Result<Json<Valu
     let base = {
         let b = req.base_url.trim().trim_end_matches('/');
         if b.is_empty() {
-            "http://localhost:8088".to_owned()
+            "http://sidecar:8088".to_owned()
         } else {
             b.to_owned()
         }
@@ -504,7 +504,7 @@ pub async fn sidecar_execute(Json(req): Json<SidecarExecReq>) -> Result<Json<Val
     let base = {
         let b = req.base_url.trim().trim_end_matches('/');
         if b.is_empty() {
-            "http://localhost:8088".to_owned()
+            "http://sidecar:8088".to_owned()
         } else {
             b.to_owned()
         }

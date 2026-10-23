@@ -164,8 +164,8 @@
     <p class="sub">The harness relays to the sidecar's v1 API server-side (no browser CORS). Every value below
       is reported by the <b>remote</b> database, through the sidecar.</p>
     <div class="row">
-      <input type="text" id="sc-url" class="grow" value="http://localhost:8088"
-             placeholder="http://localhost:8088" style="max-width:360px">
+      <input type="text" id="sc-url" class="grow" value="http://sidecar:8088"
+             placeholder="http://sidecar:8088" style="max-width:360px">
       <span id="sc-health" class="pill"><span class="dot"></span>not probed</span>
       <button class="primary" id="sc-probe">Probe remote PG</button>
     </div>
@@ -203,7 +203,7 @@
     <pre>docker compose -f docker-compose.sidecar.yml up --build
 # rds:     stock postgres:17, synapse schema seeded by plain DDL (no extension)
 # sidecar: pg-synapse-sidecar, connects over the wire, v1 HTTP API on :8088</pre>
-    <p class="sub" style="margin:8px 0 0">Then set this page's URL to <code>http://localhost:8088</code> and probe.</p>
+    <p class="sub" style="margin:8px 0 0">Then set this page's URL to <code>http://sidecar:8088</code> and probe.</p>
   </div>
 </main>
 

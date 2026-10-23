@@ -681,8 +681,10 @@ const APP_BUILDER = {
     "read_file/remote_query/remote_exec/search_news/fetch_feed/" +
     "read_article/lede_compress the new agent actually needs, comma-separated, each single-" +
     "quoted>], 15, 90000);\n" +
-    "4. Verify the agent now exists: SELECT 1 FROM synapse.agents WHERE name = '<name>'. The app " +
-    "is now usable even if you run out of time before step 5, so do this before seeding data, not after.\n" +
+    "4. Register the app so it shows up on the dashboard: SELECT synapse.app_register('<name>', " +
+    "'<name>', '<a short human title>', '<one sentence description>', '<name>'). Then verify: " +
+    "SELECT 1 FROM synapse.apps WHERE name = '<name>'. The app is now usable even if you run out " +
+    "of time before step 5, so do this before seeding data, not after.\n" +
     "5. If you were given an uploaded file to work from, do NOT read or process it yourself: that is " +
     "real analysis work (reading every row, judging each one) that belongs to the new agent's own " +
     "run, with its own time budget, not squeezed into this one. Just make sure the new agent's " +
@@ -697,7 +699,7 @@ const APP_BUILDER = {
     "above). If you skipped seeding because a file is waiting to be processed (step 5), say so in " +
     "this line so the caller knows to trigger that run next.\n\n" +
     "Rules: run ONE statement per tool call, never end a statement with a semicolon, never touch " +
-    "the synapse schema's rows directly (only through synapse.agent_create), never touch any table " +
+    "the synapse schema's rows directly (only through synapse.agent_create and synapse.app_register), never touch any table " +
     "outside the schema you just created, and always pass values through the params array, never " +
     "inline them.",
   executor: "conversation",

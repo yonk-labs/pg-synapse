@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS demo.orders (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Queue mode runs the agent inside SECURITY DEFINER functions, so its tool SQL
+-- runs as synapse_owner, which owns nothing here. Without these grants the
+-- queued agent fails with "permission denied for schema demo".
+GRANT USAGE ON SCHEMA demo TO synapse_owner;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA demo TO synapse_owner;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA demo TO synapse_owner;
+
 -- Queue-mode agent: classifies a ticket and writes back category + priority.
 SELECT synapse.agent_create(
   'enrich_agent',

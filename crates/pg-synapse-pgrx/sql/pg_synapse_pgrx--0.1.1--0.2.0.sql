@@ -19,6 +19,20 @@ ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS guardrails TEXT;
 ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS memory     TEXT;
 ALTER TABLE synapse.agents ADD COLUMN IF NOT EXISTS critique   TEXT;
 
+-- The brownfield scan state lives on synapse.connections (it was mistakenly
+-- declared on llm_profiles in 0.1.1 builds of schema.sql). Guarded because a
+-- database that never took the pg-one changes has no connections table.
+DO $conn_scan$
+BEGIN
+  IF to_regclass('synapse.connections') IS NOT NULL THEN
+    ALTER TABLE synapse.connections ADD COLUMN IF NOT EXISTS scan_json   JSONB;
+    ALTER TABLE synapse.connections ADD COLUMN IF NOT EXISTS scanned_at  TIMESTAMPTZ;
+    ALTER TABLE synapse.connections ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+    ALTER TABLE synapse.connections ADD COLUMN IF NOT EXISTS reviewed_by TEXT;
+  END IF;
+END
+$conn_scan$;
+
 -- Harness components beyond the always-on columns on synapse.agents.
 --
 -- skills: on-demand procedures. One trigger line per skill is always-on;
