@@ -72,6 +72,11 @@ SELECT synapse.secret_set('OPENAI_KEY', 'YOUR_API_KEY_HERE');
 SELECT synapse.llm_profile_set('openai','openai','gpt-4o',NULL,'OPENAI_KEY','{}'::jsonb);
 ```
 
+Every request carries an output-token limit: `params.max_tokens` from the
+profile, or 4096 if unset. Raise it for models that write long tool calls
+(`'{"max_tokens": 8192}'::jsonb`). A reply cut off at the limit ends the run
+as `errored` ("cut off at N output tokens"), never as `completed`.
+
 ## 4. Create an agent
 
 `synapse.agent_create` upserts an agent row and rebuilds the kernel cache so

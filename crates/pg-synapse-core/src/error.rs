@@ -141,6 +141,20 @@ pub enum LlmError {
         limit: u32,
     },
 
+    /// The model stopped because it hit its output-token limit
+    /// (`finish_reason == "length"`), so the reply, and any tool call in it, is
+    /// cut off. Not retryable: the same request hits the same limit.
+    #[error(
+        "response from model {model} was cut off at {tokens_out} output tokens \
+         (finish_reason=length); raise max_tokens in the LLM profile params or on the server"
+    )]
+    ResponseTruncated {
+        /// Model name.
+        model: String,
+        /// Output tokens the provider reported for the truncated reply.
+        tokens_out: u32,
+    },
+
     /// Underlying network failure (DNS, TCP, TLS, HTTP).
     #[error("network error: {0}")]
     Network(String),

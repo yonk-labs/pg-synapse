@@ -521,7 +521,16 @@ pub struct OpenAiProvider {
     /// for cost computation when the server doesn't return usage cost.
     cost_per_million_in: Option<f64>,
     cost_per_million_out: Option<f64>,
+    /// Output-token limit from the profile's `params.max_tokens`. Applies to
+    /// every request that does not set its own.
+    max_tokens: Option<u32>,
 }
+
+/// Output-token limit sent when neither the request nor the profile sets one.
+/// Always sending a limit matters: a server with a small default (a local MLX
+/// server caps at 512) cuts a long tool call off mid-write, and the run then
+/// fails or, before the kernel checked `finish_reason`, "completed" empty.
+const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 impl OpenAiProvider {
     /// Construct a provider for `model` against `base_url`.
@@ -541,7 +550,15 @@ impl OpenAiProvider {
             extra_headers: vec![],
             cost_per_million_in: None,
             cost_per_million_out: None,
+            max_tokens: None,
         }
+    }
+
+    /// Set the output-token limit used for requests that do not carry their
+    /// own (`None` keeps the built-in default).
+    pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.max_tokens = max_tokens;
+        self
     }
 
     /// Attach a Bearer API key (sent as `Authorization: Bearer {key}`).
@@ -675,15 +692,17 @@ impl OpenAiProvider {
             // Use max_completion_tokens (not max_tokens) per OpenAI spec.
             // Default to 2048 when unset: reasoning models spend tokens on
             // hidden chain-of-thought; too low a budget yields empty content.
-            let budget = req.max_tokens.unwrap_or(2048);
+            let budget = req.max_tokens.or(self.max_tokens).unwrap_or(2048);
             payload["max_completion_tokens"] = json!(budget);
         } else {
             if let Some(t) = req.temperature {
                 payload["temperature"] = json!(t);
             }
-            if let Some(n) = req.max_tokens {
-                payload["max_tokens"] = json!(n);
-            }
+            let n = req
+                .max_tokens
+                .or(self.max_tokens)
+                .unwrap_or(DEFAULT_MAX_TOKENS);
+            payload["max_tokens"] = json!(n);
         }
         if stream {
             payload["stream"] = json!(true);
@@ -1112,6 +1131,44 @@ mod tests {
             m["tool_calls"][0]["function"]["arguments"],
             "{\"q\":\"rust\"}"
         );
+    }
+
+    fn plain_req(max_tokens: Option<u32>) -> CompletionRequest {
+        CompletionRequest {
+            messages: vec![user_msg("hi")],
+            tools: vec![],
+            model: None,
+            temperature: None,
+            max_tokens,
+            params: serde_json::Value::Null,
+        }
+    }
+
+    // Every request carries an output-token limit: request, then profile, then
+    // the built-in default. A server's own small default must never apply.
+    #[test]
+    fn build_payload_always_sends_a_max_tokens() {
+        let bare = OpenAiProvider::new("m", "http://x");
+        assert_eq!(
+            bare.build_payload(&plain_req(None), false)["max_tokens"],
+            DEFAULT_MAX_TOKENS
+        );
+        let profiled = OpenAiProvider::new("m", "http://x").with_max_tokens(Some(8192));
+        assert_eq!(
+            profiled.build_payload(&plain_req(None), false)["max_tokens"],
+            8192
+        );
+        assert_eq!(
+            profiled.build_payload(&plain_req(Some(64)), false)["max_tokens"],
+            64
+        );
+    }
+
+    #[test]
+    fn build_payload_reasoning_model_honours_profile_max_tokens() {
+        let p = OpenAiProvider::new("gpt-5-mini", "http://x").with_max_tokens(Some(6000));
+        let payload = p.build_payload(&plain_req(None), false);
+        assert_eq!(payload["max_completion_tokens"], 6000);
     }
 
     // B1: reasoning-model payload uses max_completion_tokens, omits temperature.

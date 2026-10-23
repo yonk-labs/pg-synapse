@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use futures::future::FutureExt;
 
-use crate::error::{ExecutorError, ToolError};
+use crate::error::{ExecutorError, LlmError, ToolError};
 use crate::llm::LlmProvider;
 use crate::tool::Tool;
 use crate::types::{
@@ -227,6 +227,7 @@ impl<'a> LoopHarness<'a> {
             "tokens_out": resp.usage.tokens_out,
             "tool_calls": resp.tool_calls.len(),
             "has_text": resp.content.as_deref().is_some_and(|c| !c.is_empty()),
+            "finish_reason": resp.finish_reason,
         });
         if self.ctx.trace_level.should_persist_raw_payloads() {
             resp_payload["raw_content"] = serde_json::to_value(&resp.content).unwrap_or_default();
@@ -235,6 +236,17 @@ impl<'a> LoopHarness<'a> {
         }
         self.record_event(EventKind::LlmResponse, resp_payload);
         self.record_usage(&resp);
+        // A reply cut off by the output-token limit cannot be trusted: a
+        // truncated tool call is silently lost and the turn reads as empty or
+        // as a short answer, so the run would finish "completed" having done
+        // nothing. Fail it, with the cause, after the usage and trace of the
+        // truncated turn are recorded.
+        if resp.finish_reason == "length" {
+            return Err(ExecutorError::Llm(LlmError::ResponseTruncated {
+                model: provider.model_name().to_string(),
+                tokens_out: resp.usage.tokens_out,
+            }));
+        }
         self.record_assistant_response(&resp);
         if !resp.tool_calls.is_empty() {
             for tc in &resp.tool_calls {

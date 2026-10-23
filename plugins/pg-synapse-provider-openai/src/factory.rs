@@ -64,8 +64,15 @@ impl LlmProviderFactory for OpenAiProviderFactory {
             .get("cost_per_million_tokens_out")
             .and_then(|v| v.as_f64());
 
-        let mut p =
-            OpenAiProvider::new(profile.model.clone(), base_url).with_cost(cost_in, cost_out);
+        let max_tokens = profile
+            .params
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.min(u32::MAX as u64) as u32);
+
+        let mut p = OpenAiProvider::new(profile.model.clone(), base_url)
+            .with_cost(cost_in, cost_out)
+            .with_max_tokens(max_tokens);
         if let Some(k) = api_key {
             p = p.with_api_key(k);
         }
