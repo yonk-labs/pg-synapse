@@ -80,3 +80,4 @@ footer { border-top: 1px solid var(--line); padding-top: 20px; padding-bottom: 4
 .hero-sql { margin: 26px 0 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; overflow-x: auto; max-width: 64ch; }
 .hero-sql code { background: none; padding: 0; color: var(--accent); }
 .plexus .card img { border: 1px solid var(--line); }
+#deck .frame { aspect-ratio: 1280 / 756; } /* deck stage plus its 36px control bar */
